@@ -293,3 +293,73 @@ def test_download_rejects_artifact_parent_symlink_escape(tmp_path):
         downloader.download(artifact, run_id="run", index_sha256="d" * 64)
 
     assert list(outside.iterdir()) == []
+
+
+class SequenceSession:
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def make_retry_downloader(tmp_path, outcomes, *, max_retries=3):
+    database = WorkspaceDatabase(tmp_path)
+    database.ensure()
+    session = SequenceSession(outcomes)
+    downloader = ArtifactDownloader(
+        database,
+        workspace=tmp_path,
+        timeout_seconds=10,
+        chunk_size=7,
+        max_retries=max_retries,
+        retry_backoff_seconds=0,
+        session=session,
+    )
+    return downloader, database, session
+
+
+def test_download_retries_transient_http_status_and_honors_retry_after(monkeypatch, tmp_path):
+    unavailable = FakeResponse(b"", status_code=429)
+    unavailable.headers["Retry-After"] = "2"
+    success = FakeResponse(PAYLOAD)
+    downloader, database, session = make_retry_downloader(
+        tmp_path, [unavailable, success]
+    )
+    delays = []
+    monkeypatch.setattr(
+        "apkworkbench.acquisition.downloader.time.sleep", delays.append
+    )
+
+    result = downloader.download(
+        make_artifact(), run_id="retry-run", index_sha256="d" * 64
+    )
+
+    assert result.path.read_bytes() == PAYLOAD
+    assert len(session.calls) == 2
+    assert delays == [2.0]
+    assert unavailable.closed
+    assert success.closed
+    assert database.history_hashes() == {result.sha256}
+
+
+def test_download_retries_transient_network_errors(tmp_path, monkeypatch):
+    success = FakeResponse(PAYLOAD)
+    downloader, database, session = make_retry_downloader(
+        tmp_path,
+        [pytest.Exception if False else __import__("requests").ConnectionError("reset"), success],
+    )
+    monkeypatch.setattr("apkworkbench.acquisition.downloader.time.sleep", lambda _delay: None)
+
+    result = downloader.download(
+        make_artifact(), run_id="network-retry", index_sha256="d" * 64
+    )
+
+    assert result.path.read_bytes() == PAYLOAD
+    assert len(session.calls) == 2
+    assert database.history_hashes() == {result.sha256}
