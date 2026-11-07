@@ -450,7 +450,7 @@ def download(apk_count: int | None, package_id: str | None) -> None:
 @click.option(
     "--force",
     is_flag=True,
-    help="Re-run decompilation even when both tools previously succeeded.",
+    help="Re-run decompilation even when both tools already have usable output.",
 )
 @click.option(
     "--run-id",
@@ -486,6 +486,7 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
         click.echo(f"  Run ID: {run_id}")
     click.echo(f"  Examined: {summary.examined}")
     click.echo(f"  Completed: {summary.completed}")
+    click.echo(f"  Completed with partial JADX output: {summary.partial}")
     click.echo(f"  Failed: {summary.failed}")
     click.echo(f"  Already complete / skipped: {summary.skipped}")
     if summary.failed:
@@ -498,7 +499,7 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
     type=click.IntRange(min=0),
     default=0,
     show_default=True,
-    help="Maximum number of completed APKs to scan; 0 scans all eligible downloads.",
+    help="Maximum number of fully or partially decompiled APKs to scan; 0 scans all eligible downloads.",
 )
 @click.option(
     "--force",
@@ -513,7 +514,7 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
 )
 @_workspace_locked
 def analyze(limit: int, force: bool, run_id: str | None) -> None:
-    """Scan completed decompilations locally with TruffleHog; verification is disabled."""
+    """Scan usable full or partial decompilations locally; verification is disabled."""
     config = Config()
     logger = setup_logging(config)
     database = WorkspaceDatabase(config.get("workspace"))

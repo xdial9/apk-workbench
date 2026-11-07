@@ -549,7 +549,7 @@ class TruffleHogScanner:
                 )
                 continue
             previous = statuses.get(digest, {})
-            if previous.get("jadx_status") != "success" or previous.get("apktool_status") != "success":
+            if previous.get("jadx_status") not in {"success", "partial"} or previous.get("apktool_status") != "success":
                 skipped += 1
                 continue
             if (

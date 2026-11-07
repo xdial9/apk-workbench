@@ -120,12 +120,15 @@ class WorkspaceDatabase:
         if held is None:
             held = {}
             _LOCK_STATE.held = held
-        if key in held:
-            held[key]["depth"] += 1
+        state = held.get(key)
+        if state is not None:
+            # Keep a local reference to the state. A signal/exception during nested
+            # unwinding must not turn a second dictionary lookup into a KeyError.
+            state["depth"] += 1
             try:
                 yield
             finally:
-                held[key]["depth"] -= 1
+                state["depth"] -= 1
             return
 
         handle = None
@@ -137,12 +140,21 @@ class WorkspaceDatabase:
             if handle is not None:
                 handle.close()
             raise DatabaseError(f"Cannot acquire workspace database lock: {exc}") from exc
+        except BaseException:
+            # KeyboardInterrupt can arrive while flock is waiting. Never leak the
+            # descriptor or leave a half-acquired lock behind.
+            if handle is not None:
+                handle.close()
+            raise
 
-        held[key] = {"depth": 1, "handle": handle}
+        state = {"depth": 1, "handle": handle}
+        held[key] = state
         try:
             yield
         finally:
-            held.pop(key, None)
+            # Only remove the entry installed by this outermost acquisition.
+            if held.get(key) is state:
+                held.pop(key, None)
             try:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             finally:
@@ -294,7 +306,8 @@ class WorkspaceDatabase:
                     outcome = "decompilation_failed"
                 elif "running" in {jadx, apktool, scan}:
                     outcome = "interrupted_or_running"
-                elif jadx == "success" and apktool == "success":
+                elif jadx in {"success", "partial"} and apktool == "success":
+                    has_decompilation_warnings = jadx == "partial" or apktool == "partial"
                     if scan == "failed":
                         outcome = "analysis_failed"
                     elif scan == "success":
@@ -322,9 +335,15 @@ class WorkspaceDatabase:
                                 "findings file is missing or unsafe."
                             )
                         else:
-                            outcome = "complete"
+                            outcome = (
+                                "complete_with_decompilation_warnings"
+                                if has_decompilation_warnings else "complete"
+                            )
                     else:
-                        outcome = "awaiting_analysis"
+                        outcome = (
+                            "awaiting_analysis_with_decompilation_warnings"
+                            if has_decompilation_warnings else "awaiting_analysis"
+                        )
                 else:
                     outcome = "pending_decompilation"
                 detail = detail or state.get("error", "")
