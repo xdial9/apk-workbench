@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import subprocess
+import pytest
+import shutil
 from pathlib import Path
 
 from apkworkbench.analysis.trufflehog import AnalysisError, TruffleHogScanner
@@ -285,7 +287,6 @@ def test_scanner_rejects_results_root_symlink_escape(tmp_path):
     results = tmp_path / "results"
     for child in results.iterdir():
         if child.is_dir():
-            import shutil
             shutil.rmtree(child)
         else:
             child.unlink()
