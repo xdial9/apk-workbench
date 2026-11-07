@@ -101,6 +101,7 @@ class ReportGenerator:
             "h1,h2{line-height:1.25}table{border-collapse:collapse;width:100%;margin:1rem 0}",
             "th,td{text-align:left;vertical-align:top;padding:.55rem;border:1px solid #ccc;overflow-wrap:anywhere}",
             "th{background:#eee}.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.5rem}",
+            "pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:70vw}",
             "code{font-size:.9em;overflow-wrap:anywhere}.muted{color:#555}",
             "</style></head><body>",
             f"<h1>{html.escape(title_text)}</h1>",
@@ -123,7 +124,7 @@ class ReportGenerator:
         if findings:
             parts.extend(
                 [
-                    "<table><thead><tr><th>Detector</th><th>File</th><th>Line</th><th>Fingerprint</th></tr></thead><tbody>"
+                    "<table><thead><tr><th>Detector</th><th>File</th><th>Line</th><th>Fingerprint</th><th>Complete original JSON</th></tr></thead><tbody>"
                 ]
             )
             for finding in findings:
@@ -143,6 +144,7 @@ class ReportGenerator:
                     f"<td><code>{html.escape(str(file_path))}</code></td>"
                     f"<td>{html.escape(str(line_number))}</td>"
                     f"<td><code>{html.escape(fingerprint)}</code></td>"
+                    f"<td><details><summary>View all fields</summary><pre>{html.escape(json.dumps(finding, ensure_ascii=False, indent=2))}</pre></details></td>"
                     "</tr>"
                 )
             parts.append("</tbody></table>")
