@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import selectors
+import signal
 import subprocess
 import time
 import tempfile
@@ -157,11 +158,44 @@ class TruffleHogScanner:
             if temporary.exists():
                 temporary.unlink()
 
+    @staticmethod
+    def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+        """Terminate TruffleHog and any descendants in its dedicated process group."""
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+
+    @staticmethod
+    def _stderr_tail(handle, limit: int = 8192) -> str:
+        handle.flush()
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - limit))
+        return handle.read(limit).decode("utf-8", errors="replace").strip()
+
     def _run_one(
         self, package_id: str, version_code: str, digest: str, directories: list[Path]
     ) -> list[dict[str, Any]]:
         self._check_cli_support()
         for directory in directories:
+            relative = directory.relative_to(self.results_root)
+            components = [self.results_root / part for part in relative.parts]
+            if any(component.is_symlink() for component in components):
+                raise AnalysisError(
+                    f"Refusing to scan a symlinked decompilation path component: {directory}"
+                )
             try:
                 directory.resolve(strict=True).relative_to(self.results_root.resolve())
             except (OSError, ValueError) as exc:
@@ -169,7 +203,24 @@ class TruffleHogScanner:
                     f"Refusing to scan a decompilation directory outside results/: {directory}"
                 ) from exc
             if not directory.is_dir():
-                raise AnalysisError(f"Decompiled input directory is missing: {directory}")
+                raise AnalysisError(f"Decompiled input directory is missing or unsafe: {directory}")
+            has_usable_file = False
+            try:
+                for item in directory.rglob("*"):
+                    if item.is_symlink():
+                        raise AnalysisError(
+                            f"Refusing to scan a symlink inside decompilation output: {item}"
+                        )
+                    if item.is_file():
+                        has_usable_file = True
+            except OSError as exc:
+                raise AnalysisError(
+                    f"Cannot inspect decompilation input directory: {directory}: {exc}"
+                ) from exc
+            if not has_usable_file:
+                raise AnalysisError(
+                    f"Decompiled input directory contains no usable files: {directory}"
+                )
 
         command = [
             self.executable,
@@ -184,32 +235,44 @@ class TruffleHogScanner:
         findings: list[dict[str, Any]] = []
         fingerprints: set[str] = set()
         parse_error = False
-        with tempfile.TemporaryFile(mode="w+b") as stdout_file:
+        with (
+            tempfile.TemporaryFile(mode="w+b") as stdout_file,
+            tempfile.TemporaryFile(mode="w+b") as stderr_file,
+        ):
             try:
                 process = subprocess.Popen(
                     command,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
+                    stderr=stderr_file,
                     bufsize=0,
+                    start_new_session=True,
                 )
             except (OSError, subprocess.SubprocessError) as exc:
                 raise AnalysisError(f"Could not start TruffleHog: {exc}") from exc
 
             if process.stdout is None:
-                process.kill()
-                process.wait()
+                self._terminate_process_tree(process)
                 raise AnalysisError("TruffleHog stdout pipe was not created.")
 
             output_size = 0
             deadline = time.monotonic() + self.timeout_seconds
+            previous_sigterm = None
+
+            def handle_sigterm(signum, _frame):
+                raise KeyboardInterrupt(f"received signal {signum}")
+
             try:
+                try:
+                    previous_sigterm = signal.signal(signal.SIGTERM, handle_sigterm)
+                except ValueError:
+                    # Signal handlers can only be installed from the main thread.
+                    pass
                 with selectors.DefaultSelector() as selector:
                     selector.register(process.stdout, selectors.EVENT_READ)
                     while True:
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
-                            process.kill()
-                            process.wait()
+                            self._terminate_process_tree(process)
                             raise AnalysisError(
                                 f"TruffleHog exceeded the {self.timeout_seconds}-second timeout."
                             )
@@ -226,8 +289,7 @@ class TruffleHogScanner:
                                 break
                             output_size += len(chunk)
                             if output_size > self.max_output_bytes:
-                                process.kill()
-                                process.wait()
+                                self._terminate_process_tree(process)
                                 raise AnalysisError(
                                     "TruffleHog JSON output exceeded the configured "
                                     f"{self.max_output_bytes}-byte limit."
@@ -237,14 +299,19 @@ class TruffleHogScanner:
                             continue
                         break
             except subprocess.TimeoutExpired as exc:
-                process.kill()
-                process.wait()
+                self._terminate_process_tree(process)
                 raise AnalysisError(
                     f"TruffleHog exceeded the {self.timeout_seconds}-second timeout."
                 ) from exc
+            except KeyboardInterrupt:
+                self._terminate_process_tree(process)
+                raise
             finally:
                 process.stdout.close()
+                if previous_sigterm is not None:
+                    signal.signal(signal.SIGTERM, previous_sigterm)
 
+            stderr_tail = self._stderr_tail(stderr_file)
             stdout_file.flush()
             stdout_file.seek(0)
             max_line_bytes = 2 * 1024 * 1024
@@ -274,23 +341,30 @@ class TruffleHogScanner:
                 findings.append(finding)
 
         if parse_error:
-            raise AnalysisError("TruffleHog emitted malformed or oversized JSON output; results were not published.")
+            detail = f" Stderr: {stderr_tail[-2000:]}" if stderr_tail else ""
+            raise AnalysisError(
+                "TruffleHog emitted malformed or oversized JSON output; results were not "
+                f"published.{detail}"
+            )
         if return_code != 0:
+            detail = f" Stderr: {stderr_tail[-2000:]}" if stderr_tail else ""
             raise AnalysisError(
                 f"TruffleHog exited with status {return_code}; results were not published."
+                f"{detail}"
             )
 
         output_dir = self.results_root / package_id / version_code / digest / "trufflehog"
+        output_components = (
+            self.results_root / package_id,
+            self.results_root / package_id / version_code,
+            self.results_root / package_id / version_code / digest,
+            output_dir,
+        )
         try:
+            if any(part.is_symlink() for part in output_components):
+                raise ValueError("symlinked output component")
             output_dir.mkdir(parents=True, exist_ok=True)
             output_dir.resolve(strict=True).relative_to(self.results_root.resolve())
-            if any(part.is_symlink() for part in (
-                self.results_root / package_id,
-                self.results_root / package_id / version_code,
-                self.results_root / package_id / version_code / digest,
-                output_dir,
-            )):
-                raise ValueError("symlinked output component")
         except (OSError, ValueError) as exc:
             raise AnalysisError(
                 f"TruffleHog output path escapes or aliases the results workspace: {output_dir}"
@@ -304,6 +378,34 @@ class TruffleHogScanner:
         )
         (output_dir / "trufflehog.log").write_text(log_text, encoding="utf-8")
         return findings
+
+    def _has_usable_scan_output(
+        self, package_id: str, version_code: str, digest: str
+    ) -> bool:
+        """Reuse a successful scan only while its sanitized result file remains valid."""
+        output_dir = (
+            self.results_root / package_id / version_code / digest / "trufflehog"
+        )
+        findings_path = output_dir / "findings.json"
+        components = (
+            self.results_root / package_id,
+            self.results_root / package_id / version_code,
+            self.results_root / package_id / version_code / digest,
+            output_dir,
+            findings_path,
+        )
+        if any(path.is_symlink() for path in components):
+            return False
+        try:
+            findings_path.resolve(strict=True).relative_to(self.results_root.resolve(strict=True))
+            if not findings_path.is_file():
+                return False
+            findings = json.loads(findings_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return False
+        return isinstance(findings, list) and all(
+            isinstance(item, dict) for item in findings
+        )
 
     def _update_status(self, row: dict[str, str], status: str, error: str = "") -> None:
         self.database.update_processing_status(
@@ -340,13 +442,18 @@ class TruffleHogScanner:
             for digest, row in processing.items()
             if row.get("scan_status") == "success"
         }
+        play_hashes = {
+            row.get("sha256", "").lower()
+            for row in self.database.read_download_history()
+            if row.get("source") == "google_play"
+        }
         for path in sorted(self.results_root.glob("*/*/*/trufflehog/findings.json")):
             try:
                 path.resolve(strict=True).relative_to(self.results_root.resolve())
                 digest = path.parents[1].name
                 package_id = path.parents[3].name
                 version_code = path.parents[2].name
-                if digest not in eligible_hashes:
+                if digest not in eligible_hashes or digest not in play_hashes:
                     continue
                 loaded = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError, json.JSONDecodeError):
@@ -404,7 +511,10 @@ class TruffleHogScanner:
             raise ValueError("limit must be at least 1 when supplied")
         self._validate_results_root()
         self.database.ensure()
-        history = self.database.read_download_history()
+        history = [
+            row for row in self.database.read_download_history()
+            if row.get("source") == "google_play"
+        ]
         statuses = self.database.read_processing_status()
         scanned = findings_count = failed = skipped = 0
 
@@ -412,6 +522,8 @@ class TruffleHogScanner:
             candidate_rows = history
         else:
             manifest_rows = self.database.read_manifest(run_id)
+            if any(row.get("source") != "google_play" for row in manifest_rows):
+                raise AnalysisError("Refusing to scan a manifest that is not Google Play-sourced.")
             history_by_hash = {
                 row.get("sha256", "").lower(): row for row in history if row.get("sha256")
             }
@@ -430,13 +542,25 @@ class TruffleHogScanner:
 
         for row in candidate_rows:
             digest = row.get("sha256", "").lower()
-            if not digest:
+            if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+                failed += 1
+                self.logger.error(
+                    "Acquisition history contains an invalid SHA-256; scan item cannot be processed."
+                )
                 continue
             previous = statuses.get(digest, {})
-            if previous.get("jadx_status") != "success" or previous.get("apktool_status") != "success":
+            if previous.get("jadx_status") not in {"success", "partial"} or previous.get("apktool_status") != "success":
                 skipped += 1
                 continue
-            if not force and previous.get("scan_status") == "success":
+            if (
+                not force
+                and previous.get("scan_status") == "success"
+                and self._has_usable_scan_output(
+                    row.get("package_id", ""),
+                    row.get("version_code", ""),
+                    digest,
+                )
+            ):
                 skipped += 1
                 continue
             if limit is not None and scanned + failed >= limit:

@@ -53,8 +53,12 @@ class ReportGenerator:
 
     @staticmethod
     def _read_sanitized_findings(path: Path) -> list[dict[str, Any]]:
+        if path.is_symlink():
+            raise ReportingError(f"Refusing to read a symlinked findings file: {path}")
         if not path.exists():
-            return []
+            raise ReportingError(
+                f"Sanitized findings file is missing despite a successful scan: {path}"
+            )
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -156,6 +160,10 @@ class ReportGenerator:
             ("results", self.results_root),
             ("reports", self.reports_root),
         ):
+            if root.is_symlink():
+                raise ReportingError(
+                    f"The {label} directory resolves outside or aliases the configured workspace."
+                )
             root.mkdir(parents=True, exist_ok=True)
             try:
                 root.resolve(strict=True).relative_to(self.workspace)
@@ -169,7 +177,10 @@ class ReportGenerator:
     def run(self) -> ReportSummary:
         self._validate_workspace_roots()
         self.database.ensure()
-        history = self.database.read_download_history()
+        history = [
+            row for row in self.database.read_download_history()
+            if row.get("source") == "google_play"
+        ]
         statuses = self.database.read_processing_status()
         generated = with_findings = total_findings = 0
 
@@ -218,14 +229,15 @@ class ReportGenerator:
             }
             output_dir = self.reports_root / package_id / version_code / digest
             try:
-                output_dir.mkdir(parents=True, exist_ok=True)
-                output_dir.resolve(strict=True).relative_to(self.reports_root)
-                if any(part.is_symlink() for part in (
+                output_components = (
                     self.reports_root / package_id,
                     self.reports_root / package_id / version_code,
                     output_dir,
-                )):
+                )
+                if any(part.is_symlink() for part in output_components):
                     raise ValueError("symlinked report output component")
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_dir.resolve(strict=True).relative_to(self.reports_root)
             except (OSError, ValueError) as exc:
                 raise ReportingError(
                     f"Report output path escapes or aliases the reports workspace: {output_dir}"

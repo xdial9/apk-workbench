@@ -12,7 +12,7 @@ APK WORKBENCH is a Python CLI. Keep runtime implementation in Python. Do not int
 
 The execution model is deliberately simple and auditable:
 
-- One APK at a time.
+- One Google Play app bundle at a time; process each APK component independently.
 - One external subprocess at a time.
 - Verify data at trust boundaries.
 - Preserve immutable acquisition records.
@@ -39,15 +39,16 @@ python -m pytest
 ruff check .
 ~~~
 
-Tests should use temporary workspaces and mocked HTTP/subprocess boundaries. They must not depend on live F-Droid access, external APK downloads, or local installations of JADX, Apktool, or TruffleHog.
+Tests should use temporary workspaces and mocked HTTP/subprocess boundaries. They must not depend on live Google Play Store access, external APK downloads, or local installations of JADX, Apktool, or TruffleHog.
 
 ## Regression-test expectations
 
 Add or update tests for changed behavior. Security-sensitive changes require explicit regression coverage, especially changes to:
 
-- OpenPGP fingerprint pinning and detached-signature verification.
-- URL validation, download bounds, and artifact SHA-256 checks.
-- Atomic file publication and immutable run manifests.
+- Google Play session renewal and authentication failure handling.
+- Play delivery hash verification for base APKs, split APKs, and OBB files.
+- Complete bundle retention and Google Play-only source enforcement.
+- Atomic catalog and bundle metadata publication, plus immutable run manifests.
 - Manifest-scoped processing and cross-run isolation.
 - Filesystem path validation and symlink handling.
 - Subprocess timeouts and sequential execution.

@@ -14,8 +14,8 @@ def history_row(digest):
         "package_id": "org.example.app",
         "version_code": 1,
         "version_name": "1.0",
-        "source": "fdroid",
-        "download_url": "https://f-droid.org/repo/app.apk",
+        "source": "google_play",
+        "download_url": "google-play://fixture/app.apk",
         "local_path": "/workspace/downloads/org.example.app/1/app.apk",
         "size": 10,
         "run_id": "run-id",
@@ -49,6 +49,15 @@ def test_history_is_append_only_and_hash_deduplicated(tmp_path):
     assert rows[0]["sha256"] == "a" * 64
 
 
+def test_history_rejects_non_google_play_sources(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+    row = history_row("d" * 64)
+    row["source"] = "unsupported_source"
+
+    with pytest.raises(DatabaseError, match="Only Google Play Store"):
+        database.append_history(row)
+
+
 def test_manifest_is_published_complete_and_cannot_be_overwritten(tmp_path):
     database = WorkspaceDatabase(tmp_path)
     row = {
@@ -59,8 +68,8 @@ def test_manifest_is_published_complete_and_cannot_be_overwritten(tmp_path):
         "app_name": "Example",
         "version_code": 1,
         "version_name": "1.0",
-        "source": "fdroid",
-        "download_url": "https://f-droid.org/repo/app.apk",
+        "source": "google_play",
+        "download_url": "google-play://fixture/app.apk",
         "sha256": "a" * 64,
         "size": 10,
         "signer_sha256": "",
@@ -103,8 +112,8 @@ def test_manifest_reader_returns_selection_order_and_rejects_path_injection(tmp_
                 "app_name": "Example",
                 "version_code": 1,
                 "version_name": "1.0",
-                "source": "fdroid",
-                "download_url": "https://f-droid.org/repo/app.apk",
+                "source": "google_play",
+                "download_url": "google-play://fixture/app.apk",
                 "sha256": digest,
                 "size": 10,
                 "signer_sha256": "",
@@ -119,3 +128,104 @@ def test_manifest_reader_returns_selection_order_and_rejects_path_injection(tmp_
 
     with pytest.raises(DatabaseError, match="Run ID"):
         database.read_manifest("../outside")
+
+
+def test_concurrent_processing_updates_do_not_overwrite_each_other(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    database = WorkspaceDatabase(tmp_path)
+    database.ensure()
+
+    def update(index: int):
+        digest = f"{index:064x}"
+        database.update_processing_status(
+            {
+                "sha256": digest,
+                "package_id": f"org.example.app{index}",
+                "version_code": str(index),
+                "jadx_status": "success",
+            }
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(update, range(32)))
+
+    statuses = database.read_processing_status()
+    assert len(statuses) == 32
+    assert all(row["jadx_status"] == "success" for row in statuses.values())
+    assert (database.database_dir / ".workspace.lock").stat().st_mode & 0o777 == 0o600
+
+
+def test_concurrent_duplicate_history_writes_commit_exactly_once(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    database = WorkspaceDatabase(tmp_path)
+    database.ensure()
+    row = history_row("a" * 64)
+
+    def append(_index: int):
+        try:
+            database.append_history(row)
+            return "committed"
+        except DatabaseError:
+            return "duplicate"
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        outcomes = list(executor.map(append, range(16)))
+
+    assert outcomes.count("committed") == 1
+    assert outcomes.count("duplicate") == 15
+    assert database.history_hashes() == {"a" * 64}
+
+
+
+def test_manifest_writer_rejects_path_injection_before_creating_files(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+
+    with pytest.raises(DatabaseError, match="Run ID"):
+        database.write_manifest("../outside", [])
+
+    assert not (tmp_path / "outside.csv").exists()
+
+
+def test_database_rejects_symlinked_database_directory(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / "database").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(DatabaseError, match="symlinked workspace database directory"):
+        database.ensure()
+
+
+def test_database_rejects_symlinked_history_file(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+    database.ensure()
+    outside = tmp_path / "outside.csv"
+    outside.write_text(
+        "sha256,package_id,app_name,version_code,version_name,source,download_url,"
+        "local_path,size,run_id,downloaded_at,index_sha256\n",
+        encoding="utf-8",
+    )
+    database.history_path.unlink()
+    database.history_path.symlink_to(outside)
+
+    with pytest.raises(DatabaseError, match="symlinked database file"):
+        database.read_download_history()
+
+
+def test_nested_workspace_lock_releases_cleanly_after_keyboard_interrupt(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+    database.ensure()
+
+    with (
+        pytest.raises(KeyboardInterrupt),
+        database._write_lock(),
+        database._write_lock(),
+        database._write_lock(),
+    ):
+        raise KeyboardInterrupt("simulated Ctrl+C")
+
+    # A subsequent write must acquire the same process/thread lock normally.
+    database.append_history(history_row("c" * 64))
+    assert database.history_hashes() == {"c" * 64}

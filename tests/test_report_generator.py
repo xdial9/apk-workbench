@@ -21,8 +21,8 @@ def setup_workspace(tmp_path: Path):
             "app_name": "Example <App>",
             "version_code": 12,
             "version_name": "1.2",
-            "source": "fdroid",
-            "download_url": "https://f-droid.org/repo/app.apk",
+            "source": "google_play",
+            "download_url": "google-play://fixture/app.apk",
             "local_path": str(tmp_path / "downloads/org.example.app/12" / digest / "app.apk"),
             "size": 20,
             "run_id": "test-run",
@@ -90,19 +90,12 @@ def test_generates_json_and_html_without_secret_fields(tmp_path):
     assert "ExtraData" not in parsed["findings"][0]
 
 
-def test_report_is_generated_even_when_no_findings_file_exists(tmp_path):
+def test_report_refuses_missing_findings_file_after_successful_scan(tmp_path):
     database = setup_workspace(tmp_path)
     (tmp_path / "results/org.example.app/12" / ("a" * 64) / "trufflehog/findings.json").unlink()
 
-    summary = ReportGenerator(database, workspace=tmp_path).run()
-
-    assert summary.generated == 1
-    assert summary.with_findings == 0
-    assert summary.total_findings == 0
-    parsed = json.loads(
-        (tmp_path / "reports/org.example.app/12" / ("a" * 64) / "report.json").read_text(encoding="utf-8")
-    )
-    assert parsed["findings"] == []
+    with pytest.raises(ReportingError, match="missing despite a successful scan"):
+        ReportGenerator(database, workspace=tmp_path).run()
 
 
 
@@ -156,4 +149,32 @@ def test_report_generator_rejects_reports_root_symlink_escape(tmp_path):
     reports.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(ReportingError, match="reports directory resolves outside"):
+        ReportGenerator(database, workspace=tmp_path).run()
+
+
+def test_report_generator_rejects_symlinked_findings_file(tmp_path):
+    database = setup_workspace(tmp_path)
+    finding_path = (
+        tmp_path / "results/org.example.app/12" / ("a" * 64)
+        / "trufflehog/findings.json"
+    )
+    target = finding_path.with_name("other-findings.json")
+    target.write_text("[]", encoding="utf-8")
+    finding_path.unlink()
+    finding_path.symlink_to(target)
+
+    with pytest.raises(ReportingError, match="symlinked findings file"):
+        ReportGenerator(database, workspace=tmp_path).run()
+
+
+def test_report_generator_rejects_symlinked_package_output_parent(tmp_path):
+    database = setup_workspace(tmp_path)
+    reports = tmp_path / "reports"
+    package_root = reports / "org.example.app"
+    real_package = reports / "real-package"
+    package_root.mkdir(parents=True)
+    package_root.rename(real_package)
+    package_root.symlink_to(real_package, target_is_directory=True)
+
+    with pytest.raises(ReportingError, match="Report output path escapes or aliases"):
         ReportGenerator(database, workspace=tmp_path).run()

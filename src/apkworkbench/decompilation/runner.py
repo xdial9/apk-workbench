@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import shutil
+import signal
 import subprocess
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +25,7 @@ class DecompilationSummary:
     completed: int
     failed: int
     skipped: int
+    partial: int = 0
 
 
 class DecompilationRunner:
@@ -62,7 +66,10 @@ class DecompilationRunner:
         raw_path = row.get("local_path", "")
         if not raw_path:
             raise DecompilationError("Download history record has no local_path.")
-        apk_path = Path(raw_path).expanduser().resolve(strict=True)
+        candidate_path = Path(raw_path).expanduser()
+        if candidate_path.is_symlink():
+            raise DecompilationError("Acquired APK path must not be a symlink.")
+        apk_path = candidate_path.resolve(strict=True)
         try:
             apk_path.relative_to(self.download_root)
         except ValueError as exc:
@@ -89,60 +96,218 @@ class DecompilationRunner:
             )
         return apk_path
 
-    def _run_tool(self, command: list[str], log_path: Path, label: str) -> None:
+    @staticmethod
+    def _log_tail(log_path: Path, limit: int = 2000) -> str:
+        """Read a bounded tail of a tool log for concise failure reporting."""
         try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-            stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text(
-                f"COMMAND: {' '.join(command)}\n"
-                f"TIMEOUT AFTER: {self.timeout_seconds} seconds\n"
-                f"STDOUT: {stdout}\nSTDERR: {stderr}",
-                encoding="utf-8",
-                errors="replace",
-            )
-            raise DecompilationError(
-                f"{label} exceeded the {self.timeout_seconds}-second timeout."
-            ) from exc
+            with log_path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                handle.seek(max(0, size - limit))
+                return handle.read(limit).decode("utf-8", errors="replace").strip()
+        except OSError:
+            return "(log unavailable)"
+
+    @staticmethod
+    def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+        """Terminate the subprocess session, including descendants, after timeout."""
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def _run_tool(
+        self,
+        command: list[str],
+        log_path: Path,
+        label: str,
+        *,
+        accepted_return_codes: tuple[int, ...] = (0,),
+    ) -> int:
+        """Stream combined tool output to disk and bound execution time."""
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+            log_fd = os.open(log_path, flags, 0o600)
+            os.fchmod(log_fd, 0o600)
+            with os.fdopen(log_fd, "wb") as log_file:
+                log_file.write(
+                    f"COMMAND: {' '.join(command)}\nSTDOUT AND STDERR (combined):\n".encode(
+                        "utf-8", errors="replace"
+                    )
+                )
+                log_file.flush()
+                process = subprocess.Popen(
+                    command,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                previous_sigterm = None
+
+                def handle_sigterm(signum, _frame):
+                    raise KeyboardInterrupt(f"received signal {signum}")
+
+                try:
+                    try:
+                        previous_sigterm = signal.signal(signal.SIGTERM, handle_sigterm)
+                    except ValueError:
+                        # Signal handlers can only be installed from the main thread.
+                        pass
+                    returncode = process.wait(timeout=self.timeout_seconds)
+                except subprocess.TimeoutExpired:
+                    self._terminate_process_tree(process)
+                    log_file.write(
+                        f"\nTIMEOUT AFTER: {self.timeout_seconds} seconds\n".encode(
+                            "utf-8", errors="replace"
+                        )
+                    )
+                    log_file.flush()
+                    raise DecompilationError(
+                        f"{label} exceeded the {self.timeout_seconds}-second timeout. "
+                        f"See log: {log_path}"
+                    ) from None
+                except KeyboardInterrupt:
+                    self._terminate_process_tree(process)
+                    log_file.write(b"\nINTERRUPTED: process group terminated\n")
+                    log_file.flush()
+                    raise
+                finally:
+                    if previous_sigterm is not None:
+                        signal.signal(signal.SIGTERM, previous_sigterm)
+                log_file.write(
+                    f"\nRETURN CODE: {returncode}\n".encode("utf-8", errors="replace")
+                )
         except FileNotFoundError as exc:
-            raise DecompilationError(f"Required executable was not found: {command[0]}") from exc
+            raise DecompilationError(
+                f"Required executable was not found: {command[0]}"
+            ) from exc
         except OSError as exc:
             raise DecompilationError(f"Could not execute {label}: {exc}") from exc
 
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(
-            f"COMMAND: {' '.join(command)}\n"
-            f"RETURN CODE: {result.returncode}\n"
-            "\n--- STDOUT ---\n"
-            f"{stdout}\n"
-            "\n--- STDERR ---\n"
-            f"{stderr}",
-            encoding="utf-8",
-            errors="replace",
-        )
-        if result.returncode != 0:
-            detail = (stderr or stdout).strip()[-2000:]
+        if returncode not in accepted_return_codes:
+            detail = self._log_tail(log_path)
             raise DecompilationError(
-                f"{label} exited with status {result.returncode}. {detail}"
+                f"{label} exited with status {returncode}. {detail}"
             )
+        return returncode
+
+    @staticmethod
+    def _has_usable_output(path: Path) -> bool:
+        """Return true only for a real directory containing at least one file."""
+        if path.is_symlink() or not path.is_dir():
+            return False
+        try:
+            return any(
+                item.is_file() and not item.is_symlink()
+                for item in path.rglob("*")
+            )
+        except OSError:
+            return False
 
     @staticmethod
     def _remove_existing_output(path: Path) -> None:
-        """Remove an old tool output without following symlinks."""
+        """Remove a staging/backup path without following symlinks."""
         if path.is_symlink() or path.is_file():
             path.unlink()
         elif path.is_dir():
             shutil.rmtree(path)
+
+    def _publish_output(self, staged: Path, destination: Path, label: str) -> None:
+        """Replace a tool output only after its staged replacement has validated."""
+        if not self._has_usable_output(staged):
+            raise DecompilationError(
+                f"{label} exited successfully but produced no usable output; "
+                "the previous output was retained."
+            )
+
+        backup = destination.with_name(
+            f".{destination.name}.previous-{uuid.uuid4().hex}"
+        )
+        moved_previous = False
+        try:
+            if destination.exists() or destination.is_symlink():
+                os.replace(destination, backup)
+                moved_previous = True
+            os.replace(staged, destination)
+        except OSError as exc:
+            if moved_previous:
+                try:
+                    os.replace(backup, destination)
+                except OSError as rollback_exc:
+                    raise DecompilationError(
+                        f"Could not publish {label} output ({exc}) or restore its "
+                        f"previous output ({rollback_exc}); backup retained at {backup}."
+                    ) from exc
+            raise DecompilationError(
+                f"Could not publish {label} output: {exc}"
+            ) from exc
+
+        if moved_previous:
+            try:
+                self._remove_existing_output(backup)
+            except OSError as exc:
+                self.logger.warning(
+                    "Published new %s output but could not remove previous backup %s: %s",
+                    label,
+                    backup,
+                    exc,
+                )
+
+    def _run_tool_transactionally(
+        self,
+        command: list[str],
+        *,
+        staged_output: Path,
+        destination: Path,
+        log_path: Path,
+        label: str,
+        allow_partial: bool = False,
+    ) -> str:
+        """Run into a temporary sibling and publish only a validated result."""
+        try:
+            staged_output.mkdir(mode=0o700)
+            returncode = self._run_tool(
+                command,
+                log_path,
+                label,
+                accepted_return_codes=(0, 3) if allow_partial else (0,),
+            )
+            if returncode == 3:
+                if not self._has_usable_output(staged_output):
+                    raise DecompilationError(
+                        f"{label} exited with status 3 but produced no usable output."
+                    )
+                self._publish_output(staged_output, destination, label)
+                return "partial"
+            self._publish_output(staged_output, destination, label)
+            return "success"
+        except OSError as exc:
+            raise DecompilationError(
+                f"Could not prepare or clean up staged {label} output: {exc}"
+            ) from exc
+        finally:
+            if staged_output.exists() or staged_output.is_symlink():
+                try:
+                    self._remove_existing_output(staged_output)
+                except OSError as exc:
+                    self.logger.warning(
+                        "Could not remove incomplete %s staging output %s: %s",
+                        label,
+                        staged_output,
+                        exc,
+                    )
 
     def _status_update(
         self,
@@ -192,14 +357,19 @@ class DecompilationRunner:
             raise ValueError("limit must be at least 1 when supplied")
         self._validate_workspace_roots()
         self.database.ensure()
-        history = self.database.read_download_history()
+        history = [
+            row for row in self.database.read_download_history()
+            if row.get("source") == "google_play"
+        ]
         statuses = self.database.read_processing_status()
-        examined = completed = failed = skipped = 0
+        examined = completed = failed = skipped = partial = 0
 
         if run_id is None:
             candidate_rows = history
         else:
             manifest_rows = self.database.read_manifest(run_id)
+            if any(row.get("source") != "google_play" for row in manifest_rows):
+                raise DecompilationError("Refusing to process a manifest that is not Google Play-sourced.")
             history_by_hash = {
                 row.get("sha256", "").lower(): row for row in history if row.get("sha256")
             }
@@ -219,131 +389,197 @@ class DecompilationRunner:
 
         for row in candidate_rows:
             digest = row.get("sha256", "").lower()
-            if not digest:
+            if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+                failed += 1
+                self.logger.error(
+                    "Acquisition history contains an invalid SHA-256; item cannot be processed."
+                )
                 continue
             previous = statuses.get(digest, {})
             scan_status = previous.get("scan_status") or "pending"
-            if (
-                not force
-                and previous.get("jadx_status") == "success"
-                and previous.get("apktool_status") == "success"
-            ):
+
+            package_id = row.get("package_id", "unknown")
+            version_code = row.get("version_code", "unknown")
+            if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id):
+                self._status_update(
+                    row,
+                    jadx_status="failed",
+                    apktool_status="failed",
+                    scan_status=scan_status,
+                    error=f"Unsafe package ID in download history: {package_id!r}",
+                )
+                failed += 1
+                continue
+            if not version_code.isdigit():
+                self._status_update(
+                    row,
+                    jadx_status="failed",
+                    apktool_status="failed",
+                    scan_status=scan_status,
+                    error=f"Unsafe version code in download history: {version_code!r}",
+                )
+                failed += 1
+                continue
+
+            package_root = self.results_root / package_id
+            version_root = package_root / version_code
+            output_root = version_root / digest
+            if any(path.is_symlink() for path in (package_root, version_root, output_root)):
+                raise DecompilationError(
+                    "Decompilation output path contains a symlinked workspace component."
+                )
+            try:
+                output_root.resolve().relative_to(self.results_root.resolve())
+            except ValueError as exc:
+                raise DecompilationError(
+                    "Resolved decompilation path escapes results workspace."
+                ) from exc
+            jadx_output = output_root / "jadx"
+            apktool_output = output_root / "apktool"
+            output_root.mkdir(parents=True, exist_ok=True)
+
+            # A recorded success is reusable only when its output is still present and usable.
+            jadx_had_usable_output = (
+                previous.get("jadx_status") in {"success", "partial"}
+                and self._has_usable_output(jadx_output)
+            )
+            apktool_had_usable_output = (
+                previous.get("apktool_status") == "success"
+                and self._has_usable_output(apktool_output)
+            )
+            jadx_status = (
+                previous.get("jadx_status", "success")
+                if jadx_had_usable_output else "pending"
+            )
+            apktool_status = "success" if apktool_had_usable_output else "pending"
+            jadx_existing_status = jadx_status
+            apktool_existing_status = apktool_status
+
+            if not force and jadx_had_usable_output and apktool_had_usable_output:
                 skipped += 1
+                if jadx_status == "partial":
+                    partial += 1
                 continue
             if limit is not None and examined >= limit:
                 break
             examined += 1
 
-            errors: list[str] = []
             try:
                 apk_path = self._validated_apk_path(row)
             except (DecompilationError, OSError, ValueError) as exc:
-                errors.append(str(exc))
                 self._status_update(
                     row,
-                    jadx_status="failed",
-                    apktool_status="failed",
+                    jadx_status=jadx_status if jadx_had_usable_output else "failed",
+                    apktool_status=apktool_status if apktool_had_usable_output else "failed",
                     scan_status=scan_status,
-                    error="; ".join(errors),
+                    error=str(exc),
                 )
                 failed += 1
                 continue
 
-            package_id = row.get("package_id", "unknown")
-            version_code = row.get("version_code", "unknown")
-            if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id):
-                errors.append(f"Unsafe package ID in download history: {package_id!r}")
-                self._status_update(
-                    row,
-                    jadx_status="failed",
-                    apktool_status="failed",
-                    scan_status=scan_status,
-                    error="; ".join(errors),
-                )
-                failed += 1
-                continue
-            if not version_code.isdigit():
-                errors.append(f"Unsafe version code in download history: {version_code!r}")
-                self._status_update(
-                    row,
-                    jadx_status="failed",
-                    apktool_status="failed",
-                    scan_status=scan_status,
-                    error="; ".join(errors),
-                )
-                failed += 1
-                continue
-
-            output_root = self.results_root / package_id / version_code / digest
-            try:
-                output_root.resolve().relative_to(self.results_root.resolve())
-            except ValueError as exc:
-                raise DecompilationError("Resolved decompilation path escapes results workspace.") from exc
-            jadx_output = output_root / "jadx"
-            apktool_output = output_root / "apktool"
-            output_root.mkdir(parents=True, exist_ok=True)
-
-            self._status_update(
-                row,
-                jadx_status="running",
-                apktool_status="pending",
-                scan_status=scan_status,
-            )
-            self._remove_existing_output(jadx_output)
-            jadx_command = [
-                self.jadx_executable,
-                "--threads-count",
-                "1",
-                "--output-dir",
-                str(jadx_output),
-                str(apk_path),
-            ]
-            try:
-                self._run_tool(jadx_command, output_root / "jadx.log", "JADX")
-                jadx_status = "success"
-            except DecompilationError as exc:
-                jadx_status = "failed"
-                errors.append(str(exc))
-            self._status_update(
-                row,
-                jadx_status=jadx_status,
-                apktool_status="running",
-                scan_status=scan_status,
-                error="; ".join(errors),
-            )
-
-            self._remove_existing_output(apktool_output)
-            apktool_command = [
-                self.apktool_executable,
-                "d",
-                "--jobs",
-                "1",
-                "--force",
-                "-o",
-                str(apktool_output),
-                str(apk_path),
-            ]
-            try:
-                self._run_tool(apktool_command, output_root / "apktool.log", "Apktool")
-                apktool_status = "success"
-            except DecompilationError as exc:
-                apktool_status = "failed"
-                errors.append(str(exc))
-
+            errors: list[str] = []
+            warnings: list[str] = []
             self._status_update(
                 row,
                 jadx_status=jadx_status,
                 apktool_status=apktool_status,
                 scan_status=scan_status,
-                error="; ".join(errors),
             )
-            if jadx_status == "success" and apktool_status == "success":
-                completed += 1
-                self.logger.info("Decompilation completed for %s", package_id)
+
+            stages = (
+                (
+                    "JADX",
+                    self.jadx_executable,
+                    jadx_output,
+                    "jadx",
+                    ["--threads-count", "1", "--output-dir"],
+                ),
+                (
+                    "Apktool",
+                    self.apktool_executable,
+                    apktool_output,
+                    "apktool",
+                    ["d", "--jobs", "1", "--force", "-o"],
+                ),
+            )
+            for label, executable, destination, tool_name, arguments in stages:
+                current_status = jadx_status if tool_name == "jadx" else apktool_status
+                if not force and current_status in {"success", "partial"}:
+                    continue
+
+                staged_output = destination.with_name(
+                    f".{destination.name}.staging-{uuid.uuid4().hex}"
+                )
+                command = [executable, *arguments, str(staged_output), str(apk_path)]
+                if tool_name == "jadx":
+                    jadx_status = "running"
+                else:
+                    apktool_status = "running"
+                self._status_update(
+                    row,
+                    jadx_status=jadx_status,
+                    apktool_status=apktool_status,
+                    scan_status=scan_status,
+                    error="; ".join(errors + warnings),
+                )
+
+                try:
+                    stage_status = self._run_tool_transactionally(
+                        command,
+                        staged_output=staged_output,
+                        destination=destination,
+                        log_path=output_root / f"{tool_name}.log",
+                        label=label,
+                        allow_partial=(tool_name == "jadx"),
+                    )
+                    if stage_status == "partial":
+                        warnings.append(
+                            "JADX completed with decompilation errors (exit code 3); "
+                            "usable partial output was retained."
+                        )
+                except (DecompilationError, OSError) as exc:
+                    errors.append(str(exc))
+                    had_usable_output = (
+                        jadx_had_usable_output if tool_name == "jadx"
+                        else apktool_had_usable_output
+                    )
+                    existing_status = (
+                        jadx_existing_status if tool_name == "jadx"
+                        else apktool_existing_status
+                    )
+                    # A failed forced refresh does not invalidate previous usable output.
+                    stage_status = existing_status if had_usable_output else "failed"
+
+                if tool_name == "jadx":
+                    jadx_status = stage_status
+                else:
+                    apktool_status = stage_status
+                self._status_update(
+                    row,
+                    jadx_status=jadx_status,
+                    apktool_status=apktool_status,
+                    scan_status=scan_status,
+                    error="; ".join(errors + warnings),
+                )
+
+            usable_statuses = {"success", "partial"}
+            if jadx_status in usable_statuses and apktool_status in usable_statuses and not errors:
+                if "partial" in {jadx_status, apktool_status}:
+                    partial += 1
+                    self.logger.warning(
+                        "Decompilation completed with partial JADX output for %s: %s",
+                        package_id,
+                        "; ".join(warnings),
+                    )
+                else:
+                    completed += 1
+                    self.logger.info("Decompilation completed for %s", package_id)
             else:
                 failed += 1
                 self.logger.error(
-                    "Decompilation failed for %s: %s", package_id, "; ".join(errors)
+                    "Decompilation requires attention for %s: %s",
+                    package_id,
+                    "; ".join(errors) or "one or more tool outputs are unavailable",
                 )
 
-        return DecompilationSummary(examined, completed, failed, skipped)
+        return DecompilationSummary(examined, completed, failed, skipped, partial)
