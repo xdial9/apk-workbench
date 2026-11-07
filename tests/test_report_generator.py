@@ -121,7 +121,7 @@ def test_previous_findings_are_hidden_when_latest_scan_failed(tmp_path):
     assert summary.generated == 1
     assert summary.with_findings == 0
     parsed = json.loads(
-        (tmp_path / "reports/org.example.app/12/report.json").read_text(encoding="utf-8")
+        (tmp_path / "reports/org.example.app/12" / ("a" * 64) / "report.json").read_text(encoding="utf-8")
     )
     assert parsed["findings"] == []
     assert parsed["processing"]["scan_status"] == "failed"
