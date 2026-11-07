@@ -87,3 +87,35 @@ def test_malformed_existing_history_fails_closed(tmp_path):
 
     with pytest.raises(DatabaseError, match="Unexpected CSV header"):
         database.history_hashes()
+
+
+
+def test_manifest_reader_returns_selection_order_and_rejects_path_injection(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+    rows = []
+    for order, digest in ((2, "b" * 64), (1, "a" * 64)):
+        rows.append(
+            {
+                "run_id": "run-123",
+                "selection_order": order,
+                "selected_at": "2026-11-07T12:00:00+00:00",
+                "package_id": "org.example.app",
+                "app_name": "Example",
+                "version_code": 1,
+                "version_name": "1.0",
+                "source": "fdroid",
+                "download_url": "https://f-droid.org/repo/app.apk",
+                "sha256": digest,
+                "size": 10,
+                "signer_sha256": "",
+                "local_path": "/workspace/app.apk",
+                "index_sha256": "c" * 64,
+            }
+        )
+    database.write_manifest("run-123", rows)
+
+    selected = database.read_manifest("run-123")
+    assert [row["sha256"] for row in selected] == ["a" * 64, "b" * 64]
+
+    with pytest.raises(DatabaseError, match="Run ID"):
+        database.read_manifest("../outside")

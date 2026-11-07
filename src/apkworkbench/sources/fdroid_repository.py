@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -39,6 +40,7 @@ class FdroidRepositoryClient:
         max_signature_bytes: int = 1024 * 1024,
         max_key_bytes: int = 2 * 1024 * 1024,
         session: requests.Session | None = None,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> None:
         self.repository_url = self._validate_url(
             repository_url, field="repository_url", allow_query=False
@@ -55,6 +57,11 @@ class FdroidRepositoryClient:
         self.max_signature_bytes = max_signature_bytes
         self.max_key_bytes = max_key_bytes
         self.session = session or requests.Session()
+        self.progress_callback = progress_callback
+
+    def _progress(self, message: str) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(message)
 
     @staticmethod
     def _validate_url(value: str, *, field: str, allow_query: bool) -> str:
@@ -83,6 +90,7 @@ class FdroidRepositoryClient:
         return normalized
 
     def _fetch_limited(self, url: str, *, limit: int, label: str) -> bytes:
+        self._progress(f"Fetching {label}...")
         try:
             response = self.session.get(
                 url,
@@ -123,6 +131,7 @@ class FdroidRepositoryClient:
                     )
 
             body = bytearray()
+            next_progress = 8 * 1024 * 1024
             for chunk in response.iter_content(chunk_size=64 * 1024):
                 if not chunk:
                     continue
@@ -133,8 +142,12 @@ class FdroidRepositoryClient:
                     raise FdroidRepositoryError(
                         f"{label} exceeds the configured {limit}-byte limit."
                     )
+                if len(body) >= next_progress:
+                    self._progress(f"  {label}: {len(body):,} bytes received")
+                    next_progress = ((len(body) // (8 * 1024 * 1024)) + 1) * (8 * 1024 * 1024)
             if not body:
                 raise FdroidRepositoryError(f"Empty response while retrieving {label}.")
+            self._progress(f"  {label}: received {len(body):,} bytes")
             return bytes(body)
         except requests.RequestException as exc:
             raise FdroidRepositoryError(f"Could not read {label}: {exc}") from exc
@@ -154,6 +167,7 @@ class FdroidRepositoryClient:
                 "The configured F-Droid signer fingerprint is not in the GPG trust allowlist."
             )
 
+        self._progress("Checking the pinned F-Droid signing key...")
         key_data = self._fetch_limited(
             self.key_url, limit=self.max_key_bytes, label="F-Droid public key"
         )
@@ -166,6 +180,7 @@ class FdroidRepositoryClient:
         if imported_fingerprint != self.signer_fingerprint:
             raise FdroidRepositoryError("Imported F-Droid key fingerprint did not match the pin.")
 
+        self._progress("Pinned key confirmed. Retrieving the signed index and detached signature...")
         index_url = f"{self.repository_url}/index-v2.json"
         signature_url = f"{index_url}.asc"
         index_data = self._fetch_limited(
@@ -175,6 +190,7 @@ class FdroidRepositoryClient:
             signature_url, limit=self.max_signature_bytes, label="F-Droid index signature"
         )
 
+        self._progress("Checking the detached OpenPGP signature...")
         with tempfile.TemporaryDirectory(prefix="apkworkbench-fdroid-") as temp_dir:
             temp_path = Path(temp_dir)
             index_path = temp_path / "index-v2.json"
@@ -192,4 +208,5 @@ class FdroidRepositoryClient:
             raise FdroidRepositoryError(
                 "F-Droid index signature is invalid or was not made by the pinned primary key."
             )
+        self._progress("F-Droid index signature: VERIFIED")
         return index_data

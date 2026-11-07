@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 import tempfile
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
@@ -252,3 +253,57 @@ class WorkspaceDatabase:
             if temporary.exists():
                 temporary.unlink()
         return destination
+
+
+    def read_manifest(self, run_id: str) -> list[dict[str, str]]:
+        """Read one immutable run manifest in selection order."""
+        if not isinstance(run_id, str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9-]{0,63}", run_id
+        ):
+            raise DatabaseError("Run ID must contain only letters, digits, and hyphens.")
+
+        self.ensure()
+        path = self.manifest_dir / f"run_{run_id}.csv"
+        if path.is_symlink() or not path.is_file():
+            raise DatabaseError(f"Run manifest does not exist or is not a regular file: {path}")
+
+        rows: list[dict[str, str]] = []
+        seen_hashes: set[str] = set()
+        seen_orders: set[int] = set()
+        try:
+            with path.open("r", encoding="utf-8", newline="") as handle:
+                reader = csv.DictReader(handle)
+                if reader.fieldnames != MANIFEST_FIELDS:
+                    raise DatabaseError(
+                        f"Unexpected CSV header in {path}; expected {MANIFEST_FIELDS!r}, "
+                        f"found {reader.fieldnames!r}."
+                    )
+                for row in reader:
+                    if row.get("run_id") != run_id:
+                        raise DatabaseError(f"Run manifest contains a mismatched run ID: {path}")
+                    digest = (row.get("sha256") or "").strip().lower()
+                    if len(digest) != 64 or any(
+                        char not in "0123456789abcdef" for char in digest
+                    ):
+                        raise DatabaseError(
+                            f"Run manifest contains a malformed SHA-256 value: {digest!r}"
+                        )
+                    if digest in seen_hashes:
+                        raise DatabaseError(f"Duplicate artifact SHA-256 in run manifest: {digest}")
+                    try:
+                        order = int(row.get("selection_order") or "")
+                    except ValueError as exc:
+                        raise DatabaseError(
+                            f"Invalid selection order in run manifest: {row.get('selection_order')!r}"
+                        ) from exc
+                    if order < 1 or order in seen_orders:
+                        raise DatabaseError(f"Duplicate or invalid manifest selection order: {order}")
+                    row["sha256"] = digest
+                    seen_hashes.add(digest)
+                    seen_orders.add(order)
+                    rows.append(row)
+        except OSError as exc:
+            raise DatabaseError(f"Cannot read run manifest {path}: {exc}") from exc
+
+        rows.sort(key=lambda row: int(row["selection_order"]))
+        return rows

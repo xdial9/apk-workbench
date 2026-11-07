@@ -318,3 +318,100 @@ def test_scanner_accepts_kong_style_negative_boolean_flag_syntax(monkeypatch, tm
     assert summary.scanned == 1
     assert summary.failed == 0
     assert [entry[0] for entry in calls] == ["help", "scan"]
+
+
+
+def test_scanner_only_processes_artifacts_listed_in_the_selected_run_manifest(monkeypatch, tmp_path):
+    database, selected_digest = make_workspace(tmp_path)
+    selected_history = next(
+        row for row in database.read_download_history() if row["sha256"] == selected_digest
+    )
+    database.write_manifest(
+        "test-run",
+        [
+            {
+                "run_id": "test-run",
+                "selection_order": 1,
+                "selected_at": "2026-11-07T12:00:00+00:00",
+                "package_id": selected_history["package_id"],
+                "app_name": "Example",
+                "version_code": selected_history["version_code"],
+                "version_name": selected_history["version_name"],
+                "source": "fdroid",
+                "download_url": selected_history["download_url"],
+                "sha256": selected_digest,
+                "size": selected_history["size"],
+                "signer_sha256": "",
+                "local_path": selected_history["local_path"],
+                "index_sha256": "f" * 64,
+            }
+        ],
+    )
+
+    old_digest = hashlib.sha256(b"older downloaded apk").hexdigest()
+    old_apk = tmp_path / "downloads/org.example.old/2" / old_digest / "app.apk"
+    old_apk.parent.mkdir(parents=True, exist_ok=True)
+    old_apk.write_bytes(b"older downloaded apk")
+    database.append_history(
+        {
+            "sha256": old_digest,
+            "package_id": "org.example.old",
+            "version_code": 2,
+            "version_name": "2.0",
+            "source": "fdroid",
+            "download_url": "https://f-droid.org/repo/old.apk",
+            "local_path": str(old_apk),
+            "size": old_apk.stat().st_size,
+            "run_id": "old-run",
+            "downloaded_at": "2026-11-07T12:00:00+00:00",
+            "index_sha256": "f" * 64,
+        }
+    )
+    for tool in ("jadx", "apktool"):
+        output = tmp_path / "results/org.example.old/2" / old_digest / tool
+        output.mkdir(parents=True)
+        (output / "placeholder.txt").write_text("older source", encoding="utf-8")
+    database.update_processing_status(
+        {
+            "sha256": old_digest,
+            "package_id": "org.example.old",
+            "version_code": "2",
+            "jadx_status": "success",
+            "apktool_status": "success",
+            "scan_status": "pending",
+            "error": "",
+        }
+    )
+    database.write_manifest(
+        "old-run",
+        [
+            {
+                "run_id": "old-run",
+                "selection_order": 1,
+                "selected_at": "2026-11-07T12:00:00+00:00",
+                "package_id": "org.example.old",
+                "app_name": "Old",
+                "version_code": 2,
+                "version_name": "2.0",
+                "source": "fdroid",
+                "download_url": "https://f-droid.org/repo/old.apk",
+                "sha256": old_digest,
+                "size": old_apk.stat().st_size,
+                "signer_sha256": "",
+                "local_path": str(old_apk),
+                "index_sha256": "f" * 64,
+            }
+        ],
+    )
+
+    calls, _ = install_fakes(monkeypatch, b"")
+    scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
+    summary = scanner.run(run_id="test-run")
+
+    assert summary.scanned == 1
+    assert summary.failed == 0
+    assert summary.skipped == 0
+    scan_commands = [entry[1] for entry in calls if entry[0] == "scan"]
+    assert len(scan_commands) == 1
+    assert all("org.example.old" not in arg for arg in scan_commands[0])
+    assert database.read_processing_status()[old_digest]["scan_status"] == "pending"

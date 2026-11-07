@@ -199,3 +199,70 @@ def test_decompiler_rejects_results_root_symlink_escape(tmp_path):
 
     with pytest.raises(DecompilationError, match="results directory resolves outside"):
         runner.run()
+
+
+
+def test_run_id_limits_decompilation_to_its_frozen_manifest(monkeypatch, tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+    database.ensure()
+
+    def add_run_artifact(run_id: str, payload: bytes):
+        digest = hashlib.sha256(payload).hexdigest()
+        apk_path = tmp_path / "downloads/org.example.app/7" / digest / "app.apk"
+        apk_path.parent.mkdir(parents=True, exist_ok=True)
+        apk_path.write_bytes(payload)
+        database.append_history(
+            {
+                "sha256": digest,
+                "package_id": "org.example.app",
+                "version_code": 7,
+                "version_name": "7.0",
+                "source": "fdroid",
+                "download_url": "https://f-droid.org/repo/app.apk",
+                "local_path": str(apk_path),
+                "size": len(payload),
+                "run_id": run_id,
+                "downloaded_at": "2026-11-07T12:00:00+00:00",
+                "index_sha256": "f" * 64,
+            }
+        )
+        manifest = {
+            "run_id": run_id,
+            "selection_order": 1,
+            "selected_at": "2026-11-07T12:00:00+00:00",
+            "package_id": "org.example.app",
+            "app_name": "Example",
+            "version_code": 7,
+            "version_name": "7.0",
+            "source": "fdroid",
+            "download_url": "https://f-droid.org/repo/app.apk",
+            "sha256": digest,
+            "size": len(payload),
+            "signer_sha256": "",
+            "local_path": str(apk_path),
+            "index_sha256": "f" * 64,
+        }
+        database.write_manifest(run_id, [manifest])
+        return digest, apk_path
+
+    old_digest, _ = add_run_artifact("old-run", b"old apk")
+    selected_digest, selected_path = add_run_artifact("new-run", b"new apk")
+
+    runner = DecompilationRunner(
+        database, workspace=tmp_path, jadx_executable="jadx", apktool_executable="apktool"
+    )
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command[-1])
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    summary = runner.run(run_id="new-run")
+
+    assert summary.examined == 1
+    assert summary.completed == 1
+    assert summary.failed == 0
+    assert calls == [str(selected_path), str(selected_path)]
+    assert database.read_processing_status()[selected_digest]["jadx_status"] == "success"
+    assert old_digest not in database.read_processing_status()

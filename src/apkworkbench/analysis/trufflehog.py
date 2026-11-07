@@ -393,7 +393,13 @@ class TruffleHogScanner:
             ) from exc
         self.results_root = self.results_root.resolve(strict=True)
 
-    def run(self, *, limit: int | None = None, force: bool = False) -> AnalysisSummary:
+    def run(
+        self,
+        *,
+        limit: int | None = None,
+        force: bool = False,
+        run_id: str | None = None,
+    ) -> AnalysisSummary:
         if limit is not None and limit < 1:
             raise ValueError("limit must be at least 1 when supplied")
         self._validate_results_root()
@@ -402,7 +408,27 @@ class TruffleHogScanner:
         statuses = self.database.read_processing_status()
         scanned = findings_count = failed = skipped = 0
 
-        for row in history:
+        if run_id is None:
+            candidate_rows = history
+        else:
+            manifest_rows = self.database.read_manifest(run_id)
+            history_by_hash = {
+                row.get("sha256", "").lower(): row for row in history if row.get("sha256")
+            }
+            candidate_rows = []
+            for selected in manifest_rows:
+                acquired = history_by_hash.get(selected["sha256"])
+                if (
+                    acquired is None
+                    or acquired.get("run_id") != run_id
+                    or acquired.get("package_id") != selected.get("package_id")
+                    or str(acquired.get("version_code", "")) != str(selected.get("version_code", ""))
+                ):
+                    skipped += 1
+                    continue
+                candidate_rows.append(acquired)
+
+        for row in candidate_rows:
             digest = row.get("sha256", "").lower()
             if not digest:
                 continue

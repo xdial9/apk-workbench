@@ -13,6 +13,8 @@ cli = importlib.import_module("apkworkbench.cli.main")
 def make_stage_command(name, calls, *, exit_code=0):
     def callback(**kwargs):
         calls.append((name, kwargs))
+        if name == "download":
+            click.get_current_context().meta["apkworkbench_run_id"] = "run-123"
         if exit_code:
             raise click.exceptions.Exit(exit_code)
 
@@ -25,6 +27,7 @@ def make_stage_command(name, calls, *, exit_code=0):
         params = [
             click.Option(["--limit"], type=int),
             click.Option(["--force"], is_flag=True),
+            click.Option(["--run-id"], default=None),
         ]
     else:
         params = []
@@ -56,6 +59,8 @@ def test_run_invokes_all_stages_in_order_and_continues_after_download_shortfall(
     assert "Stages requiring attention: download" in result.output
     assert calls[0][1]["apk_count"] == 3
     assert calls[0][1]["package_id"] == "org.example.app"
+    assert calls[1][1]["run_id"] == "run-123"
+    assert calls[2][1]["run_id"] == "run-123"
 
 
 def test_run_returns_success_when_all_stages_finish_without_errors(monkeypatch):
@@ -74,4 +79,6 @@ def test_run_returns_success_when_all_stages_finish_without_errors(monkeypatch):
         "analyze",
         "report",
     ]
+    assert calls[1][1]["run_id"] == "run-123"
+    assert calls[2][1]["run_id"] == "run-123"
     assert "All pipeline stages completed without reported errors." in result.output

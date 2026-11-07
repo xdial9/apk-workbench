@@ -43,6 +43,7 @@ def _load_fdroid_artifacts(config: Config):
         max_index_bytes=int(source.get("max_index_bytes", 128 * 1024 * 1024)),
         max_signature_bytes=int(source.get("max_signature_bytes", 1024 * 1024)),
         max_key_bytes=int(source.get("max_key_bytes", 2 * 1024 * 1024)),
+        progress_callback=click.echo,
     )
     index_data = client.fetch_verified_index()
     artifacts = FdroidIndexParser(repository_url).parse(index_data)
@@ -164,6 +165,7 @@ def download(apk_count: int, package_id: str | None) -> None:
     """Select new APK binaries, freeze a run manifest, and download sequentially."""
     config = Config()
     logger = setup_logging(config)
+    click.get_current_context().meta["apkworkbench_run_id"] = ""
     click.echo(BANNER)
     click.echo("Authenticating F-Droid index before selecting APKs...")
 
@@ -220,6 +222,8 @@ def download(apk_count: int, package_id: str | None) -> None:
                 }
             )
         manifest_path = database.write_manifest(run_id, manifest_rows)
+        # Click shares metadata between the pipeline parent and invoked stages.
+        click.get_current_context().meta["apkworkbench_run_id"] = run_id
     except click.exceptions.Exit:
         raise
     except (
@@ -289,7 +293,13 @@ def download(apk_count: int, package_id: str | None) -> None:
     is_flag=True,
     help="Re-run decompilation even when both tools previously succeeded.",
 )
-def decompile(limit: int, force: bool) -> None:
+@click.option(
+    "--run-id",
+    type=str,
+    default=None,
+    help="Restrict processing to artifacts in this frozen download manifest.",
+)
+def decompile(limit: int, force: bool, run_id: str | None) -> None:
     """Run JADX and Apktool sequentially against verified acquired APKs."""
     config = Config()
     logger = setup_logging(config)
@@ -305,13 +315,15 @@ def decompile(limit: int, force: bool) -> None:
     click.echo(BANNER)
     click.echo("Starting sequential decompilation; each APK is SHA-256 checked first.")
     try:
-        summary = runner.run(limit=limit or None, force=force)
+        summary = runner.run(limit=limit or None, force=force, run_id=run_id)
     except (DatabaseError, OSError, ValueError) as exc:
         logger.error("Decompilation run failed: %s", exc)
         click.echo(f"Decompilation failed: {exc}", err=True)
         raise click.exceptions.Exit(1) from exc
 
     click.echo("DECOMPILATION SUMMARY")
+    if run_id:
+        click.echo(f"  Run ID: {run_id}")
     click.echo(f"  Examined: {summary.examined}")
     click.echo(f"  Completed: {summary.completed}")
     click.echo(f"  Failed: {summary.failed}")
@@ -333,7 +345,13 @@ def decompile(limit: int, force: bool) -> None:
     is_flag=True,
     help="Re-scan APKs whose previous TruffleHog scan succeeded.",
 )
-def analyze(limit: int, force: bool) -> None:
+@click.option(
+    "--run-id",
+    type=str,
+    default=None,
+    help="Restrict analysis to artifacts in this frozen download manifest.",
+)
+def analyze(limit: int, force: bool, run_id: str | None) -> None:
     """Scan completed decompilations locally with TruffleHog; verification is disabled."""
     config = Config()
     logger = setup_logging(config)
@@ -349,13 +367,15 @@ def analyze(limit: int, force: bool) -> None:
     click.echo(BANNER)
     click.echo("Starting local TruffleHog analysis with credential verification disabled.")
     try:
-        summary = scanner.run(limit=limit or None, force=force)
+        summary = scanner.run(limit=limit or None, force=force, run_id=run_id)
     except (AnalysisError, DatabaseError, OSError, ValueError) as exc:
         logger.error("Static analysis failed: %s", exc)
         click.echo(f"Analysis failed: {exc}", err=True)
         raise click.exceptions.Exit(1) from exc
 
     click.echo("ANALYSIS SUMMARY")
+    if run_id:
+        click.echo(f"  Run ID: {run_id}")
     click.echo(f"  APKs scanned: {summary.scanned}")
     click.echo(f"  Candidate findings: {summary.findings}")
     click.echo(f"  Failed scans: {summary.failed}")
@@ -447,6 +467,7 @@ def run(
 ) -> None:
     """Run discovery, acquisition, decompilation, analysis, and reporting in order."""
     context = click.get_current_context()
+    context.meta["apkworkbench_run_id"] = ""
     stages_with_issues: list[str] = []
     click.echo(BANNER)
     click.echo("FULL SEQUENTIAL PIPELINE")
@@ -458,6 +479,15 @@ def run(
         ("report", report, {}),
     ):
         click.echo(f"\n=== {stage_name.upper()} ===")
+        if stage_name in {"decompile", "analyze"}:
+            run_id = context.meta.get("apkworkbench_run_id")
+            if not run_id:
+                click.echo(
+                    f"Skipping {stage_name}: this pipeline invocation did not publish "
+                    "a download manifest."
+                )
+                continue
+            kwargs["run_id"] = run_id
         try:
             context.invoke(command, **kwargs)
         except click.exceptions.Exit as exc:
@@ -465,7 +495,7 @@ def run(
                 stages_with_issues.append(stage_name)
                 click.echo(
                     f"Stage {stage_name} ended with exit code {exc.exit_code}; "
-                    "continuing with eligible artifacts."
+                    "continuing with eligible artifacts from this run."
                 )
 
     click.echo("\nFULL PIPELINE SUMMARY")
