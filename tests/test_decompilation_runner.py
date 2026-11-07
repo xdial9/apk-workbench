@@ -478,3 +478,24 @@ def test_process_group_termination_escalates_from_term_to_kill(monkeypatch, tmp_
 
     assert signals == [signal.SIGTERM, signal.SIGKILL]
     assert process.wait_calls == 2
+
+
+
+def test_decompiler_refuses_symlinked_log_without_writing_outside_workspace(monkeypatch, tmp_path):
+    runner, database, digest, _ = make_runner(tmp_path)
+    output_root = tmp_path / "results/org.example.app/7" / digest
+    output_root.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "outside.log"
+    outside.write_text("preserve this file", encoding="utf-8")
+    (output_root / "jadx.log").symlink_to(outside)
+
+    def successful(command, kwargs):
+        successful_tool(command, kwargs)
+
+    install_fake_popen(monkeypatch, successful)
+    summary = runner.run()
+
+    assert summary.failed == 1
+    assert outside.read_text(encoding="utf-8") == "preserve this file"
+    assert (output_root / "jadx.log").is_symlink()
+    assert database.read_processing_status()[digest]["jadx_status"] == "failed"
