@@ -58,6 +58,16 @@ class DecompilationRunner:
                 digest.update(chunk)
         return digest.hexdigest(), size
 
+    @staticmethod
+    def _has_usable_output(path: Path) -> bool:
+        if not path.is_dir():
+            return False
+        try:
+            entries = list(path.iterdir())
+        except OSError:
+            return False
+        return any(child.is_file() or child.is_dir() for child in entries)
+
     def _validated_apk_path(self, row: dict[str, str]) -> Path:
         raw_path = row.get("local_path", "")
         if not raw_path:
@@ -89,7 +99,7 @@ class DecompilationRunner:
             )
         return apk_path
 
-    def _run_tool(self, command: list[str], log_path: Path, label: str) -> None:
+    def _run_tool(self, command: list[str], log_path: Path, label: str) -> int:
         try:
             result = subprocess.run(
                 command,
@@ -130,11 +140,12 @@ class DecompilationRunner:
             encoding="utf-8",
             errors="replace",
         )
-        if result.returncode != 0:
+        if result.returncode != 0 and not (label == "JADX" and result.returncode == 3):
             detail = (stderr or stdout).strip()[-2000:]
             raise DecompilationError(
                 f"{label} exited with status {result.returncode}. {detail}"
             )
+        return result.returncode
 
     @staticmethod
     def _remove_existing_output(path: Path) -> None:
@@ -212,7 +223,6 @@ class DecompilationRunner:
                     or acquired.get("package_id") != selected.get("package_id")
                     or str(acquired.get("version_code", "")) != str(selected.get("version_code", ""))
                 ):
-                    # Failed downloads remain in the manifest but never become processing inputs.
                     skipped += 1
                     continue
                 candidate_rows.append(acquired)
@@ -225,7 +235,7 @@ class DecompilationRunner:
             scan_status = previous.get("scan_status") or "pending"
             if (
                 not force
-                and previous.get("jadx_status") == "success"
+                and previous.get("jadx_status") in {"success", "partial"}
                 and previous.get("apktool_status") == "success"
             ):
                 skipped += 1
@@ -299,8 +309,15 @@ class DecompilationRunner:
                 str(apk_path),
             ]
             try:
-                self._run_tool(jadx_command, output_root / "jadx.log", "JADX")
-                jadx_status = "success"
+                jadx_return_code = self._run_tool(jadx_command, output_root / "jadx.log", "JADX")
+                if jadx_return_code == 0:
+                    jadx_status = "success"
+                elif jadx_return_code == 3 and self._has_usable_output(jadx_output):
+                    jadx_status = "partial"
+                    errors.append("JADX exited with status 3 after producing usable output; continuing with Apktool.")
+                else:
+                    jadx_status = "failed"
+                    errors.append(f"JADX exited with status {jadx_return_code} without usable output.")
             except DecompilationError as exc:
                 jadx_status = "failed"
                 errors.append(str(exc))
@@ -337,7 +354,7 @@ class DecompilationRunner:
                 scan_status=scan_status,
                 error="; ".join(errors),
             )
-            if jadx_status == "success" and apktool_status == "success":
+            if jadx_status in {"success", "partial"} and apktool_status == "success":
                 completed += 1
                 self.logger.info("Decompilation completed for %s", package_id)
             else:
