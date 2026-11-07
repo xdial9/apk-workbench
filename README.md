@@ -153,13 +153,12 @@ APK-Workbench/
 │   ├── processing_status.csv
 │   └── run_manifests/
 ├── downloads/<package>/<versionCode>/<sha256>/app.apk
-├── results/<package>/<versionCode>/<sha256>/<sha256>/
-│   └── <sha256>/
-│       ├── jadx/
-│       ├── apktool/
-│       ├── trufflehog/
-│       ├── jadx.log
-│       └── apktool.log
+├── results/<package>/<versionCode>/<sha256>/
+│   ├── jadx/
+│   ├── apktool/
+│   ├── trufflehog/
+│   ├── jadx.log
+│   └── apktool.log
 ├── reports/
 │   ├── <package>/<versionCode>/<sha256>/
 │   │   ├── report.json
