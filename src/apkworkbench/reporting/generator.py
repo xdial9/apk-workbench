@@ -119,7 +119,7 @@ class ReportGenerator:
             f"<li>TruffleHog: {html.escape(str(status.get('scan_status', 'pending')))}</li>",
             "</ul>",
             f"<h2>Static analysis candidates ({len(findings)})</h2>",
-            "<p class='muted'>TruffleHog verified these findings using its configured verification process.</p>",
+            "<p class='muted'>Credential verification was enabled; TruffleHog selected verified findings.</p>",
         ]
         if findings:
             parts.extend(
