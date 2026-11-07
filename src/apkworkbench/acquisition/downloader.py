@@ -232,6 +232,11 @@ class ArtifactDownloader:
                 _LOGGER.error("Could not append failed-attempt record: %s", log_error)
             if isinstance(exc, DownloadError):
                 raise
+            if isinstance(exc, DatabaseError):
+                raise DownloadError(
+                    "APK bytes were verified, but acquisition history could not be committed: "
+                    f"{exc}. The verified file was left in place for a retry."
+                ) from exc
             if isinstance(exc, requests.RequestException):
                 raise DownloadError(f"APK network request failed: {exc}") from exc
             if isinstance(exc, OSError):
