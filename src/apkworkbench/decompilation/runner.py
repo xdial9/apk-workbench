@@ -136,6 +136,14 @@ class DecompilationRunner:
                 f"{label} exited with status {result.returncode}. {detail}"
             )
 
+    @staticmethod
+    def _remove_existing_output(path: Path) -> None:
+        """Remove an old tool output without following symlinks."""
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+
     def _status_update(
         self,
         row: dict[str, str],
@@ -238,7 +246,7 @@ class DecompilationRunner:
                 apktool_status="pending",
                 scan_status=scan_status,
             )
-            shutil.rmtree(jadx_output, ignore_errors=True)
+            self._remove_existing_output(jadx_output)
             jadx_command = [
                 self.jadx_executable,
                 "--threads-count",
@@ -261,7 +269,7 @@ class DecompilationRunner:
                 error="; ".join(errors),
             )
 
-            shutil.rmtree(apktool_output, ignore_errors=True)
+            self._remove_existing_output(apktool_output)
             apktool_command = [
                 self.apktool_executable,
                 "d",
