@@ -88,23 +88,6 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(tmp_path
             """,
         ),
     )
-    finding = {
-        "SourceMetadata": {
-            "Data": {
-                "Filesystem": {
-                    "file": "sources/Main.java",
-                    "line": 1,
-                }
-            }
-        },
-        "DetectorType": 2,
-        "DetectorName": "SYNTHETIC_TEST",
-        "DecoderName": "PLAIN",
-        "Verified": False,
-        "Raw": "SYNTHETIC_SECRET_MUST_NOT_BE_PERSISTED",
-        "RawV2": "SYNTHETIC_SECRET_MUST_NOT_BE_PERSISTED",
-        "ExtraData": {"secret": "SYNTHETIC_SECRET_MUST_NOT_BE_PERSISTED"},
-    }
     trufflehog = write_executable(
         tmp_path / "trufflehog-fixture",
         textwrap.dedent(
