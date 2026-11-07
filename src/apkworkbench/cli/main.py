@@ -94,7 +94,7 @@ def discover(package_id: str | None, limit: int) -> None:
     click.echo("Retrieving the F-Droid repository index and detached signature...")
 
     try:
-        client, index_data, artifacts = _load_fdroid_artifacts(config)
+        _client, index_data, artifacts = _load_fdroid_artifacts(config)
     except (FdroidRepositoryError, FdroidIndexError, KeyError, TypeError, ValueError) as exc:
         logger.error("F-Droid discovery failed: %s", exc)
         click.echo(f"Discovery failed: {exc}", err=True)
