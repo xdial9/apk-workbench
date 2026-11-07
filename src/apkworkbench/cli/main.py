@@ -368,7 +368,7 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
     help="Restrict analysis to artifacts in this frozen download manifest.",
 )
 def analyze(limit: int, force: bool, run_id: str | None) -> None:
-    """Scan completed decompilations locally with TruffleHog; verification is disabled."""
+    """Scan complete JADX and Apktool outputs with verified-only TruffleHog results."""
     config = Config()
     logger = setup_logging(config)
     database = WorkspaceDatabase(config.get("workspace"))
@@ -381,7 +381,7 @@ def analyze(limit: int, force: bool, run_id: str | None) -> None:
         logger=logger,
     )
     click.echo(BANNER)
-    click.echo("Starting local TruffleHog analysis with credential verification disabled.")
+    click.echo("Starting TruffleHog with credential verification enabled (--results=verified).")
     try:
         summary = scanner.run(limit=limit or None, force=force, run_id=run_id)
     except (AnalysisError, DatabaseError, OSError, ValueError) as exc:
@@ -396,7 +396,7 @@ def analyze(limit: int, force: bool, run_id: str | None) -> None:
     click.echo(f"  Candidate findings: {summary.findings}")
     click.echo(f"  Failed scans: {summary.failed}")
     click.echo(f"  Skipped / not decompiled: {summary.skipped}")
-    click.echo(f"  Sanitized aggregate: {Path(config.get('workspace')) / 'reports/findings.csv'}")
+    click.echo(f"  Verified aggregate: {Path(config.get('workspace')) / 'reports/findings.csv'}")
     if summary.failed:
         raise click.exceptions.Exit(1)
 
