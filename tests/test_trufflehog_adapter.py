@@ -41,7 +41,7 @@ def make_context(results_root, directories=None):
     )
 
 
-def test_adapter_maps_sanitized_secret_finding_to_common_contract(tmp_path):
+def test_adapter_maps_complete_secret_finding_to_common_contract(tmp_path):
     results_root = tmp_path / "results"
     file_path = results_root / "org.example.app" / "12" / ("a" * 64) / "jadx" / "Example.java"
     scanner = FakeScanner(
