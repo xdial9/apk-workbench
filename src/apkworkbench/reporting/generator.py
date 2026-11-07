@@ -58,6 +58,10 @@ class ReportGenerator:
             raise ReportingError(f"Findings at {path} must contain a JSON array.")
         if not all(isinstance(item, dict) for item in data):
             raise ReportingError(f"Findings at {path} must contain only JSON objects.")
+        if any(item.get("Verified") is not True for item in data):
+            raise ReportingError(
+                f"Findings at {path} contain records that are not explicitly verified."
+            )
         return data
 
     @staticmethod

@@ -385,7 +385,7 @@ class TruffleHogScanner:
         except (OSError, ValueError, json.JSONDecodeError):
             return False
         return isinstance(findings, list) and all(
-            isinstance(item, dict) for item in findings
+            isinstance(item, dict) and item.get("Verified") is True for item in findings
         )
 
     def _update_status(self, row: dict[str, str], status: str, error: str = "") -> None:
@@ -430,7 +430,7 @@ class TruffleHogScanner:
             if not isinstance(loaded, list):
                 continue
             for finding in loaded:
-                if isinstance(finding, dict):
+                if isinstance(finding, dict) and finding.get("Verified") is True:
                     rows.append(
                         {
                             "package_id": package_id,

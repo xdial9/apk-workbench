@@ -177,6 +177,21 @@ def test_scanner_selects_verified_results_and_persists_complete_original_objects
 
 
 
+def test_scanner_rejects_unverified_findings(monkeypatch, tmp_path):
+    database, digest = make_workspace(tmp_path)
+    finding = result_json()
+    finding["Verified"] = False
+    install_fakes(monkeypatch, (json.dumps(finding) + "\\n").encode())
+    scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
+
+    summary = scanner.run()
+
+    assert summary.failed == 1
+    assert summary.scanned == 0
+    assert not (tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings.json").exists()
+    assert database.read_processing_status()[digest]["scan_status"] == "failed"
+
+
 def test_scanner_preserves_repeated_original_objects_without_deduplication(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
     original = result_json()
