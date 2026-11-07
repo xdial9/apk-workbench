@@ -1,0 +1,77 @@
+"""Tests for the run command's strict stage ordering and error continuation."""
+from __future__ import annotations
+
+import importlib
+
+import click
+from click.testing import CliRunner
+
+
+cli = importlib.import_module("apkworkbench.cli.main")
+
+
+def make_stage_command(name, calls, *, exit_code=0):
+    def callback(**kwargs):
+        calls.append((name, kwargs))
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+
+    if name == "download":
+        params = [
+            click.Option(["--apk-count"], type=int),
+            click.Option(["--package"], default=None),
+        ]
+    elif name in {"decompile", "analyze"}:
+        params = [
+            click.Option(["--limit"], type=int),
+            click.Option(["--force"], is_flag=True),
+        ]
+    else:
+        params = []
+    return click.Command(name, callback=callback, params=params)
+
+
+def test_run_invokes_all_stages_in_order_and_continues_after_download_shortfall(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        cli, "download", make_stage_command("download", calls, exit_code=2)
+    )
+    monkeypatch.setattr(cli, "decompile", make_stage_command("decompile", calls))
+    monkeypatch.setattr(cli, "analyze", make_stage_command("analyze", calls))
+    monkeypatch.setattr(cli, "report", make_stage_command("report", calls))
+
+    result = CliRunner().invoke(
+        cli.main,
+        ["run", "--apk-count", "3", "--package", "org.example.app"],
+    )
+
+    assert result.exit_code == 1
+    assert [name for name, _kwargs in calls] == [
+        "download",
+        "decompile",
+        "analyze",
+        "report",
+    ]
+    assert "Stage download ended with exit code 2" in result.output
+    assert "Stages requiring attention: download" in result.output
+    assert calls[0][1]["apk_count"] == 3
+    assert calls[0][1]["package_id"] == "org.example.app"
+
+
+def test_run_returns_success_when_all_stages_finish_without_errors(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "download", make_stage_command("download", calls))
+    monkeypatch.setattr(cli, "decompile", make_stage_command("decompile", calls))
+    monkeypatch.setattr(cli, "analyze", make_stage_command("analyze", calls))
+    monkeypatch.setattr(cli, "report", make_stage_command("report", calls))
+
+    result = CliRunner().invoke(cli.main, ["run", "--apk-count", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert [name for name, _kwargs in calls] == [
+        "download",
+        "decompile",
+        "analyze",
+        "report",
+    ]
+    assert "All pipeline stages completed without reported errors." in result.output

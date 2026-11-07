@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apk-workbench"
+version = "0.1.0"
+description = "Sequential Android APK discovery, acquisition, decompilation, and static analysis for Linux."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "dial9 + ChatGPT" }]
+dependencies = [
+  "click>=8.1,<9",
+  "requests>=2.31,<3",
+  "PyYAML>=6.0,<7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "ruff>=0.5"]
+
+[project.scripts]
+apkworkbench = "apkworkbench.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff.lint]
+ignore = ["I001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["apkworkbench"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
