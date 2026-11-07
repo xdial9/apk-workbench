@@ -75,12 +75,14 @@ class TruffleHogScanner:
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise AnalysisError(f"Unable to inspect TruffleHog CLI capabilities: {exc}") from exc
         help_text = (result.stdout or "") + "\n" + (result.stderr or "")
-        # Kong may advertise a boolean option as --[no-]flag, which explicitly
-        # documents both its positive and negative forms.
+        # Kong renders boolean flags as --[no-]flag. For negative flags
+        # such as --no-update, the advertised spelling is --[no-]no-update.
+        # Accept both the literal spelling and Kong's documented form.
         def supported(flag: str) -> bool:
             if flag in help_text:
                 return True
-            return flag.startswith("--no-") and f"--[no-]{flag[5:]}" in help_text
+            kong_spelling = flag.replace("--", "--[no-]", 1)
+            return kong_spelling in help_text
 
         missing = [flag for flag in self.REQUIRED_HELP_FLAGS if not supported(flag)]
         if missing:
