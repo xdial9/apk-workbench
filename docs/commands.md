@@ -1,15 +1,13 @@
-![APK WORKBENCH](assets/apk-workbench-banner.svg)
-
 # CLI Command Reference
 
 **DISCOVER · DOWNLOAD · DECOMPILE · ANALYZE · CATALOGUE**
 
 Run commands with the project virtual environment active:
 
-~~~bash
+```bash
 source .venv/bin/activate
 apkworkbench --help
-~~~
+```
 
 ## Command map
 
@@ -29,23 +27,23 @@ apkworkbench --help
 
 ## 01 · doctor
 
-~~~bash
+```bash
 apkworkbench doctor
-~~~
+```
 
-Checks that all required executables can be found and their version commands succeed. Required: **gpg**, **java**, **jadx**, **apktool**, and **trufflehog**. A missing or unhealthy required dependency produces a non-zero exit.
+Checks that all required executables can be found and their version commands succeed. Required: **gpg**, **java**, **jadx**, **apktool**, and **trufflehog**. A missing or unhealthy required dependency is treated as a fatal precondition.
 
 ## 02 · discover
 
 Authenticate the configured F-Droid index and display the latest indexed version for each package.
 
-~~~bash
+```bash
 apkworkbench discover
 apkworkbench discover --limit 50
 apkworkbench discover --package org.example.app
 apkworkbench discover --package org.example.app --limit 5
 apkworkbench discover --refresh-index
-~~~
+```
 
 | Option | Default | Meaning |
 |---|---:|---|
@@ -53,16 +51,16 @@ apkworkbench discover --refresh-index
 | **--refresh-index** | off | Bypass local cache and retrieve a fresh signed index |
 | **--package TEXT** | — | Exact Android application ID filter |
 
-The authenticated index and detached signature are cached for six hours by default. The signature is re-verified on every cache hit. Discovery does not download APK files. Success reports the signer fingerprint, index digest, record counts, and **Index signature: VERIFIED**.
+The authenticated index and detached signature are cached for six hours by default. The signature is re-verified on every cache hit. Discovery does not download APK files. Success reports the signed index verification state.
 
 ## 03 · download
 
-~~~bash
+```bash
 apkworkbench download
 apkworkbench download --apk-count 3
 apkworkbench download --apk-count 5 --package org.example.app
 apkworkbench download --apk-count 10 --refresh-index
-~~~
+```
 
 | Option | Default | Meaning |
 |---|---:|---|
@@ -70,7 +68,7 @@ apkworkbench download --apk-count 10 --refresh-index
 | **--refresh-index** | off | Bypass local cache and retrieve a fresh signed index |
 | **--package TEXT** | — | Restrict selection to one exact package ID |
 
-Previously acquired SHA-256 hashes and duplicates in the current selection are excluded. A frozen manifest is atomically published before downloads begin. It records selection order, package/version identity, expected size and digest, source URL, and authenticated index digest.
+Previously acquired SHA-256 hashes and duplicates in the current selection are excluded. A frozen manifest is atomically published before downloads begin. It records selection order, package/version metadata, and download provenance.
 
 The command prints its **Run ID** and **Frozen manifest** path. Save the UUID if you will run processing stages separately.
 
@@ -80,12 +78,12 @@ A shortfall is reported when fewer new unique binaries are available than reques
 
 JADX runs first; Apktool runs second. Each APK is re-hashed and size-checked before either tool receives it.
 
-~~~bash
+```bash
 apkworkbench decompile
 apkworkbench decompile --limit 5
 apkworkbench decompile --run-id YOUR-RUN-ID
 apkworkbench decompile --run-id YOUR-RUN-ID --force
-~~~
+```
 
 | Option | Default | Meaning |
 |---|---:|---|
@@ -100,18 +98,18 @@ apkworkbench decompile --run-id YOUR-RUN-ID --force
 - The **run** command automatically passes its manifest ID to this stage.
 - Failed or absent downloads are skipped; they are not replaced by older workspace APKs.
 
-JADX and Apktool have separate output directories and logs. Apktool is attempted even when JADX fails, so both results are recorded independently. An artifact is fully decompiled only when both tools succeed.
+JADX and Apktool have separate output directories and logs. Apktool is attempted even when JADX fails, so both results are recorded independently. An artifact is fully decompiled only when both tools succeed; partial JADX output is treated as successful only when usable output is present and the artifact still meets the workflow requirements.
 
 ## 05 · analyze
 
 Run a local TruffleHog filesystem scan over JADX and Apktool output for successfully decompiled APKs.
 
-~~~bash
+```bash
 apkworkbench analyze
 apkworkbench analyze --limit 5
 apkworkbench analyze --run-id YOUR-RUN-ID
 apkworkbench analyze --run-id YOUR-RUN-ID --force
-~~~
+```
 
 | Option | Default | Meaning |
 |---|---:|---|
@@ -119,23 +117,23 @@ apkworkbench analyze --run-id YOUR-RUN-ID --force
 | **--force** | off | Repeat scans that previously succeeded |
 | **--run-id TEXT** | — | Restrict analysis to the matching acquisition manifest |
 
-Credential verification is disabled. The application checks that the installed TruffleHog filesystem command advertises the required safe-operation flags and fails closed if compatibility cannot be established.
+Credential verification is enabled. The application checks the installed TruffleHog filesystem command advertises the required safe-operation flags and refuses to continue if compatibility cannot be confirmed.
 
-Findings are unverified candidate indicators for manual review. They do not prove that a credential is active, valid, or exploitable. Raw/decoded secret values are not persisted in reports.
+Findings are only published when TruffleHog marks them as verified. The scanner writes its own reports under a dedicated `results/.../trufflehog/` directory and never rewrites or deletes JADX or Apktool output. Raw/decoded secret values are not persisted in reports.
 
 ## 06 · report
 
-~~~bash
+```bash
 apkworkbench report
-~~~
+```
 
-Generates per-artifact sanitized JSON and HTML reports plus the aggregate **findings.csv**. This is a workspace catalogue operation and refreshes reports across the workspace.
+Generates per-artifact sanitized JSON and HTML reports plus the aggregate **findings.csv**. This is a workspace catalogue operation and refreshes reports across the workspace using only verified TruffleHog findings.
 
 ## 07 · status
 
-~~~bash
+```bash
 apkworkbench status
-~~~
+```
 
 Displays workspace-wide totals for acquired binaries, successful JADX outputs, successful Apktool outputs, complete decompilations, successful scans, and failures.
 
@@ -143,14 +141,14 @@ Displays workspace-wide totals for acquired binaries, successful JADX outputs, s
 
 Execute a new acquisition batch and automatically scope decompilation and analysis to the manifest created by that batch.
 
-~~~bash
+```bash
 apkworkbench run
 apkworkbench run --apk-count 3
 apkworkbench run --apk-count 10 --package org.example.app
 apkworkbench run --apk-count 25
 apkworkbench run --apk-count 10 --force-decompile --force-analyze
 apkworkbench run --apk-count 10 --refresh-index
-~~~
+```
 
 | Option | Default | Meaning |
 |---|---:|---|
@@ -169,7 +167,7 @@ Pipeline stages:
 5. Manifest-scoped TruffleHog analysis.
 6. Workspace report generation.
 
-If no manifest is published, decompilation and analysis are skipped rather than falling back to workspace-wide processing. When a stage reports a non-zero exit, later stages continue for eligible artifacts; the overall command exits non-zero if attention is required.
+If no manifest is published, decompilation and analysis are skipped rather than falling back to workspace-wide processing. When a stage reports a non-zero exit, later stages continue for eligible artifacts, but all published analysis remains verified-only and isolated.
 
 ## Exit statuses
 
@@ -183,16 +181,16 @@ If no manifest is published, decompilation and analysis are skipped rather than 
 
 ### End-to-end new batch
 
-~~~bash
+```bash
 apkworkbench doctor
 apkworkbench discover --limit 20
 apkworkbench run --apk-count 10
 apkworkbench status
-~~~
+```
 
 ### Separate acquisition and processing
 
-~~~bash
+```bash
 apkworkbench download --apk-count 5
 # Copy the Run ID printed by download.
 
@@ -200,27 +198,27 @@ apkworkbench decompile --run-id YOUR-RUN-ID
 apkworkbench analyze --run-id YOUR-RUN-ID
 apkworkbench report
 apkworkbench status
-~~~
+```
 
 ### Intentional workspace-wide backlog processing
 
-~~~bash
+```bash
 apkworkbench decompile
 apkworkbench analyze
 apkworkbench report
-~~~
+```
 
 Use this workflow only when processing the entire eligible workspace is intentional.
 
 ### Troubleshooting
 
-~~~bash
+```bash
 apkworkbench status
 tail -n 120 "$HOME/APK-Workbench/logs/apkworkbench.log"
 
 find "$HOME/APK-Workbench/results" \
   -type f \( -name 'jadx.log' -o -name 'apktool.log' \) \
   -print
-~~~
+```
 
 See [Configuration](configuration.md) for workspace paths and timeouts.
