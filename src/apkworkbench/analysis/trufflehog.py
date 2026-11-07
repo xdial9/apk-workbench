@@ -82,7 +82,10 @@ class TruffleHogScanner:
         def supported(flag: str) -> bool:
             if flag in help_text:
                 return True
-            return flag.startswith("--no-") and f"--[no-]{flag[5:]}" in help_text
+            # Kong renders Boolean options as --[no-]<full-option-name>.
+            # Preserve an option's own "no-" prefix: e.g. --no-verification
+            # is advertised as --[no-]no-verification, not --[no-]verification.
+            return flag.startswith("--") and f"--[no-]{flag[2:]}" in help_text
 
         missing = [flag for flag in self.REQUIRED_HELP_FLAGS if not supported(flag)]
         if missing:
