@@ -47,7 +47,7 @@ def test_ensure_applies_versioned_schema_and_enables_integrity(tmp_path):
 
     database.ensure()
 
-    assert database.schema_version() == 1
+    assert database.schema_version() == 2
     assert database.integrity_check() == "ok"
     assert database.foreign_key_check() == []
     with sqlite3.connect(database.db_path) as connection:
@@ -191,7 +191,7 @@ def test_findings_and_precise_evidence_locations_round_trip(tmp_path):
     )
 
 
-def test_sensitive_finding_never_persists_the_original_value(tmp_path):
+def test_finding_persists_original_value_and_raw_payload(tmp_path):
     database = EvidenceDatabase(tmp_path)
     _, artifact_id, _, execution_id = seed_analysis(database, tmp_path)
     secret = "example-private-token-value"
@@ -203,6 +203,7 @@ def test_sensitive_finding_never_persists_the_original_value(tmp_path):
         title="Potential embedded token",
         normalized_value=secret,
         sensitive=True,
+        raw_data={"Raw": secret, "ExtraData": {"preserve": True}},
     )
 
     with sqlite3.connect(database.db_path) as connection:
@@ -210,8 +211,9 @@ def test_sensitive_finding_never_persists_the_original_value(tmp_path):
             "SELECT normalized_value, value_fingerprint FROM finding WHERE finding_id = ?",
             (finding_id,),
         ).fetchone()
-    assert value is None
-    assert fingerprint == hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    assert value == secret
+    assert fingerprint is None
+    assert json.loads(database.list_findings(artifact_id)[0]["raw_data_json"]) == {"Raw": secret, "ExtraData": {"preserve": True}}
 
 
 def test_finding_relationships_are_typed_and_self_links_rejected(tmp_path):
