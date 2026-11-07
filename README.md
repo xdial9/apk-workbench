@@ -137,6 +137,7 @@ Start with three new APK binaries:
 ~~~bash
 apkworkbench run --apk-count 3
 apkworkbench status
+apkworkbench reconcile --run-id <run-id>  # account for every item in a prior run
 ~~~
 
 The full pipeline performs authenticated discovery, selection, immutable manifest publication, sequential downloads, SHA-256/size validation, JADX, Apktool, TruffleHog, and report generation.
