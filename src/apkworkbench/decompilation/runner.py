@@ -117,7 +117,7 @@ class DecompilationRunner:
         try:
             with log_path.open("wb") as log_file:
                 log_file.write(
-                    f"COMMAND: {' '.join(command)}\\nSTDOUT AND STDERR (combined):\\n".encode(
+                    f"COMMAND: {' '.join(command)}\nSTDOUT AND STDERR (combined):\n".encode(
                         "utf-8", errors="replace"
                     )
                 )
@@ -134,7 +134,7 @@ class DecompilationRunner:
                     self._terminate_process_tree(process)
                     with log_path.open("ab") as timeout_file:
                         timeout_file.write(
-                            f"\\nTIMEOUT AFTER: {self.timeout_seconds} seconds\\n".encode(
+                            f"\nTIMEOUT AFTER: {self.timeout_seconds} seconds\n".encode(
                                 "utf-8", errors="replace"
                             )
                         )
@@ -143,7 +143,7 @@ class DecompilationRunner:
                         f"See log: {log_path}"
                     ) from None
                 log_file.write(
-                    f"\\nRETURN CODE: {returncode}\\n".encode("utf-8", errors="replace")
+                    f"\nRETURN CODE: {returncode}\n".encode("utf-8", errors="replace")
                 )
         except FileNotFoundError as exc:
             raise DecompilationError(
