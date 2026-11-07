@@ -77,4 +77,4 @@ Automated tests mock Google Play API and download boundaries. They do not authen
 
 The upstream client stores its account token and device/session state in `~/.config/playstore-cli` by default. Restrict access to that directory. The `PLAYSTORE_HOME` environment variable can relocate it.
 
-The workbench workspace defaults to `~/APK-Workbench/`. Keep it separate from the Git checkout; it contains acquired APKs, OBBs, bundle metadata, processing results, reports, and logs.
+The workbench workspace defaults to `~/APK-Workbench-Google-Play/`. Keep it separate from the Git checkout; it contains acquired APKs, OBBs, bundle metadata, processing results, reports, and logs.
