@@ -486,6 +486,7 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
         click.echo(f"  Run ID: {run_id}")
     click.echo(f"  Examined: {summary.examined}")
     click.echo(f"  Completed: {summary.completed}")
+    click.echo(f"  Completed with partial JADX output: {summary.partial}")
     click.echo(f"  Failed: {summary.failed}")
     click.echo(f"  Already complete / skipped: {summary.skipped}")
     if summary.failed:
