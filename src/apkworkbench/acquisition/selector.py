@@ -1,8 +1,8 @@
 """Deterministic SHA-256-based selection of new F-Droid APK binaries."""
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from ..sources.fdroid import FdroidArtifact
 
