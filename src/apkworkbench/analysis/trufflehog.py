@@ -29,6 +29,7 @@ class AnalysisSummary:
     findings: int
     failed: int
     skipped: int
+    finding_records: tuple[dict[str, Any], ...] = ()
 
 
 class TruffleHogScanner:
@@ -115,26 +116,9 @@ class TruffleHogScanner:
         return str(file_path), line_number
 
     @staticmethod
-    def _sanitize_finding(item: dict[str, Any]) -> dict[str, Any] | None:
-        detector = item.get("DetectorName")
-        if not isinstance(detector, str) or not detector:
-            return None
-        canonical = json.dumps(
-            item,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8", errors="replace")
-        file_path, line_number = TruffleHogScanner._filesystem_metadata(item)
-        return {
-            "fingerprint": hashlib.sha256(canonical).hexdigest(),
-            "detector_name": detector,
-            "detector_type": item.get("DetectorType"),
-            "decoder_name": item.get("DecoderName"),
-            "file_path": file_path,
-            "line": line_number,
-            "verification": "disabled",
-        }
+    def _finding_fingerprint(item: dict[str, Any]) -> str:
+        canonical = json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(canonical).hexdigest()
 
     def _atomic_json(self, path: Path, value: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -156,7 +140,7 @@ class TruffleHogScanner:
             finally:
                 os.close(directory_fd)
         except OSError as exc:
-            raise AnalysisError(f"Cannot publish sanitized scan results: {exc}") from exc
+            raise AnalysisError(f"Cannot publish complete scan results: {exc}") from exc
         finally:
             if temporary.exists():
                 temporary.unlink()
@@ -236,7 +220,6 @@ class TruffleHogScanner:
             *(str(path) for path in directories),
         ]
         findings: list[dict[str, Any]] = []
-        fingerprints: set[str] = set()
         parse_error = False
         with (
             tempfile.TemporaryFile(mode="w+b") as stdout_file,
@@ -317,16 +300,10 @@ class TruffleHogScanner:
             stderr_tail = self._stderr_tail(stderr_file)
             stdout_file.flush()
             stdout_file.seek(0)
-            max_line_bytes = 2 * 1024 * 1024
             while True:
-                raw_line = stdout_file.readline(max_line_bytes + 1)
+                raw_line = stdout_file.readline()
                 if not raw_line:
                     break
-                if len(raw_line) > max_line_bytes:
-                    parse_error = True
-                    while raw_line and not raw_line.endswith(b"\\n"):
-                        raw_line = stdout_file.readline(64 * 1024)
-                    continue
                 if not raw_line.strip():
                     continue
                 try:
@@ -337,11 +314,7 @@ class TruffleHogScanner:
                 if not isinstance(item, dict):
                     parse_error = True
                     continue
-                finding = self._sanitize_finding(item)
-                if finding is None or finding["fingerprint"] in fingerprints:
-                    continue
-                fingerprints.add(finding["fingerprint"])
-                findings.append(finding)
+                findings.append(item)
 
         if parse_error:
             detail = f" Stderr: {stderr_tail[-2000:]}" if stderr_tail else ""
@@ -385,7 +358,7 @@ class TruffleHogScanner:
     def _has_usable_scan_output(
         self, package_id: str, version_code: str, digest: str
     ) -> bool:
-        """Reuse a successful scan only while its sanitized result file remains valid."""
+        """Reuse a successful scan only while its complete JSON result file remains valid."""
         output_dir = (
             self.results_root / package_id / version_code / digest / "trufflehog"
         )
@@ -426,18 +399,7 @@ class TruffleHogScanner:
         report_dir = self.workspace / "reports"
         report_dir.mkdir(parents=True, exist_ok=True)
         destination = report_dir / "findings.csv"
-        fields = [
-            "package_id",
-            "version_code",
-            "sha256",
-            "fingerprint",
-            "detector_name",
-            "detector_type",
-            "decoder_name",
-            "file_path",
-            "line",
-            "verification",
-        ]
+        fields = ["package_id", "version_code", "sha256", "detector_name", "detector_type", "decoder_name", "file_path", "line", "verification", "finding_json"]
         rows: list[dict[str, object]] = []
         processing = self.database.read_processing_status()
         eligible_hashes = {
@@ -469,7 +431,13 @@ class TruffleHogScanner:
                             "package_id": package_id,
                             "version_code": version_code,
                             "sha256": digest,
-                            **{field: finding.get(field, "") for field in fields if field not in {"package_id", "version_code", "sha256"}},
+                            "detector_name": finding.get("DetectorName", ""),
+                            "detector_type": finding.get("DetectorType", ""),
+                            "decoder_name": finding.get("DecoderName", ""),
+                            "file_path": self._filesystem_metadata(finding)[0],
+                            "line": self._filesystem_metadata(finding)[1],
+                            "verification": "disabled",
+                            "finding_json": json.dumps(finding, ensure_ascii=False, separators=(",", ":")),
                         }
                     )
 
@@ -516,6 +484,7 @@ class TruffleHogScanner:
         history = self.database.read_download_history()
         statuses = self.database.read_processing_status()
         scanned = findings_count = failed = skipped = 0
+        finding_records: list[dict[str, Any]] = []
 
         if run_id is None:
             candidate_rows = history
@@ -591,9 +560,10 @@ class TruffleHogScanner:
             self._update_status(row, "success")
             scanned += 1
             findings_count += len(findings)
+            finding_records.extend({"package_id": package_id, "version_code": version_code, "sha256": digest, "finding": item} for item in findings)
             self.logger.info(
                 "TruffleHog found %d candidates in %s", len(findings), package_id
             )
 
         self._write_aggregate_csv()
-        return AnalysisSummary(scanned, findings_count, failed, skipped)
+        return AnalysisSummary(scanned, findings_count, failed, skipped, tuple(finding_records))

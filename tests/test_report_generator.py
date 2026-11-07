@@ -1,4 +1,4 @@
-"""Tests for safe per-APK JSON and HTML report generation."""
+"""Tests for per-APK reports preserving complete original findings."""
 from __future__ import annotations
 
 import json
@@ -47,13 +47,10 @@ def setup_workspace(tmp_path: Path):
         json.dumps(
             [
                 {
-                    "fingerprint": "c" * 64,
-                    "detector_name": "<script>alert(1)</script>",
-                    "detector_type": 7,
-                    "decoder_name": "PLAIN",
-                    "file_path": "sources/Example.java",
-                    "line": 51,
-                    "verification": "disabled",
+                    "DetectorName": "<script>alert(1)</script>",
+                    "DetectorType": 7,
+                    "DecoderName": "PLAIN",
+                    "SourceMetadata": {"Data": {"Filesystem": {"file": "sources/Example.java", "line": 51}}},
                     "Raw": "MUST_NOT_APPEAR_IN_REPORTS",
                     "ExtraData": {"credential": "MUST_NOT_APPEAR_IN_REPORTS"},
                 }
@@ -64,7 +61,7 @@ def setup_workspace(tmp_path: Path):
     return database
 
 
-def test_generates_json_and_html_without_secret_fields(tmp_path):
+def test_generates_json_and_html_with_complete_original_findings(tmp_path):
     database = setup_workspace(tmp_path)
     summary = ReportGenerator(database, workspace=tmp_path).run()
 
@@ -76,18 +73,19 @@ def test_generates_json_and_html_without_secret_fields(tmp_path):
     report_json = (report_dir / "report.json").read_text(encoding="utf-8")
     report_html = (report_dir / "report.html").read_text(encoding="utf-8")
 
-    assert "MUST_NOT_APPEAR_IN_REPORTS" not in report_json
-    assert "MUST_NOT_APPEAR_IN_REPORTS" not in report_html
+    assert "MUST_NOT_APPEAR_IN_REPORTS" in report_json
+    assert "MUST_NOT_APPEAR_IN_REPORTS" in report_html
     assert "<script>alert(1)</script>" not in report_html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in report_html
     assert "Credential verification was disabled" in report_html
+    assert "Complete original JSON" in report_html
 
     parsed = json.loads(report_json)
     assert parsed["artifact"]["app_name"] == "Example <App>"
     assert parsed["processing"]["jadx_status"] == "success"
     assert parsed["analysis"]["verification"] == "disabled"
-    assert "Raw" not in parsed["findings"][0]
-    assert "ExtraData" not in parsed["findings"][0]
+    assert parsed["findings"][0]["Raw"] == "MUST_NOT_APPEAR_IN_REPORTS"
+    assert parsed["findings"][0]["ExtraData"]["credential"] == "MUST_NOT_APPEAR_IN_REPORTS"
 
 
 def test_report_refuses_missing_findings_file_after_successful_scan(tmp_path):

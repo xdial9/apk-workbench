@@ -22,7 +22,7 @@ Use a dedicated research Google account. The upstream client uses an unofficial 
 | `download` | Freeze delivery hashes and download complete Play app bundles |
 | `decompile` | Run JADX and Apktool on acquired APK components |
 | `analyze` | Run TruffleHog locally with credential verification disabled |
-| `report` | Generate sanitized reports |
+| `report` | Generate reports containing complete original finding objects |
 | `status` | Summarize acquired APK components and processing state |
 | `reconcile` | Account for every item in a frozen acquisition manifest |
 | `run` | Execute acquisition, decompilation, analysis, reporting, and reconciliation |

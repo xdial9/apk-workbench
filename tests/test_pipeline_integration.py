@@ -139,6 +139,7 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(tmp_path
     assert analysis.scanned == 1
     assert analysis.findings == 1
     assert analysis.failed == 0
+    assert analysis.finding_records[0]["finding"]["Raw"] == "SYNTHETIC_SECRET_MUST_NOT_BE_PERSISTED"
 
     reports = ReportGenerator(database, workspace=workspace).run()
     assert reports.generated == 1
@@ -149,8 +150,12 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(tmp_path
         workspace / "reports/org.example.integration/1" / digest / "report.json"
     )
     report_text = report_path.read_text(encoding="utf-8")
-    assert "SYNTHETIC_SECRET_MUST_NOT_BE_PERSISTED" not in report_text
+    assert "SYNTHETIC_SECRET_MUST_NOT_BE_PERSISTED" in report_text
     assert "SYNTHETIC_TEST" in report_text
+    html_path = report_path.with_name("report.html")
+    html_text = html_path.read_text(encoding="utf-8")
+    assert "SYNTHETIC_SECRET_MUST_NOT_BE_PERSISTED" in html_text
+    assert "Complete original JSON" in html_text
 
     reconciliation = database.reconcile_run(run_id)
     assert reconciliation["total"] == 1

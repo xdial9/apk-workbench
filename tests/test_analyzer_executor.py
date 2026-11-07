@@ -47,6 +47,7 @@ class SuccessfulAnalyzer:
                     finding_type="marker",
                     title="Found marker",
                     normalized_value="marker-value",
+                    raw_data={"Raw": "complete-marker", "ExtraData": {"retained": True}},
                 ),
             ),
             metrics={"parsed": 1},
@@ -129,6 +130,8 @@ def test_executor_returns_normalized_success_result():
     assert outcome.status == "success"
     assert outcome.exit_code == 0
     assert outcome.result.findings[0].normalized_value == "marker-value"
+    assert outcome.result.findings[0].raw_data["Raw"] == "complete-marker"
+    assert outcome.result.findings[0].raw_data["ExtraData"] == {"retained": True}
     assert outcome.result.metrics["parsed"] == 1
     assert outcome.duration_seconds >= 0
 

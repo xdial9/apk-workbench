@@ -23,7 +23,7 @@ class EvidenceDatabaseError(RuntimeError):
     """Raised when evidence storage or validation fails."""
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 ALLOWED_EXECUTION_STATUSES = {
     "success", "partial", "skipped", "failed", "timed_out", "cancelled"
@@ -282,6 +282,10 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE INDEX idx_evidence_finding ON evidence_location(finding_id)",
         "CREATE INDEX idx_relationship_source ON finding_relationship(source_finding_id)",
         "CREATE INDEX idx_relationship_target ON finding_relationship(target_finding_id)",
+    ),
+    2: (
+        "ALTER TABLE finding ADD COLUMN raw_data_json TEXT NOT NULL DEFAULT '{}'",
+        "ALTER TABLE evidence_location ADD COLUMN raw_data_json TEXT NOT NULL DEFAULT '{}'",
     ),
 }
 
@@ -825,6 +829,7 @@ class EvidenceDatabase:
         rule_id: str | None = None,
         rule_version: str | None = None,
         dedup_key: str | None = None,
+        raw_data: Mapping[str, Any] | None = None,
     ) -> str:
         if verification_state not in ALLOWED_VERIFICATION_STATES:
             raise EvidenceDatabaseError(f"Unsupported verification state: {verification_state}")
@@ -833,10 +838,6 @@ class EvidenceDatabase:
             or not 0 <= confidence <= 1
         ):
             raise EvidenceDatabaseError("confidence must be between 0 and 1.")
-        if sensitive:
-            if normalized_value is not None and value_fingerprint is None:
-                value_fingerprint = hashlib.sha256(normalized_value.encode("utf-8")).hexdigest()
-            normalized_value = None
         if value_fingerprint is not None:
             value_fingerprint = _sha256(value_fingerprint, "value_fingerprint")
         finding_id = str(uuid.uuid4())
@@ -862,14 +863,14 @@ class EvidenceDatabase:
                     finding_id, execution_id, artifact_id, category, finding_type,
                     title, normalized_value, value_fingerprint, severity, confidence,
                     verification_state, rationale, rule_id, rule_version,
-                    first_seen_at, last_seen_at, dedup_key, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    first_seen_at, last_seen_at, dedup_key, created_at, raw_data_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     finding_id, execution_id, artifact_id, _required_text(category, "category"),
                     _required_text(finding_type, "finding_type"), _required_text(title, "title"),
                     normalized_value, value_fingerprint, severity, confidence, verification_state,
-                    rationale, rule_id, rule_version, now, now, dedup_key, now,
+                    rationale, rule_id, rule_version, now, now, dedup_key, now, _json(dict(raw_data or {})),
                 ),
             )
             connection.commit()
@@ -894,6 +895,7 @@ class EvidenceDatabase:
         snippet_redacted: str | None = None,
         snippet_sha256: str | None = None,
         extractor_coordinate: Mapping[str, Any] | None = None,
+        raw_data: Mapping[str, Any] | None = None,
     ) -> str:
         for label, value in (
             ("line_start", line_start), ("line_end", line_end),
@@ -918,15 +920,16 @@ class EvidenceDatabase:
                     evidence_id, finding_id, artifact_id, container_path, source_path,
                     line_start, line_end, byte_offset_start, byte_offset_end,
                     dex_class, method_signature, resource_name, manifest_xpath,
-                    evidence_kind, snippet_redacted, snippet_sha256, extractor_coordinate_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    evidence_kind, snippet_redacted, snippet_sha256, extractor_coordinate_json,
+                    raw_data_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     evidence_id, finding_id, artifact_id, container_path, source_path,
                     line_start, line_end, byte_offset_start, byte_offset_end, dex_class,
                     method_signature, resource_name, manifest_xpath,
                     _required_text(evidence_kind, "evidence_kind"), snippet_redacted,
-                    snippet_sha256, _json(dict(extractor_coordinate or {})),
+                    snippet_sha256, _json(dict(extractor_coordinate or {})), _json(dict(raw_data or {})),
                 ),
             )
             connection.commit()

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import hashlib
 import json
 import os
 import re
@@ -24,19 +25,9 @@ class ReportSummary:
     total_findings: int
 
 
-_FINDING_FIELDS = (
-    "fingerprint",
-    "detector_name",
-    "detector_type",
-    "decoder_name",
-    "file_path",
-    "line",
-    "verification",
-)
-
 
 class ReportGenerator:
-    """Generate individual reports using only explicitly allowlisted sanitized fields."""
+    """Generate reports containing complete original TruffleHog finding objects."""
 
     def __init__(self, database: WorkspaceDatabase, *, workspace: str | Path):
         self.database = database
@@ -52,27 +43,22 @@ class ReportGenerator:
             raise ReportingError(f"Unsafe version code in download history: {version_code!r}")
 
     @staticmethod
-    def _read_sanitized_findings(path: Path) -> list[dict[str, Any]]:
+    def _read_findings(path: Path) -> list[dict[str, Any]]:
         if path.is_symlink():
             raise ReportingError(f"Refusing to read a symlinked findings file: {path}")
         if not path.exists():
             raise ReportingError(
-                f"Sanitized findings file is missing despite a successful scan: {path}"
+                f"Findings file is missing despite a successful scan: {path}"
             )
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise ReportingError(f"Cannot read sanitized findings at {path}: {exc}") from exc
+            raise ReportingError(f"Cannot read findings at {path}: {exc}") from exc
         if not isinstance(data, list):
-            raise ReportingError(f"Sanitized findings at {path} must contain a JSON array.")
-        findings = []
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            # Never copy arbitrary scanner fields into reports: Raw, RawV2,
-            # Redacted, ExtraData, and StructuredData are intentionally excluded.
-            findings.append({field: item.get(field, "") for field in _FINDING_FIELDS})
-        return findings
+            raise ReportingError(f"Findings at {path} must contain a JSON array.")
+        if not all(isinstance(item, dict) for item in data):
+            raise ReportingError(f"Findings at {path} must contain only JSON objects.")
+        return data
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
@@ -115,6 +101,7 @@ class ReportGenerator:
             "h1,h2{line-height:1.25}table{border-collapse:collapse;width:100%;margin:1rem 0}",
             "th,td{text-align:left;vertical-align:top;padding:.55rem;border:1px solid #ccc;overflow-wrap:anywhere}",
             "th{background:#eee}.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.5rem}",
+            "pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:70vw}",
             "code{font-size:.9em;overflow-wrap:anywhere}.muted{color:#555}",
             "</style></head><body>",
             f"<h1>{html.escape(title_text)}</h1>",
@@ -137,16 +124,27 @@ class ReportGenerator:
         if findings:
             parts.extend(
                 [
-                    "<table><thead><tr><th>Detector</th><th>File</th><th>Line</th><th>Fingerprint</th></tr></thead><tbody>"
+                    "<table><thead><tr><th>Detector</th><th>File</th><th>Line</th><th>Fingerprint</th><th>Complete original JSON</th></tr></thead><tbody>"
                 ]
             )
             for finding in findings:
+                source_metadata = finding.get("SourceMetadata")
+                source_data = source_metadata.get("Data", {}) if isinstance(source_metadata, dict) else {}
+                filesystem = source_data.get("Filesystem", {}) if isinstance(source_data, dict) else {}
+                if not isinstance(filesystem, dict):
+                    filesystem = {}
+                file_path = filesystem.get("file", "")
+                line_number = filesystem.get("line", "")
+                fingerprint = hashlib.sha256(
+                    json.dumps(finding, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                ).hexdigest()
                 parts.append(
                     "<tr>"
-                    f"<td>{html.escape(str(finding.get('detector_name', '')))}</td>"
-                    f"<td><code>{html.escape(str(finding.get('file_path', '')))}</code></td>"
-                    f"<td>{html.escape(str(finding.get('line', '')))}</td>"
-                    f"<td><code>{html.escape(str(finding.get('fingerprint', '')))}</code></td>"
+                    f"<td>{html.escape(str(finding.get('DetectorName', '')))}</td>"
+                    f"<td><code>{html.escape(str(file_path))}</code></td>"
+                    f"<td>{html.escape(str(line_number))}</td>"
+                    f"<td><code>{html.escape(fingerprint)}</code></td>"
+                    f"<td><details><summary>View all fields</summary><pre>{html.escape(json.dumps(finding, ensure_ascii=False, indent=2))}</pre></details></td>"
                     "</tr>"
                 )
             parts.append("</tbody></table>")
@@ -197,7 +195,7 @@ class ReportGenerator:
             except ValueError as exc:
                 raise ReportingError("Finding path resolves outside the results workspace.") from exc
             findings = (
-                self._read_sanitized_findings(findings_path)
+                self._read_findings(findings_path)
                 if status.get("scan_status") == "success"
                 else []
             )

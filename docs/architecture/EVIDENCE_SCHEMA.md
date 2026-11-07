@@ -106,7 +106,7 @@ finding_id UUID; execution_id UUID; artifact_id UUID; category TEXT; finding_typ
 
 **Keys and constraints**
 
-PK finding_id; FK execution/artifact; confidence range 0..1; do not force severity where category lacks defensible severity; dedup key never replaces evidence; secret values redacted or fingerprinted.
+PK finding_id; FK execution/artifact; confidence range 0..1; do not force severity where category lacks defensible severity; dedup key never replaces evidence; complete source values retained in raw_data_json; fingerprints are supplemental identifiers.
 
 **Relationships**
 
@@ -118,7 +118,7 @@ Immutable per run; state changes captured as analyst assessment events or status
 
 **Migration and compatibility**
 
-TruffleHog findings map to secret category while preserving detector metadata and sanitized fields. Legacy line/path becomes Evidence Location.
+TruffleHog findings map to secret category while preserving every original detector field and value in raw_data_json. Legacy line/path becomes Evidence Location.
 
 ### 5. Evidence Location
 
@@ -298,7 +298,7 @@ Analysis Run 1-to-many Parser Result and Raw Output references
 - Store timestamps in a consistent UTC representation.
 - Use UUIDs or stable opaque identifiers for records; never use mutable display labels as primary keys.
 - Store artifact bytes and large raw outputs outside SQLite under content-addressed paths; verify object hashes when reading.
-- Sanitize secrets before persistence and logs. Keep raw source snippets bounded and redacted.
+- Preserve complete source finding objects in protected local storage; restrict permissions on raw evidence and generated reports. Escape untrusted strings when rendering HTML and review before external publication.
 - Preserve original CSV/JSON files and provenance during import; never silently replace historical ledgers.
 - Make legacy imports idempotent and retain source filename, row number, source digest and import timestamp.
 

@@ -84,15 +84,19 @@ def test_context_freezes_capabilities_config_and_parsed_facts():
         context.parsed_facts["package"] = "changed"
 
 
-def test_sensitive_findings_must_not_expose_raw_values():
-    with pytest.raises(AnalyzerContractError, match="Sensitive findings"):
-        Finding(
-            category="secrets",
-            finding_type="token",
-            title="Potential token",
-            normalized_value="raw-secret",
-            sensitive=True,
-        )
+def test_sensitive_findings_can_retain_original_values_and_payloads():
+    finding = Finding(
+        category="secrets",
+        finding_type="token",
+        title="Potential token",
+        normalized_value="raw-secret",
+        sensitive=True,
+        raw_data={"Raw": "raw-secret", "ExtraData": {"source": "fixture"}},
+    )
+    assert finding.normalized_value == "raw-secret"
+    assert finding.raw_data["Raw"] == "raw-secret"
+    with pytest.raises(TypeError):
+        finding.raw_data["Raw"] = "changed"
 
 
 def test_analyzer_result_rejects_unknown_status_and_accepts_normalized_output():
