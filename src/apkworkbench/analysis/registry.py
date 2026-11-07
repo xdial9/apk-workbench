@@ -61,11 +61,14 @@ class AnalyzerRegistry:
         being silently skipped.
         """
         available = frozenset(capabilities)
+        explicit_request = requested_ids is not None
         if requested_ids is None:
             selected_ids = [
                 definition.analyzer_id
                 for definition in self.definitions()
                 if definition.default_enabled
+                and input_kind in definition.input_kinds
+                and set(definition.required_capabilities) <= available
             ]
         else:
             selected_ids = list(requested_ids)
@@ -77,15 +80,19 @@ class AnalyzerRegistry:
             analyzer = self.get(analyzer_id)
             definition = analyzer.definition
             if input_kind not in definition.input_kinds:
-                raise AnalyzerRegistryError(
-                    f"Analyzer {analyzer_id!r} does not accept input kind {input_kind!r}."
-                )
+                if explicit_request:
+                    raise AnalyzerRegistryError(
+                        f"Analyzer {analyzer_id!r} does not accept input kind {input_kind!r}."
+                    )
+                continue
             missing = sorted(set(definition.required_capabilities) - available)
             if missing:
-                raise AnalyzerRegistryError(
-                    f"Analyzer {analyzer_id!r} is missing required capabilities: "
-                    + ", ".join(missing)
-                )
+                if explicit_request:
+                    raise AnalyzerRegistryError(
+                        f"Analyzer {analyzer_id!r} is missing required capabilities: "
+                        + ", ".join(missing)
+                    )
+                continue
             planned.append(analyzer)
         return tuple(planned)
 
