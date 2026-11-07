@@ -13,6 +13,7 @@ from apkworkbench.core.config import Config
 from apkworkbench.core.logging import setup_logging
 from apkworkbench.database.workspace import DatabaseError, WorkspaceDatabase, utc_now
 from apkworkbench.decompilation.runner import DecompilationRunner
+from apkworkbench.reporting.generator import ReportGenerator, ReportingError
 from apkworkbench.dependencies.detector import DependencyDetector
 from apkworkbench.security.gpg_verifier import GpgVerifier
 from apkworkbench.sources.fdroid import FdroidArtifact, FdroidIndexError, FdroidIndexParser
@@ -361,6 +362,120 @@ def analyze(limit: int, force: bool) -> None:
     click.echo(f"  Sanitized aggregate: {Path(config.get('workspace')) / 'reports/findings.csv'}")
     if summary.failed:
         raise click.exceptions.Exit(1)
+
+
+@main.command()
+def report() -> None:
+    """Generate sanitized per-APK JSON and HTML reports."""
+    config = Config()
+    logger = setup_logging(config)
+    generator = ReportGenerator(
+        WorkspaceDatabase(config.get("workspace")),
+        workspace=config.get("workspace"),
+    )
+    click.echo(BANNER)
+    try:
+        summary = generator.run()
+    except (ReportingError, DatabaseError, OSError, ValueError) as exc:
+        logger.error("Report generation failed: %s", exc)
+        click.echo(f"Report generation failed: {exc}", err=True)
+        raise click.exceptions.Exit(1) from exc
+
+    click.echo("REPORT SUMMARY")
+    click.echo(f"  Reports generated: {summary.generated}")
+    click.echo(f"  APKs with findings: {summary.with_findings}")
+    click.echo(f"  Total candidate findings: {summary.total_findings}")
+    click.echo(f"  Output directory: {Path(config.get('workspace')) / 'reports'}")
+
+
+@main.command()
+def status() -> None:
+    """Summarize acquisition, decompilation, and scan state."""
+    config = Config()
+    database = WorkspaceDatabase(config.get("workspace"))
+    try:
+        history = database.read_download_history()
+        processing = database.read_processing_status()
+    except DatabaseError as exc:
+        click.echo(f"Status unavailable: {exc}", err=True)
+        raise click.exceptions.Exit(1) from exc
+
+    total = len(history)
+    jadx_ok = sum(1 for row in processing.values() if row.get("jadx_status") == "success")
+    apktool_ok = sum(1 for row in processing.values() if row.get("apktool_status") == "success")
+    scan_ok = sum(1 for row in processing.values() if row.get("scan_status") == "success")
+    decompile_failed = sum(
+        1 for row in processing.values()
+        if row.get("jadx_status") == "failed" or row.get("apktool_status") == "failed"
+    )
+    scan_failed = sum(1 for row in processing.values() if row.get("scan_status") == "failed")
+    click.echo(BANNER)
+    click.echo("WORKSPACE STATUS")
+    click.echo(f"  Unique acquired APK binaries: {total}")
+    click.echo(f"  JADX complete: {jadx_ok}")
+    click.echo(f"  Apktool complete: {apktool_ok}")
+    click.echo(f"  Fully decompiled: {sum(1 for row in processing.values() if row.get('jadx_status') == 'success' and row.get('apktool_status') == 'success')}")
+    click.echo(f"  TruffleHog scans complete: {scan_ok}")
+    click.echo(f"  Decompilation failures: {decompile_failed}")
+    click.echo(f"  Scan failures: {scan_failed}")
+    click.echo(f"  Workspace: {config.get('workspace')}")
+
+
+@main.command()
+@click.option(
+    "--apk-count",
+    type=click.IntRange(min=1),
+    default=10,
+    show_default=True,
+    help="Number of new unique APK binaries to acquire.",
+)
+@click.option(
+    "--package",
+    "package_id",
+    type=str,
+    default=None,
+    help="Restrict the acquisition to this exact Android package ID.",
+)
+@click.option("--force-decompile", is_flag=True, help="Re-run completed decompilations.")
+@click.option("--force-analyze", is_flag=True, help="Re-run successful TruffleHog scans.")
+def run(
+    apk_count: int,
+    package_id: str | None,
+    force_decompile: bool,
+    force_analyze: bool,
+) -> None:
+    """Run discovery, acquisition, decompilation, analysis, and reporting in order."""
+    context = click.get_current_context()
+    stages_with_issues: list[str] = []
+    click.echo(BANNER)
+    click.echo("FULL SEQUENTIAL PIPELINE")
+
+    for stage_name, command, kwargs in (
+        ("download", download, {"apk_count": apk_count, "package_id": package_id}),
+        ("decompile", decompile, {"limit": 0, "force": force_decompile}),
+        ("analyze", analyze, {"limit": 0, "force": force_analyze}),
+        ("report", report, {}),
+    ):
+        click.echo(f"\n=== {stage_name.upper()} ===")
+        try:
+            context.invoke(command, **kwargs)
+        except click.exceptions.Exit as exc:
+            if exc.exit_code:
+                stages_with_issues.append(stage_name)
+                click.echo(
+                    f"Stage {stage_name} ended with exit code {exc.exit_code}; "
+                    "continuing with eligible artifacts."
+                )
+        except Exception as exc:
+            stages_with_issues.append(stage_name)
+            click.echo(f"Stage {stage_name} raised an error: {exc}", err=True)
+
+    click.echo("\nFULL PIPELINE SUMMARY")
+    if stages_with_issues:
+        click.echo("Stages requiring attention: " + ", ".join(stages_with_issues))
+        click.echo("Review 'apkworkbench status' and the per-artifact logs.")
+        raise click.exceptions.Exit(1)
+    click.echo("All pipeline stages completed without reported errors.")
 
 
 @main.command()
