@@ -437,3 +437,15 @@ def test_keyboard_interrupt_terminates_decompiler_process_group(monkeypatch, tmp
 
     assert terminated == [424242]
     assert b"INTERRUPTED: process group terminated" in log_path.read_bytes()
+
+
+def test_decompiler_rejects_symlinked_package_output_directory(tmp_path):
+    runner, _database, _digest, _apk_path = make_runner(tmp_path)
+    package_root = tmp_path / "results/org.example.app"
+    package_root.parent.mkdir(parents=True, exist_ok=True)
+    package_root.rename(tmp_path / "results/original-package")
+    outside = tmp_path / "results/original-package"
+    package_root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(DecompilationError, match="symlinked workspace component"):
+        runner.run()
