@@ -346,6 +346,20 @@ ruff check .
 
 GitHub Actions tests Python 3.10, 3.11, and 3.12. Automated tests use generated local GPG keys and mocked network/subprocess boundaries. A green CI run is not a claim that a live F-Droid download or real local decompilation has been performed.
 
+## Project evolution and engineering map
+
+This repository preserves the decisions, corrections and pivots that shaped the workbench. The F-Droid starting point, Google Play acquisition experiment, reliability work, TruffleHog scope change and AI-assisted engineering workflow are documented rather than hidden.
+
+- [Project History](docs/PROJECT_HISTORY.md)
+- [Target Architecture](docs/architecture/TARGET_ARCHITECTURE.md)
+- [Evidence Data Model](docs/architecture/EVIDENCE_SCHEMA.md)
+- [Airtable Engineering Map](docs/engineering/AIRTABLE_ENGINEERING_MAP.md)
+- [Complete Airtable Snapshot (JSON)](docs/engineering/airtable-snapshot.json)
+
+The live Airtable base is the shared engineering coordination mirror; it is not a runtime dependency. See the engineering-map document for its base ID, table inventory and system-of-record boundaries.
+
+---
+
 ## Project documentation
 
 - [Installation and First Run](docs/installation.md)
