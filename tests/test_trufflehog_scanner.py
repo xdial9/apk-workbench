@@ -466,3 +466,23 @@ def test_scanner_preserves_stderr_diagnostics_on_nonzero_exit(monkeypatch, tmp_p
 
     assert summary.failed == 1
     assert "permission denied" in database.read_processing_status()[digest]["error"]
+
+
+def test_scanner_rejects_symlinked_parent_of_decompilation_directories(monkeypatch, tmp_path):
+    database, _digest = make_workspace(tmp_path)
+    results = tmp_path / "results"
+    package_root = results / "org.example.app"
+    real_package = results / "real-package"
+    package_root.rename(real_package)
+    package_root.symlink_to(real_package, target_is_directory=True)
+    calls, _ = install_fakes(monkeypatch, b"")
+    scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
+
+    summary = scanner.run()
+
+    assert summary.failed == 1
+    assert summary.scanned == 0
+    assert [entry[0] for entry in calls] == ["help"]
+    assert "symlinked decompilation path component" in database.read_processing_status()[
+        _digest
+    ]["error"]
