@@ -282,7 +282,7 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE INDEX idx_evidence_finding ON evidence_location(finding_id)",
         "CREATE INDEX idx_relationship_source ON finding_relationship(source_finding_id)",
         "CREATE INDEX idx_relationship_target ON finding_relationship(target_finding_id)",
-    ),,
+    ),
     2: (
         "ALTER TABLE finding ADD COLUMN raw_data_json TEXT NOT NULL DEFAULT '{}'",
         "ALTER TABLE evidence_location ADD COLUMN raw_data_json TEXT NOT NULL DEFAULT '{}'",
