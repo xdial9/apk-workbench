@@ -343,6 +343,7 @@ def analyze(limit: int, force: bool) -> None:
         workspace=config.get("workspace"),
         executable=str(config.get("tools.trufflehog", "trufflehog")),
         timeout_seconds=int(config.get("analysis.timeout_seconds", 7200)),
+        max_output_bytes=int(config.get("analysis.max_output_bytes", 512 * 1024 * 1024)),
         logger=logger,
     )
     click.echo(BANNER)
