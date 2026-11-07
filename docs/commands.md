@@ -50,7 +50,7 @@ The catalog is saved to `database/google_play_discovery.csv`. The requested limi
 
 ```bash
 apkworkbench download --apk-count 100
-apkworkbench download --apk-count 10 --package com.example.app
+apkworkbench download --package com.example.app
 ```
 
 `--apk-count` is retained as the CLI option name for compatibility, but its value means the number of **apps**, not the number of APK split files. Each selected app can produce multiple manifest rows—one per APK component. OBBs are preserved in the bundle directory and recorded in its JSON bundle manifest.

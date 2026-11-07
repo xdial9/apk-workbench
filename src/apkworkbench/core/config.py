@@ -80,6 +80,22 @@ class Config:
                     f"Configuration root in {self.config_file} must be a mapping."
                 )
             overrides = loaded
+        source_overrides = overrides.get("sources")
+        if source_overrides is not None:
+            if not isinstance(source_overrides, dict):
+                raise ConfigError("Configuration 'sources' must be a mapping.")
+            play_overrides = source_overrides.get("google_play", {})
+            if not isinstance(play_overrides, dict):
+                raise ConfigError("Configuration 'sources.google_play' must be a mapping.")
+            overrides["sources"] = {"google_play": play_overrides}
+        tool_overrides = overrides.get("tools")
+        if tool_overrides is not None:
+            if not isinstance(tool_overrides, dict):
+                raise ConfigError("Configuration 'tools' must be a mapping.")
+            overrides["tools"] = {
+                key: value for key, value in tool_overrides.items()
+                if key in self._defaults["tools"]
+            }
         self._data = self._merge(self._defaults, overrides)
         return self._data
 

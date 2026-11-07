@@ -224,9 +224,9 @@ def discover(
 @click.option(
     "--apk-count",
     type=click.IntRange(min=1),
-    default=10,
-    show_default=True,
-    help="Number of new Google Play applications to acquire (each may contain multiple APK splits).",
+    default=None,
+    show_default=False,
+    help="Number of new apps to acquire (default 10; --package selects exactly one).",
 )
 @click.option(
     "--package",
@@ -236,8 +236,11 @@ def discover(
     help="Acquire this exact Google Play Android application ID.",
 )
 @_workspace_locked
-def download(apk_count: int, package_id: str | None) -> None:
+def download(apk_count: int | None, package_id: str | None) -> None:
     """Freeze Play delivery hashes, then acquire and verify complete app bundles."""
+    if package_id and apk_count not in (None, 1):
+        raise click.BadParameter("--package selects one app; use --apk-count only for a multi-app batch.")
+    requested_count = 1 if package_id else (apk_count or 10)
     config = Config()
     logger = setup_logging(config)
     context = click.get_current_context()
@@ -251,11 +254,16 @@ def download(apk_count: int, package_id: str | None) -> None:
 
     try:
         database.ensure()
-        catalog = _read_catalog(_catalog_path(config))
         if package_id:
+            try:
+                catalog = _read_catalog(_catalog_path(config))
+            except click.ClickException:
+                catalog = []
             catalog = [app for app in catalog if app.package_id == package_id]
             if not catalog:
                 catalog = [PlayApp(package_id, package_id, "", "", 0)]
+        else:
+            catalog = _read_catalog(_catalog_path(config))
         history = [
             row for row in database.read_download_history()
             if row.get("source") == "google_play"
@@ -269,7 +277,7 @@ def download(apk_count: int, package_id: str | None) -> None:
         plans = []
         unavailable = 0
         for app in candidates:
-            if len(plans) >= apk_count:
+            if len(plans) >= requested_count:
                 break
             click.echo(f"[metadata {len(plans) + unavailable + 1}] {app.package_id}")
             try:
@@ -282,7 +290,7 @@ def download(apk_count: int, package_id: str | None) -> None:
                 continue
             plans.append(plan)
 
-        shortfall = max(0, apk_count - len(plans))
+        shortfall = max(0, requested_count - len(plans))
         if not plans:
             click.echo("No downloadable, new Google Play applications were selected.")
             raise click.exceptions.Exit(2 if shortfall else 0)
@@ -337,7 +345,7 @@ def download(apk_count: int, package_id: str | None) -> None:
             click.echo("All APK components for the selected packages were already acquired from Google Play.")
             raise click.exceptions.Exit(0)
         plans = plans_with_new_apks
-        shortfall = max(0, apk_count - len(plans))
+        shortfall = max(0, requested_count - len(plans))
         manifest_path = database.write_manifest(run_id, manifest_rows)
         context.meta["apkworkbench_run_id"] = run_id
     except click.exceptions.Exit:
@@ -420,7 +428,7 @@ def download(apk_count: int, package_id: str | None) -> None:
 
     click.echo("")
     click.echo("GOOGLE PLAY ACQUISITION SUMMARY")
-    click.echo(f"  Applications requested: {apk_count}")
+    click.echo(f"  Applications requested: {requested_count}")
     click.echo(f"  Applications selected: {len(plans)}")
     click.echo(f"  APK components downloaded and recorded: {successes}")
     click.echo(f"  Applications failed: {failures}")
@@ -623,7 +631,7 @@ def run(
     force_decompile: bool,
     force_analyze: bool,
 ) -> None:
-    """Run discovery, acquisition, decompilation, analysis, and reporting in order."""
+    """Acquire from the saved discovery catalog (or one exact package), then process the batch."""
     context = click.get_current_context()
     context.meta["apkworkbench_run_id"] = ""
     stages_with_issues: list[str] = []
@@ -631,7 +639,7 @@ def run(
     click.echo("FULL SEQUENTIAL PIPELINE")
 
     for stage_name, command, kwargs in (
-        ("download", download, {"apk_count": apk_count, "package_id": package_id}),
+        ("download", download, {"apk_count": 1 if package_id else apk_count, "package_id": package_id}),
         ("decompile", decompile, {"limit": 0, "force": force_decompile}),
         ("analyze", analyze, {"limit": 0, "force": force_analyze}),
         ("report", report, {}),

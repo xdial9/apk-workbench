@@ -113,3 +113,48 @@ def test_legacy_index_options_are_not_exposed():
     result = CliRunner().invoke(cli.main, ["discover", "--help"])
     assert result.exit_code == 0
     assert "--refresh-index" not in result.output
+
+def test_exact_package_download_does_not_require_a_discovery_catalog(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    payload = b"single direct package apk"
+    digest = hashlib.sha256(payload).hexdigest()
+    app = PlayApp("com.example.direct", "Direct App", "Example", "1.0", 1)
+    plan = SimpleNamespace(
+        app=app,
+        files=(SimpleNamespace(
+            name="base.apk", kind="apk", sha256=digest, size=len(payload)
+        ),),
+        signer_sha256=(),
+    )
+
+    class FakeSource:
+        def __init__(self, **_kwargs):
+            pass
+
+        def inspect(self, package_id):
+            assert package_id == "com.example.direct"
+            return plan
+
+        def download(self, selected_plan, *, workspace, run_id):
+            database = WorkspaceDatabase(workspace)
+            assert database.read_manifest(run_id)
+            directory = Path(workspace) / "downloads" / "com.example.direct-1"
+            directory.mkdir(parents=True, exist_ok=True)
+            apk = directory / "base.apk"
+            apk.write_bytes(payload)
+            manifest = directory / "google-play-bundle.json"
+            manifest.write_text('{"source":"google_play"}', encoding="utf-8")
+            return SimpleNamespace(apk_files=(apk,), obb_files=(), manifest_path=manifest)
+
+    monkeypatch.setattr(cli, "Config", lambda: config)
+    monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-direct"))
+    monkeypatch.setattr(cli, "GooglePlaySource", FakeSource)
+
+    result = CliRunner().invoke(
+        cli.main, ["download", "--package", "com.example.direct"]
+    )
+
+    assert result.exit_code == 0, result.output
+    history = WorkspaceDatabase(config.get("workspace")).read_download_history()
+    assert len(history) == 1
+    assert history[0]["package_id"] == "com.example.direct"
