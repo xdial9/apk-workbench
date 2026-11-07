@@ -128,7 +128,17 @@ class DecompilationRunner:
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
+                previous_sigterm = None
+
+                def handle_sigterm(signum, _frame):
+                    raise KeyboardInterrupt(f"received signal {signum}")
+
                 try:
+                    try:
+                        previous_sigterm = signal.signal(signal.SIGTERM, handle_sigterm)
+                    except ValueError:
+                        # Signal handlers can only be installed from the main thread.
+                        pass
                     returncode = process.wait(timeout=self.timeout_seconds)
                 except subprocess.TimeoutExpired:
                     self._terminate_process_tree(process)
@@ -142,6 +152,14 @@ class DecompilationRunner:
                         f"{label} exceeded the {self.timeout_seconds}-second timeout. "
                         f"See log: {log_path}"
                     ) from None
+                except KeyboardInterrupt:
+                    self._terminate_process_tree(process)
+                    with log_path.open("ab") as interrupted_file:
+                        interrupted_file.write(b"\nINTERRUPTED: process group terminated\n")
+                    raise
+                finally:
+                    if previous_sigterm is not None:
+                        signal.signal(signal.SIGTERM, previous_sigterm)
                 log_file.write(
                     f"\nRETURN CODE: {returncode}\n".encode("utf-8", errors="replace")
                 )
