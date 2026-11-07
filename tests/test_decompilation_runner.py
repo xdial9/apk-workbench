@@ -39,6 +39,17 @@ def add_download(database: WorkspaceDatabase, workspace: Path, *, payload=APK_BY
     return digest, apk_path
 
 
+
+def write_tool_output(command, content="decompiled output"):
+    """Create a small representative output tree for mocked successful tools."""
+    if command[0] == "jadx":
+        output = Path(command[command.index("--output-dir") + 1])
+    else:
+        output = Path(command[command.index("-o") + 1])
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "fixture.txt").write_text(content, encoding="utf-8")
+
+
 def make_runner(workspace):
     database = WorkspaceDatabase(workspace)
     database.ensure()
@@ -63,6 +74,7 @@ def test_runs_jadx_then_apktool_with_single_worker(monkeypatch, tmp_path):
         assert kwargs["timeout"] == 30
         assert kwargs["capture_output"] is True
         assert kwargs["check"] is False
+        write_tool_output(command, command[0])
         return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -88,6 +100,11 @@ def test_runs_jadx_then_apktool_with_single_worker(monkeypatch, tmp_path):
 
 def test_successful_artifact_is_skipped_on_subsequent_run(monkeypatch, tmp_path):
     runner, database, digest, _ = make_runner(tmp_path)
+    output_root = tmp_path / "results/org.example.app/7" / digest
+    for tool_name in ("jadx", "apktool"):
+        tool_output = output_root / tool_name
+        tool_output.mkdir(parents=True, exist_ok=True)
+        (tool_output / "fixture.txt").write_text("existing output", encoding="utf-8")
     database.update_processing_status(
         {
             "sha256": digest,
@@ -136,6 +153,7 @@ def test_apktool_runs_even_when_jadx_fails_and_failure_is_recorded(monkeypatch, 
         commands.append(command)
         if command[0] == "jadx":
             return SimpleNamespace(returncode=9, stdout="", stderr="jadx error")
+        write_tool_output(command, "apktool output")
         return SimpleNamespace(returncode=0, stdout="apktool ok", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -147,6 +165,135 @@ def test_apktool_runs_even_when_jadx_fails_and_failure_is_recorded(monkeypatch, 
     assert state["jadx_status"] == "failed"
     assert state["apktool_status"] == "success"
     assert "jadx error" in state["error"]
+
+
+
+def test_retry_skips_successful_jadx_when_apktool_failed(monkeypatch, tmp_path):
+    runner, database, digest, _ = make_runner(tmp_path)
+    calls = []
+
+    def first_attempt(command, **kwargs):
+        calls.append(command[0])
+        if command[0] == "jadx":
+            write_tool_output(command, "JADX original")
+            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        return SimpleNamespace(returncode=7, stdout="", stderr="apktool failed")
+
+    monkeypatch.setattr(subprocess, "run", first_attempt)
+    first = runner.run()
+    assert first.failed == 1
+    assert calls == ["jadx", "apktool"]
+
+    jadx_output = tmp_path / "results/org.example.app/7" / digest / "jadx"
+    assert (jadx_output / "fixture.txt").read_text(encoding="utf-8") == "JADX original"
+
+    calls.clear()
+
+    def retry(command, **kwargs):
+        calls.append(command[0])
+        assert command[0] == "apktool", "a successful JADX result must not be repeated"
+        write_tool_output(command, "Apktool retry")
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", retry)
+    second = runner.run()
+
+    assert second.examined == 1
+    assert second.completed == 1
+    assert second.failed == 0
+    assert calls == ["apktool"]
+    assert (jadx_output / "fixture.txt").read_text(encoding="utf-8") == "JADX original"
+    assert database.read_processing_status()[digest]["jadx_status"] == "success"
+    assert database.read_processing_status()[digest]["apktool_status"] == "success"
+
+
+def test_retry_skips_successful_apktool_when_jadx_failed(monkeypatch, tmp_path):
+    runner, database, digest, _ = make_runner(tmp_path)
+    calls = []
+
+    def first_attempt(command, **kwargs):
+        calls.append(command[0])
+        if command[0] == "jadx":
+            return SimpleNamespace(returncode=8, stdout="", stderr="jadx failed")
+        write_tool_output(command, "Apktool original")
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", first_attempt)
+    first = runner.run()
+    assert first.failed == 1
+    assert calls == ["jadx", "apktool"]
+
+    apktool_output = tmp_path / "results/org.example.app/7" / digest / "apktool"
+    assert (apktool_output / "fixture.txt").read_text(encoding="utf-8") == "Apktool original"
+
+    calls.clear()
+
+    def retry(command, **kwargs):
+        calls.append(command[0])
+        assert command[0] == "jadx", "a successful Apktool result must not be repeated"
+        write_tool_output(command, "JADX retry")
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", retry)
+    second = runner.run()
+
+    assert second.completed == 1
+    assert second.failed == 0
+    assert calls == ["jadx"]
+    assert (apktool_output / "fixture.txt").read_text(encoding="utf-8") == "Apktool original"
+    assert database.read_processing_status()[digest]["jadx_status"] == "success"
+    assert database.read_processing_status()[digest]["apktool_status"] == "success"
+
+
+def test_failed_forced_refresh_preserves_previous_successful_output(monkeypatch, tmp_path):
+    runner, database, digest, _ = make_runner(tmp_path)
+
+    def initial_success(command, **kwargs):
+        write_tool_output(command, f"original {command[0]} output")
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", initial_success)
+    first = runner.run()
+    assert first.completed == 1
+
+    jadx_output = tmp_path / "results/org.example.app/7" / digest / "jadx"
+    apktool_output = tmp_path / "results/org.example.app/7" / digest / "apktool"
+
+    def failed_refresh(command, **kwargs):
+        if command[0] == "jadx":
+            return SimpleNamespace(returncode=9, stdout="", stderr="forced refresh failed")
+        write_tool_output(command, "replacement apktool output")
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", failed_refresh)
+    refreshed = runner.run(force=True)
+
+    assert refreshed.failed == 1
+    assert (jadx_output / "fixture.txt").read_text(encoding="utf-8") == "original jadx output"
+    assert (apktool_output / "fixture.txt").read_text(encoding="utf-8") == "replacement apktool output"
+    state = database.read_processing_status()[digest]
+    assert state["jadx_status"] == "success"
+    assert state["apktool_status"] == "success"
+    assert "forced refresh failed" in state["error"]
+
+
+def test_zero_exit_without_output_is_not_recorded_as_success(monkeypatch, tmp_path):
+    runner, database, digest, _ = make_runner(tmp_path)
+
+    def no_output(command, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="finished", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", no_output)
+    summary = runner.run()
+
+    assert summary.failed == 1
+    state = database.read_processing_status()[digest]
+    assert state["jadx_status"] == "failed"
+    assert state["apktool_status"] == "failed"
+    assert "no usable output" in state["error"]
+    output_root = tmp_path / "results/org.example.app/7" / digest
+    assert not (output_root / "jadx").exists()
+    assert not (output_root / "apktool").exists()
 
 
 def test_history_cannot_point_outside_download_workspace(monkeypatch, tmp_path):
@@ -255,6 +402,7 @@ def test_run_id_limits_decompilation_to_its_frozen_manifest(monkeypatch, tmp_pat
 
     def fake_run(command, **kwargs):
         calls.append(command[-1])
+        write_tool_output(command, command[0])
         return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)

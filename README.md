@@ -229,6 +229,8 @@ apkworkbench run --apk-count 10 --refresh-index
 
 See the [CLI Command Reference](docs/commands.md) for every option and exit status.
 
+See [Retry-safe decompilation](docs/retry-safe-decompilation.md) for independent per-tool resume and non-destructive output replacement.
+
 ---
 
 ## 05 · Runtime workspace

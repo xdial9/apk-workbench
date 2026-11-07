@@ -78,7 +78,7 @@ A shortfall is reported when fewer new unique binaries are available than reques
 
 ## 04 · decompile
 
-JADX runs first; Apktool runs second. Each APK is re-hashed and size-checked before either tool receives it.
+JADX runs first; Apktool runs second. Each APK is re-hashed and size-checked before either tool receives it. Each tool's successful output is tracked and resumed independently.
 
 ~~~bash
 apkworkbench decompile
@@ -90,7 +90,7 @@ apkworkbench decompile --run-id YOUR-RUN-ID --force
 | Option | Default | Meaning |
 |---|---:|---|
 | **--limit INTEGER** | 0 | Maximum eligible APKs processed; 0 means all in scope |
-| **--force** | off | Repeat even if both decompilers previously succeeded |
+| **--force** | off | Re-run both decompilers, even when valid prior outputs exist |
 | **--run-id TEXT** | — | Restrict processing to the frozen manifest and downloads from that run |
 
 **Processing scope**
@@ -100,7 +100,7 @@ apkworkbench decompile --run-id YOUR-RUN-ID --force
 - The **run** command automatically passes its manifest ID to this stage.
 - Failed or absent downloads are skipped; they are not replaced by older workspace APKs.
 
-JADX and Apktool have separate output directories and logs. Apktool is attempted even when JADX fails, so both results are recorded independently. An artifact is fully decompiled only when both tools succeed.
+JADX and Apktool have separate output directories and logs. A retry skips a tool whose status is successful and whose output directory still contains files; it runs only the missing or unsuccessful tool. A successful result from one tool is not deleted or repeated just because the other tool failed. Each new attempt writes to a unique temporary sibling directory, validates that the tool produced files, and only then publishes the replacement. A failed or empty-output attempt leaves the previous published output intact. A failed forced refresh also retains the previous successful status/output, while the command reports the failed refresh for attention.\n\nThe **--force** option intentionally attempts both tools again. It does not delete published outputs up front: each replacement is staged and the old directory is kept until the replacement has passed validation. See [Retry-safe decompilation](retry-safe-decompilation.md) for the lifecycle, recovery behavior, and regression coverage.
 
 ## 05 · analyze
 

@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import shutil
 import subprocess
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -137,12 +139,96 @@ class DecompilationRunner:
             )
 
     @staticmethod
+    def _has_usable_output(path: Path) -> bool:
+        """Return true only for a real directory containing at least one file."""
+        if path.is_symlink() or not path.is_dir():
+            return False
+        try:
+            return any(
+                item.is_file() and not item.is_symlink()
+                for item in path.rglob("*")
+            )
+        except OSError:
+            return False
+
+    @staticmethod
     def _remove_existing_output(path: Path) -> None:
-        """Remove an old tool output without following symlinks."""
+        """Remove a staging/backup path without following symlinks."""
         if path.is_symlink() or path.is_file():
             path.unlink()
         elif path.is_dir():
             shutil.rmtree(path)
+
+    def _publish_output(self, staged: Path, destination: Path, label: str) -> None:
+        """Replace a tool output only after its staged replacement has validated."""
+        if not self._has_usable_output(staged):
+            raise DecompilationError(
+                f"{label} exited successfully but produced no usable output; "
+                "the previous output was retained."
+            )
+
+        backup = destination.with_name(
+            f".{destination.name}.previous-{uuid.uuid4().hex}"
+        )
+        moved_previous = False
+        try:
+            if destination.exists() or destination.is_symlink():
+                os.replace(destination, backup)
+                moved_previous = True
+            os.replace(staged, destination)
+        except OSError as exc:
+            if moved_previous:
+                try:
+                    os.replace(backup, destination)
+                except OSError as rollback_exc:
+                    raise DecompilationError(
+                        f"Could not publish {label} output ({exc}) or restore its "
+                        f"previous output ({rollback_exc}); backup retained at {backup}."
+                    ) from exc
+            raise DecompilationError(
+                f"Could not publish {label} output: {exc}"
+            ) from exc
+
+        if moved_previous:
+            try:
+                self._remove_existing_output(backup)
+            except OSError as exc:
+                self.logger.warning(
+                    "Published new %s output but could not remove previous backup %s: %s",
+                    label,
+                    backup,
+                    exc,
+                )
+
+    def _run_tool_transactionally(
+        self,
+        command: list[str],
+        *,
+        staged_output: Path,
+        destination: Path,
+        log_path: Path,
+        label: str,
+    ) -> None:
+        """Run into a temporary sibling and publish only a validated result."""
+        try:
+            staged_output.mkdir(mode=0o700)
+            self._run_tool(command, log_path, label)
+            self._publish_output(staged_output, destination, label)
+        except OSError as exc:
+            raise DecompilationError(
+                f"Could not prepare or clean up staged {label} output: {exc}"
+            ) from exc
+        finally:
+            if staged_output.exists() or staged_output.is_symlink():
+                try:
+                    self._remove_existing_output(staged_output)
+                except OSError as exc:
+                    self.logger.warning(
+                        "Could not remove incomplete %s staging output %s: %s",
+                        label,
+                        staged_output,
+                        exc,
+                    )
 
     def _status_update(
         self,
@@ -223,53 +309,26 @@ class DecompilationRunner:
                 continue
             previous = statuses.get(digest, {})
             scan_status = previous.get("scan_status") or "pending"
-            if (
-                not force
-                and previous.get("jadx_status") == "success"
-                and previous.get("apktool_status") == "success"
-            ):
-                skipped += 1
-                continue
-            if limit is not None and examined >= limit:
-                break
-            examined += 1
-
-            errors: list[str] = []
-            try:
-                apk_path = self._validated_apk_path(row)
-            except (DecompilationError, OSError, ValueError) as exc:
-                errors.append(str(exc))
-                self._status_update(
-                    row,
-                    jadx_status="failed",
-                    apktool_status="failed",
-                    scan_status=scan_status,
-                    error="; ".join(errors),
-                )
-                failed += 1
-                continue
 
             package_id = row.get("package_id", "unknown")
             version_code = row.get("version_code", "unknown")
             if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id):
-                errors.append(f"Unsafe package ID in download history: {package_id!r}")
                 self._status_update(
                     row,
                     jadx_status="failed",
                     apktool_status="failed",
                     scan_status=scan_status,
-                    error="; ".join(errors),
+                    error=f"Unsafe package ID in download history: {package_id!r}",
                 )
                 failed += 1
                 continue
             if not version_code.isdigit():
-                errors.append(f"Unsafe version code in download history: {version_code!r}")
                 self._status_update(
                     row,
                     jadx_status="failed",
                     apktool_status="failed",
                     scan_status=scan_status,
-                    error="; ".join(errors),
+                    error=f"Unsafe version code in download history: {version_code!r}",
                 )
                 failed += 1
                 continue
@@ -283,67 +342,122 @@ class DecompilationRunner:
             apktool_output = output_root / "apktool"
             output_root.mkdir(parents=True, exist_ok=True)
 
-            self._status_update(
-                row,
-                jadx_status="running",
-                apktool_status="pending",
-                scan_status=scan_status,
+            # A recorded success is reusable only when its output is still present and usable.
+            jadx_had_usable_output = (
+                previous.get("jadx_status") == "success"
+                and self._has_usable_output(jadx_output)
             )
-            self._remove_existing_output(jadx_output)
-            jadx_command = [
-                self.jadx_executable,
-                "--threads-count",
-                "1",
-                "--output-dir",
-                str(jadx_output),
-                str(apk_path),
-            ]
-            try:
-                self._run_tool(jadx_command, output_root / "jadx.log", "JADX")
-                jadx_status = "success"
-            except DecompilationError as exc:
-                jadx_status = "failed"
-                errors.append(str(exc))
-            self._status_update(
-                row,
-                jadx_status=jadx_status,
-                apktool_status="running",
-                scan_status=scan_status,
-                error="; ".join(errors),
+            apktool_had_usable_output = (
+                previous.get("apktool_status") == "success"
+                and self._has_usable_output(apktool_output)
             )
+            jadx_status = "success" if jadx_had_usable_output else "pending"
+            apktool_status = "success" if apktool_had_usable_output else "pending"
 
-            self._remove_existing_output(apktool_output)
-            apktool_command = [
-                self.apktool_executable,
-                "d",
-                "--jobs",
-                "1",
-                "--force",
-                "-o",
-                str(apktool_output),
-                str(apk_path),
-            ]
+            if not force and jadx_had_usable_output and apktool_had_usable_output:
+                skipped += 1
+                continue
+            if limit is not None and examined >= limit:
+                break
+            examined += 1
+
             try:
-                self._run_tool(apktool_command, output_root / "apktool.log", "Apktool")
-                apktool_status = "success"
-            except DecompilationError as exc:
-                apktool_status = "failed"
-                errors.append(str(exc))
+                apk_path = self._validated_apk_path(row)
+            except (DecompilationError, OSError, ValueError) as exc:
+                self._status_update(
+                    row,
+                    jadx_status=jadx_status if jadx_had_usable_output else "failed",
+                    apktool_status=apktool_status if apktool_had_usable_output else "failed",
+                    scan_status=scan_status,
+                    error=str(exc),
+                )
+                failed += 1
+                continue
 
+            errors: list[str] = []
             self._status_update(
                 row,
                 jadx_status=jadx_status,
                 apktool_status=apktool_status,
                 scan_status=scan_status,
-                error="; ".join(errors),
             )
-            if jadx_status == "success" and apktool_status == "success":
+
+            stages = (
+                (
+                    "JADX",
+                    self.jadx_executable,
+                    jadx_output,
+                    "jadx",
+                    ["--threads-count", "1", "--output-dir"],
+                ),
+                (
+                    "Apktool",
+                    self.apktool_executable,
+                    apktool_output,
+                    "apktool",
+                    ["d", "--jobs", "1", "--force", "-o"],
+                ),
+            )
+            for label, executable, destination, tool_name, arguments in stages:
+                current_status = jadx_status if tool_name == "jadx" else apktool_status
+                if not force and current_status == "success":
+                    continue
+
+                staged_output = destination.with_name(
+                    f".{destination.name}.staging-{uuid.uuid4().hex}"
+                )
+                command = [executable, *arguments, str(staged_output), str(apk_path)]
+                if tool_name == "jadx":
+                    jadx_status = "running"
+                else:
+                    apktool_status = "running"
+                self._status_update(
+                    row,
+                    jadx_status=jadx_status,
+                    apktool_status=apktool_status,
+                    scan_status=scan_status,
+                    error="; ".join(errors),
+                )
+
+                try:
+                    self._run_tool_transactionally(
+                        command,
+                        staged_output=staged_output,
+                        destination=destination,
+                        log_path=output_root / f"{tool_name}.log",
+                        label=label,
+                    )
+                    stage_status = "success"
+                except (DecompilationError, OSError) as exc:
+                    errors.append(str(exc))
+                    had_usable_output = (
+                        jadx_had_usable_output if tool_name == "jadx"
+                        else apktool_had_usable_output
+                    )
+                    # A failed forced refresh does not invalidate the previous known-good output.
+                    stage_status = "success" if had_usable_output else "failed"
+
+                if tool_name == "jadx":
+                    jadx_status = stage_status
+                else:
+                    apktool_status = stage_status
+                self._status_update(
+                    row,
+                    jadx_status=jadx_status,
+                    apktool_status=apktool_status,
+                    scan_status=scan_status,
+                    error="; ".join(errors),
+                )
+
+            if jadx_status == "success" and apktool_status == "success" and not errors:
                 completed += 1
                 self.logger.info("Decompilation completed for %s", package_id)
             else:
                 failed += 1
                 self.logger.error(
-                    "Decompilation failed for %s: %s", package_id, "; ".join(errors)
+                    "Decompilation requires attention for %s: %s",
+                    package_id,
+                    "; ".join(errors) or "one or more tool outputs are unavailable",
                 )
 
         return DecompilationSummary(examined, completed, failed, skipped)
