@@ -140,6 +140,12 @@ class WorkspaceDatabase:
             if handle is not None:
                 handle.close()
             raise DatabaseError(f"Cannot acquire workspace database lock: {exc}") from exc
+        except BaseException:
+            # KeyboardInterrupt can arrive while flock is waiting. Never leak the
+            # descriptor or leave a half-acquired lock behind.
+            if handle is not None:
+                handle.close()
+            raise
 
         state = {"depth": 1, "handle": handle}
         held[key] = state
