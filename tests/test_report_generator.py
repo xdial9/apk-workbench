@@ -101,3 +101,27 @@ def test_report_is_generated_even_when_no_findings_file_exists(tmp_path):
         (tmp_path / "reports/org.example.app/12/report.json").read_text(encoding="utf-8")
     )
     assert parsed["findings"] == []
+
+
+
+def test_previous_findings_are_hidden_when_latest_scan_failed(tmp_path):
+    database = setup_workspace(tmp_path)
+    database.update_processing_status(
+        {
+            "sha256": "a" * 64,
+            "package_id": "org.example.app",
+            "version_code": "12",
+            "scan_status": "failed",
+            "error": "TruffleHog failed",
+        }
+    )
+
+    summary = ReportGenerator(database, workspace=tmp_path).run()
+
+    assert summary.generated == 1
+    assert summary.with_findings == 0
+    parsed = json.loads(
+        (tmp_path / "reports/org.example.app/12/report.json").read_text(encoding="utf-8")
+    )
+    assert parsed["findings"] == []
+    assert parsed["processing"]["scan_status"] == "failed"
