@@ -97,7 +97,7 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(tmp_path
 
             if len(sys.argv) > 2 and sys.argv[2] == "--help":
                 print(
-                    "filesystem --no-verification --no-update --json "
+                    "filesystem --results=RESULTS --no-update --json "
                     "--concurrency --fail-on-scan-errors"
                 )
                 raise SystemExit(0)
@@ -109,7 +109,7 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(tmp_path
                 "DetectorType": 2,
                 "DetectorName": "SYNTHETIC_TEST",
                 "DecoderName": "PLAIN",
-                "Verified": False,
+                "Verified": True,
                 "Raw": "SYNTHETIC_SECRET_MUST_NOT_BE_PERSISTED",
                 "RawV2": "SYNTHETIC_SECRET_MUST_NOT_BE_PERSISTED",
                 "ExtraData": {"secret": "SYNTHETIC_SECRET_MUST_NOT_BE_PERSISTED"},

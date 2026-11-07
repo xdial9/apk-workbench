@@ -119,7 +119,7 @@ class ReportGenerator:
             f"<li>TruffleHog: {html.escape(str(status.get('scan_status', 'pending')))}</li>",
             "</ul>",
             f"<h2>Static analysis candidates ({len(findings)})</h2>",
-            "<p class='muted'>Credential verification was disabled. Findings are unverified indicators for manual review.</p>",
+            "<p class='muted'>TruffleHog verified these findings using its configured verification process.</p>",
         ]
         if findings:
             parts.extend(
@@ -219,7 +219,7 @@ class ReportGenerator:
                 "schema_version": 1,
                 "artifact": artifact,
                 "processing": processing,
-                "analysis": {"verification": "disabled", "finding_count": len(findings)},
+                "analysis": {"verification": "enabled", "finding_count": len(findings)},
                 "findings": findings,
             }
             output_dir = self.reports_root / package_id / version_code / digest

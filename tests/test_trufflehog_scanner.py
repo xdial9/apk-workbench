@@ -17,7 +17,7 @@ from apkworkbench.database.workspace import WorkspaceDatabase
 
 RAW_SECRET = "AKIAIOSFODNN7EXAMPLE"
 HELP_TEXT = (
-    "filesystem command help --no-verification --no-update --json "
+    "filesystem command help --results=RESULTS --no-update --json "
     "--concurrency --fail-on-scan-errors"
 )
 
@@ -52,7 +52,7 @@ def result_json(raw=RAW_SECRET):
         "DetectorType": 2,
         "DetectorName": "AWS",
         "DecoderName": "PLAIN",
-        "Verified": False,
+        "Verified": True,
         "Raw": raw,
         "RawV2": "secret-part",
         "Redacted": "AKIA...EXAMPLE",
@@ -132,7 +132,7 @@ def install_fakes(monkeypatch, output, *, return_code=0, help_text=HELP_TEXT, st
     return calls, process
 
 
-def test_scanner_disables_verification_and_persists_complete_original_objects(monkeypatch, tmp_path):
+def test_scanner_selects_verified_results_and_persists_complete_original_objects(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
     line = json.dumps(result_json()).encode() + b"\n"
     calls, _ = install_fakes(monkeypatch, line)
@@ -156,7 +156,7 @@ def test_scanner_disables_verification_and_persists_complete_original_objects(mo
     },)
     command = next(entry[1] for entry in calls if entry[0] == "scan")
     assert command[0:2] == ["trufflehog", "filesystem"]
-    assert "--no-verification" in command
+    assert "--results=verified" in command
     assert "--no-update" in command
     assert "--json" in command
     assert "--concurrency=1" in command

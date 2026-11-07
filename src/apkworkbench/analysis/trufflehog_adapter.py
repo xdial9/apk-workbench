@@ -50,7 +50,7 @@ class TruffleHogAnalyzer:
             default_enabled=False,
             description=(
                 "Local TruffleHog filesystem scan of decompiled output; "
-                "credential verification is explicitly disabled."
+                "only explicitly verified findings are retained."
             ),
         )
 
@@ -102,7 +102,7 @@ class TruffleHogAnalyzer:
                         line_start=line_number,
                         extractor_coordinate={
                             "decoder_name": item.get("DecoderName"),
-                            "verification": "disabled",
+                            "verification": "verified",
                         },
                     ),
                 )
@@ -113,8 +113,8 @@ class TruffleHogAnalyzer:
                     title=str(detector_name),
                     value_fingerprint=fingerprint,
                     sensitive=True,
-                    verification_state="static_unverified",
-                    rationale="Credential verification was disabled; manual review is required.",
+                    verification_state="verified",
+                    rationale="TruffleHog marked this finding as verified.",
                     rule_id=str(detector_name),
                     rule_version=self.definition.version,
                     dedup_key=fingerprint,
@@ -127,8 +127,8 @@ class TruffleHogAnalyzer:
             findings=tuple(findings),
             diagnostics=(
                 AnalyzerDiagnostic(
-                    code="credential_verification_disabled",
-                    message="TruffleHog credential verification was disabled.",
+                    code="credential_verification_enabled",
+                    message="TruffleHog verification was enabled.",
                     severity="info",
                 ),
             ),

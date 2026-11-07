@@ -47,6 +47,7 @@ def setup_workspace(tmp_path: Path):
         json.dumps(
             [
                 {
+                    "Verified": True,
                     "DetectorName": "<script>alert(1)</script>",
                     "DetectorType": 7,
                     "DecoderName": "PLAIN",
@@ -77,13 +78,13 @@ def test_generates_json_and_html_with_complete_original_findings(tmp_path):
     assert "MUST_NOT_APPEAR_IN_REPORTS" in report_html
     assert "<script>alert(1)</script>" not in report_html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in report_html
-    assert "Credential verification was disabled" in report_html
+    assert "Credential verification was enabled" in report_html
     assert "Complete original JSON" in report_html
 
     parsed = json.loads(report_json)
     assert parsed["artifact"]["app_name"] == "Example <App>"
     assert parsed["processing"]["jadx_status"] == "success"
-    assert parsed["analysis"]["verification"] == "disabled"
+    assert parsed["analysis"]["verification"] == "enabled"
     assert parsed["findings"][0]["Raw"] == "MUST_NOT_APPEAR_IN_REPORTS"
     assert parsed["findings"][0]["ExtraData"]["credential"] == "MUST_NOT_APPEAR_IN_REPORTS"
 

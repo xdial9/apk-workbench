@@ -1,4 +1,4 @@
-"""Sequential local TruffleHog scanning with verification explicitly disabled."""
+"""Sequential local TruffleHog scanning with verified-result selection."""
 from __future__ import annotations
 
 import csv
@@ -33,10 +33,10 @@ class AnalysisSummary:
 
 
 class TruffleHogScanner:
-    """Scan completed decompilations without active credential verification."""
+    """Scan completed decompilations and retain only verified findings."""
 
     REQUIRED_HELP_FLAGS = (
-        "--no-verification",
+        "--results",
         "--no-update",
         "--json",
         "--concurrency",
@@ -84,7 +84,7 @@ class TruffleHogScanner:
             if flag in help_text:
                 return True
             # Kong renders Boolean options as --[no-]<full-option-name>.
-            # Preserve an option's own "no-" prefix: e.g. --no-verification
+            # Preserve an option's own "no-" prefix: e.g. --results
             # is advertised as --[no-]no-verification, not --[no-]verification.
             return flag.startswith("--") and f"--[no-]{flag[2:]}" in help_text
 
@@ -214,7 +214,7 @@ class TruffleHogScanner:
             "filesystem",
             "--concurrency=1",
             "--no-update",
-            "--no-verification",
+            "--results=verified",
             "--json",
             "--fail-on-scan-errors",
             *(str(path) for path in directories),
@@ -328,6 +328,11 @@ class TruffleHogScanner:
                 f"TruffleHog exited with status {return_code}; results were not published."
                 f"{detail}"
             )
+        if any(item.get("Verified") is not True for item in findings):
+            raise AnalysisError(
+                "TruffleHog emitted findings that are not explicitly verified; "
+                "results were not published."
+            )
 
         output_dir = self.results_root / package_id / version_code / digest / "trufflehog"
         output_components = (
@@ -350,7 +355,7 @@ class TruffleHogScanner:
             f"COMMAND: {' '.join(command)}\n"
             f"RETURN CODE: {return_code}\n"
             f"FINDINGS: {len(findings)}\n"
-            "CREDENTIAL VERIFICATION: DISABLED (--no-verification)\n"
+            "CREDENTIAL VERIFICATION: ENABLED\nRESULT SELECTION: --results=verified\n"
         )
         (output_dir / "trufflehog.log").write_text(log_text, encoding="utf-8")
         return findings
@@ -436,7 +441,7 @@ class TruffleHogScanner:
                             "decoder_name": finding.get("DecoderName", ""),
                             "file_path": self._filesystem_metadata(finding)[0],
                             "line": self._filesystem_metadata(finding)[1],
-                            "verification": "disabled",
+                            "verification": "verified",
                             "finding_json": json.dumps(finding, ensure_ascii=False, separators=(",", ":")),
                         }
                     )
