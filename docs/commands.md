@@ -72,9 +72,12 @@ Each APK component is independently re-hashed before JADX and Apktool. TruffleHo
 
 ```bash
 apkworkbench run --apk-count 100
+
+# Resumable 15,000-app target, in batches of 100.
+scripts/acquire_15000_google_play.sh
 ```
 
-The pipeline passes the exact run ID to decompilation and analysis; it does not sweep unrelated workspace downloads into the batch.
+The pipeline passes the exact run ID to decompilation and analysis; it does not sweep unrelated workspace downloads into the batch. The 15,000-app helper runs 150 batches of 100 sequentially, stops on the first incomplete batch, and can be rerun because already acquired Google Play package IDs are skipped.
 
 ## Exit statuses
 

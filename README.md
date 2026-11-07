@@ -73,6 +73,9 @@ apkworkbench download --apk-count 100
 # Or run acquisition, decompilation, analysis, reporting, and reconciliation.
 apkworkbench run --apk-count 100
 
+# Resumable 15,000-app target: 150 sequential batches of 100.
+scripts/acquire_15000_google_play.sh
+
 apkworkbench status
 apkworkbench reconcile --run-id YOUR-RUN-ID
 ```
