@@ -25,6 +25,7 @@ class DecompilationSummary:
     completed: int
     failed: int
     skipped: int
+    partial: int = 0
 
 
 class DecompilationRunner:
@@ -126,7 +127,14 @@ class DecompilationRunner:
             except subprocess.TimeoutExpired:
                 pass
 
-    def _run_tool(self, command: list[str], log_path: Path, label: str) -> None:
+    def _run_tool(
+        self,
+        command: list[str],
+        log_path: Path,
+        label: str,
+        *,
+        accepted_return_codes: tuple[int, ...] = (0,),
+    ) -> int:
         """Stream combined tool output to disk and bound execution time."""
         log_path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -188,11 +196,12 @@ class DecompilationRunner:
         except OSError as exc:
             raise DecompilationError(f"Could not execute {label}: {exc}") from exc
 
-        if returncode != 0:
+        if returncode not in accepted_return_codes:
             detail = self._log_tail(log_path)
             raise DecompilationError(
                 f"{label} exited with status {returncode}. {detail}"
             )
+        return returncode
 
     @staticmethod
     def _has_usable_output(path: Path) -> bool:
@@ -264,12 +273,26 @@ class DecompilationRunner:
         destination: Path,
         log_path: Path,
         label: str,
-    ) -> None:
+        allow_partial: bool = False,
+    ) -> str:
         """Run into a temporary sibling and publish only a validated result."""
         try:
             staged_output.mkdir(mode=0o700)
-            self._run_tool(command, log_path, label)
+            returncode = self._run_tool(
+                command,
+                log_path,
+                label,
+                accepted_return_codes=(0, 3) if allow_partial else (0,),
+            )
+            if returncode == 3:
+                if not self._has_usable_output(staged_output):
+                    raise DecompilationError(
+                        f"{label} exited with status 3 but produced no usable output."
+                    )
+                self._publish_output(staged_output, destination, label)
+                return "partial"
             self._publish_output(staged_output, destination, label)
+            return "success"
         except OSError as exc:
             raise DecompilationError(
                 f"Could not prepare or clean up staged {label} output: {exc}"
@@ -339,7 +362,7 @@ class DecompilationRunner:
             if row.get("source") == "google_play"
         ]
         statuses = self.database.read_processing_status()
-        examined = completed = failed = skipped = 0
+        examined = completed = failed = skipped = partial = 0
 
         if run_id is None:
             candidate_rows = history
@@ -417,18 +440,25 @@ class DecompilationRunner:
 
             # A recorded success is reusable only when its output is still present and usable.
             jadx_had_usable_output = (
-                previous.get("jadx_status") == "success"
+                previous.get("jadx_status") in {"success", "partial"}
                 and self._has_usable_output(jadx_output)
             )
             apktool_had_usable_output = (
                 previous.get("apktool_status") == "success"
                 and self._has_usable_output(apktool_output)
             )
-            jadx_status = "success" if jadx_had_usable_output else "pending"
+            jadx_status = (
+                previous.get("jadx_status", "success")
+                if jadx_had_usable_output else "pending"
+            )
             apktool_status = "success" if apktool_had_usable_output else "pending"
+            jadx_existing_status = jadx_status
+            apktool_existing_status = apktool_status
 
             if not force and jadx_had_usable_output and apktool_had_usable_output:
                 skipped += 1
+                if jadx_status == "partial":
+                    partial += 1
                 continue
             if limit is not None and examined >= limit:
                 break
@@ -448,6 +478,7 @@ class DecompilationRunner:
                 continue
 
             errors: list[str] = []
+            warnings: list[str] = []
             self._status_update(
                 row,
                 jadx_status=jadx_status,
@@ -489,26 +520,35 @@ class DecompilationRunner:
                     jadx_status=jadx_status,
                     apktool_status=apktool_status,
                     scan_status=scan_status,
-                    error="; ".join(errors),
+                    error="; ".join(errors + warnings),
                 )
 
                 try:
-                    self._run_tool_transactionally(
+                    stage_status = self._run_tool_transactionally(
                         command,
                         staged_output=staged_output,
                         destination=destination,
                         log_path=output_root / f"{tool_name}.log",
                         label=label,
+                        allow_partial=(tool_name == "jadx"),
                     )
-                    stage_status = "success"
+                    if stage_status == "partial":
+                        warnings.append(
+                            "JADX completed with decompilation errors (exit code 3); "
+                            "usable partial output was retained."
+                        )
                 except (DecompilationError, OSError) as exc:
                     errors.append(str(exc))
                     had_usable_output = (
                         jadx_had_usable_output if tool_name == "jadx"
                         else apktool_had_usable_output
                     )
-                    # A failed forced refresh does not invalidate the previous known-good output.
-                    stage_status = "success" if had_usable_output else "failed"
+                    existing_status = (
+                        jadx_existing_status if tool_name == "jadx"
+                        else apktool_existing_status
+                    )
+                    # A failed forced refresh does not invalidate previous usable output.
+                    stage_status = existing_status if had_usable_output else "failed"
 
                 if tool_name == "jadx":
                     jadx_status = stage_status
@@ -519,12 +559,21 @@ class DecompilationRunner:
                     jadx_status=jadx_status,
                     apktool_status=apktool_status,
                     scan_status=scan_status,
-                    error="; ".join(errors),
+                    error="; ".join(errors + warnings),
                 )
 
-            if jadx_status == "success" and apktool_status == "success" and not errors:
-                completed += 1
-                self.logger.info("Decompilation completed for %s", package_id)
+            usable_statuses = {"success", "partial"}
+            if jadx_status in usable_statuses and apktool_status in usable_statuses and not errors:
+                if "partial" in {jadx_status, apktool_status}:
+                    partial += 1
+                    self.logger.warning(
+                        "Decompilation completed with partial JADX output for %s: %s",
+                        package_id,
+                        "; ".join(warnings),
+                    )
+                else:
+                    completed += 1
+                    self.logger.info("Decompilation completed for %s", package_id)
             else:
                 failed += 1
                 self.logger.error(
@@ -533,4 +582,4 @@ class DecompilationRunner:
                     "; ".join(errors) or "one or more tool outputs are unavailable",
                 )
 
-        return DecompilationSummary(examined, completed, failed, skipped)
+        return DecompilationSummary(examined, completed, failed, skipped, partial)
