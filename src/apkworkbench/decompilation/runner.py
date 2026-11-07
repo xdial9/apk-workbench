@@ -41,7 +41,7 @@ class DecompilationRunner:
             raise ValueError("timeout_seconds must be positive")
         self.database = database
         self.workspace = Path(workspace).expanduser().resolve()
-        self.download_root = (self.workspace / "downloads").resolve()
+        self.download_root = self.workspace / "downloads"
         self.results_root = self.workspace / "results"
         self.jadx_executable = jadx_executable
         self.apktool_executable = apktool_executable
@@ -166,9 +166,25 @@ class DecompilationRunner:
             }
         )
 
+    def _validate_workspace_roots(self) -> None:
+        for label, root in (
+            ("downloads", self.download_root),
+            ("results", self.results_root),
+        ):
+            root.mkdir(parents=True, exist_ok=True)
+            try:
+                root.resolve(strict=True).relative_to(self.workspace)
+            except (OSError, ValueError) as exc:
+                raise DecompilationError(
+                    f"The {label} directory resolves outside the configured workspace."
+                ) from exc
+        self.download_root = self.download_root.resolve(strict=True)
+        self.results_root = self.results_root.resolve(strict=True)
+
     def run(self, *, limit: int | None = None, force: bool = False) -> DecompilationSummary:
         if limit is not None and limit < 1:
             raise ValueError("limit must be at least 1 when supplied")
+        self._validate_workspace_roots()
         self.database.ensure()
         history = self.database.read_download_history()
         statuses = self.database.read_processing_status()
