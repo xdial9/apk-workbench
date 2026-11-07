@@ -1,0 +1,1 @@
+"""Upstream APK repository adapters."""
