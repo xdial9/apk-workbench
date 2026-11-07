@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import resource
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -185,6 +186,10 @@ class TruffleHogScanner:
                     command,
                     stdout=stdout_file,
                     stderr=stderr_file,
+                    preexec_fn=lambda: resource.setrlimit(
+                        resource.RLIMIT_FSIZE,
+                        (self.max_output_bytes, self.max_output_bytes),
+                    ),
                 )
             except OSError as exc:
                 raise AnalysisError(f"Could not start TruffleHog: {exc}") from exc
@@ -280,13 +285,14 @@ class TruffleHogScanner:
         }
         for path in sorted(self.results_root.glob("*/*/*/trufflehog/findings.json")):
             try:
+                path.resolve(strict=True).relative_to(self.results_root.resolve())
                 digest = path.parents[1].name
                 package_id = path.parents[3].name
                 version_code = path.parents[2].name
                 if digest not in eligible_hashes:
                     continue
                 loaded = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+            except (OSError, ValueError, json.JSONDecodeError):
                 continue
             if not isinstance(loaded, list):
                 continue
