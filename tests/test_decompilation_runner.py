@@ -193,7 +193,7 @@ def test_decompiler_rejects_results_root_symlink_escape(tmp_path):
     results = tmp_path / "results"
     results.mkdir()
     results.rmdir()
-    outside = tmp_path / "outside-results"
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-results"
     outside.mkdir()
     results.symlink_to(outside, target_is_directory=True)
 
