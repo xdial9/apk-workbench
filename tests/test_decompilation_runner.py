@@ -17,7 +17,7 @@ APK_BYTES = b"verified local apk fixture"
 
 def add_download(database: WorkspaceDatabase, workspace: Path, *, payload=APK_BYTES):
     digest = hashlib.sha256(payload).hexdigest()
-    apk_path = workspace / "downloads/org.example.app/7/app.apk"
+    apk_path = workspace / "downloads/org.example.app/7" / digest / "app.apk"
     apk_path.parent.mkdir(parents=True, exist_ok=True)
     apk_path.write_bytes(payload)
     database.append_history(
@@ -81,8 +81,8 @@ def test_runs_jadx_then_apktool_with_single_worker(monkeypatch, tmp_path):
     assert state["jadx_status"] == "success"
     assert state["apktool_status"] == "success"
     assert state["scan_status"] == "pending"
-    assert (tmp_path / "results/org.example.app/7/jadx.log").is_file()
-    assert (tmp_path / "results/org.example.app/7/apktool.log").is_file()
+    assert (tmp_path / "results/org.example.app/7" / digest / "jadx.log").is_file()
+    assert (tmp_path / "results/org.example.app/7" / digest / "apktool.log").is_file()
 
 
 def test_successful_artifact_is_skipped_on_subsequent_run(monkeypatch, tmp_path):
