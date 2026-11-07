@@ -48,7 +48,7 @@ class ArtifactDownloader:
         if timeout_seconds < 1 or chunk_size < 1:
             raise ValueError("timeout_seconds and chunk_size must be positive")
         self.database = database
-        self.workspace = Path(workspace).expanduser()
+        self.workspace = Path(workspace).expanduser().resolve()
         self.timeout_seconds = timeout_seconds
         self.chunk_size = chunk_size
         self.session = session or requests.Session()
@@ -93,7 +93,20 @@ class ArtifactDownloader:
     ) -> DownloadResult:
         destination = self.destination_for(artifact)
         self._validate_download_url(artifact.download_url)
+        downloads_root = self.workspace / "downloads"
+        downloads_root.mkdir(parents=True, exist_ok=True)
+        try:
+            resolved_downloads_root = downloads_root.resolve(strict=True)
+            resolved_downloads_root.relative_to(self.workspace)
+        except (OSError, ValueError) as exc:
+            raise DownloadError("Downloads directory resolves outside the configured workspace.") from exc
         destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            destination.parent.resolve(strict=True).relative_to(resolved_downloads_root)
+        except (OSError, ValueError) as exc:
+            raise DownloadError("APK destination resolves outside the downloads workspace.") from exc
+        if destination.is_symlink():
+            raise DownloadError(f"Refusing to use a symlink as an APK destination: {destination}")
         started = utc_now()
         temporary: Path | None = None
         received = 0
