@@ -252,9 +252,10 @@ class ArtifactDownloader:
             if isinstance(exc, DownloadError):
                 raise
             if isinstance(exc, DatabaseError):
-                raise DownloadError(
-                    "APK bytes were verified, but acquisition history could not be committed: "
-                    f"{exc}. The verified file was left in place for a retry."
+                raise DatabaseError(
+                    "A verified APK is present, but its acquisition-history record could not "
+                    f"be committed: {exc}. Stop this acquisition run and repair the workspace "
+                    "database before retrying."
                 ) from exc
             if isinstance(exc, requests.RequestException):
                 raise DownloadError(f"APK network request failed: {exc}") from exc
