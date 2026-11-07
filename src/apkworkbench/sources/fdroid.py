@@ -77,7 +77,7 @@ class FdroidIndexParser:
 
         # index-v2 file names are root-relative; F-Droid normally serializes
         # these with exactly one leading slash (e.g. /org.example_123.apk).
-        path = raw_path[1:] if raw_path.startswith("/") else raw_path
+        path = raw_path.removeprefix("/")
         parts = path.split("/")
         if not path or any(part in {"", ".", ".."} for part in parts):
             raise FdroidIndexError(
