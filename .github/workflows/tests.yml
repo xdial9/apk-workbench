@@ -2,7 +2,7 @@ name: tests
 
 on:
   push:
-    branches: ["main", "chatgpt/**"]
+    branches: ["main", "chatgpt/**", "fix/**"]
   pull_request:
 
 jobs:
