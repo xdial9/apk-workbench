@@ -207,21 +207,18 @@ class ArtifactDownloader:
         except Exception as exc:
             if temporary is not None and temporary.exists():
                 temporary.unlink()
-            try:
-                self.database.append_attempt(
-                    {
-                        "timestamp": started,
-                        "run_id": run_id,
-                        "sha256": artifact.sha256,
-                        "package_id": artifact.package_id,
-                        "download_url": artifact.download_url,
-                        "status": "failed",
-                        "bytes_received": received,
-                        "error": str(exc)[:1000],
-                    }
-                )
-            except Exception:
-                pass
+            self.database.append_attempt(
+                {
+                    "timestamp": started,
+                    "run_id": run_id,
+                    "sha256": artifact.sha256,
+                    "package_id": artifact.package_id,
+                    "download_url": artifact.download_url,
+                    "status": "failed",
+                    "bytes_received": received,
+                    "error": str(exc)[:1000],
+                }
+            )
             if isinstance(exc, DownloadError):
                 raise
             if isinstance(exc, requests.RequestException):
