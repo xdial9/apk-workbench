@@ -130,7 +130,10 @@ class DecompilationRunner:
         """Stream combined tool output to disk and bound execution time."""
         log_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with log_path.open("wb") as log_file:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+            log_fd = os.open(log_path, flags, 0o600)
+            os.fchmod(log_fd, 0o600)
+            with os.fdopen(log_fd, "wb") as log_file:
                 log_file.write(
                     f"COMMAND: {' '.join(command)}\nSTDOUT AND STDERR (combined):\n".encode(
                         "utf-8", errors="replace"
@@ -157,21 +160,20 @@ class DecompilationRunner:
                     returncode = process.wait(timeout=self.timeout_seconds)
                 except subprocess.TimeoutExpired:
                     self._terminate_process_tree(process)
-                    log_file.flush()
-                    with log_path.open("ab") as timeout_file:
-                        timeout_file.write(
-                            f"\nTIMEOUT AFTER: {self.timeout_seconds} seconds\n".encode(
-                                "utf-8", errors="replace"
-                            )
+                    log_file.write(
+                        f"\nTIMEOUT AFTER: {self.timeout_seconds} seconds\n".encode(
+                            "utf-8", errors="replace"
                         )
+                    )
+                    log_file.flush()
                     raise DecompilationError(
                         f"{label} exceeded the {self.timeout_seconds}-second timeout. "
                         f"See log: {log_path}"
                     ) from None
                 except KeyboardInterrupt:
                     self._terminate_process_tree(process)
-                    with log_path.open("ab") as interrupted_file:
-                        interrupted_file.write(b"\nINTERRUPTED: process group terminated\n")
+                    log_file.write(b"\nINTERRUPTED: process group terminated\n")
+                    log_file.flush()
                     raise
                 finally:
                     if previous_sigterm is not None:
