@@ -138,7 +138,7 @@ def test_report_generator_rejects_results_root_symlink_escape(tmp_path):
         else:
             child.unlink()
     results.rmdir()
-    outside = tmp_path / "outside-results"
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-results"
     outside.mkdir()
     results.symlink_to(outside, target_is_directory=True)
 
@@ -151,7 +151,7 @@ def test_report_generator_rejects_reports_root_symlink_escape(tmp_path):
     reports = tmp_path / "reports"
     reports.mkdir()
     reports.rmdir()
-    outside = tmp_path / "outside-reports"
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-reports"
     outside.mkdir()
     reports.symlink_to(outside, target_is_directory=True)
 
