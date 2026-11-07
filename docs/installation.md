@@ -131,12 +131,7 @@ git clone https://github.com/xdial9/apk-workbench.git
 cd apk-workbench
 ```
 
-The repository's default branch is intended to contain the complete supported project. If GitHub currently still defaults to the placeholder `main` branch, use the temporary explicit branch command below until the default-branch change is complete:
-
-```bash
-git clone --branch chatgpt/bootstrap https://github.com/xdial9/apk-workbench.git
-cd apk-workbench
-```
+The repository's default branch is `main` and contains the complete supported project. A normal clone is the correct command; no branch override is needed.
 
 ## 6. Install the Python application
 
