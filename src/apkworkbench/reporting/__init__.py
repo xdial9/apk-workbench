@@ -1,1 +1,1 @@
-"""Sanitized JSON, HTML, and aggregate reports."""
+"""Complete JSON, HTML, and aggregate reports."""
