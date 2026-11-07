@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import selectors
+import signal
 import subprocess
 import time
 import tempfile
@@ -157,6 +158,33 @@ class TruffleHogScanner:
             if temporary.exists():
                 temporary.unlink()
 
+    @staticmethod
+    def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+        """Terminate TruffleHog and any descendants in its dedicated process group."""
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+
+    @staticmethod
+    def _stderr_tail(handle, limit: int = 8192) -> str:
+        handle.flush()
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - limit))
+        return handle.read(limit).decode("utf-8", errors="replace").strip()
+
     def _run_one(
         self, package_id: str, version_code: str, digest: str, directories: list[Path]
     ) -> list[dict[str, Any]]:
@@ -168,8 +196,25 @@ class TruffleHogScanner:
                 raise AnalysisError(
                     f"Refusing to scan a decompilation directory outside results/: {directory}"
                 ) from exc
-            if not directory.is_dir():
-                raise AnalysisError(f"Decompiled input directory is missing: {directory}")
+            if directory.is_symlink() or not directory.is_dir():
+                raise AnalysisError(f"Decompiled input directory is missing or unsafe: {directory}")
+            has_usable_file = False
+            try:
+                for item in directory.rglob("*"):
+                    if item.is_symlink():
+                        raise AnalysisError(
+                            f"Refusing to scan a symlink inside decompilation output: {item}"
+                        )
+                    if item.is_file():
+                        has_usable_file = True
+            except OSError as exc:
+                raise AnalysisError(
+                    f"Cannot inspect decompilation input directory: {directory}: {exc}"
+                ) from exc
+            if not has_usable_file:
+                raise AnalysisError(
+                    f"Decompiled input directory contains no usable files: {directory}"
+                )
 
         command = [
             self.executable,
@@ -184,20 +229,23 @@ class TruffleHogScanner:
         findings: list[dict[str, Any]] = []
         fingerprints: set[str] = set()
         parse_error = False
-        with tempfile.TemporaryFile(mode="w+b") as stdout_file:
+        with (
+            tempfile.TemporaryFile(mode="w+b") as stdout_file,
+            tempfile.TemporaryFile(mode="w+b") as stderr_file,
+        ):
             try:
                 process = subprocess.Popen(
                     command,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
+                    stderr=stderr_file,
                     bufsize=0,
+                    start_new_session=True,
                 )
             except (OSError, subprocess.SubprocessError) as exc:
                 raise AnalysisError(f"Could not start TruffleHog: {exc}") from exc
 
             if process.stdout is None:
-                process.kill()
-                process.wait()
+                self._terminate_process_tree(process)
                 raise AnalysisError("TruffleHog stdout pipe was not created.")
 
             output_size = 0
@@ -208,8 +256,7 @@ class TruffleHogScanner:
                     while True:
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
-                            process.kill()
-                            process.wait()
+                            self._terminate_process_tree(process)
                             raise AnalysisError(
                                 f"TruffleHog exceeded the {self.timeout_seconds}-second timeout."
                             )
@@ -226,8 +273,7 @@ class TruffleHogScanner:
                                 break
                             output_size += len(chunk)
                             if output_size > self.max_output_bytes:
-                                process.kill()
-                                process.wait()
+                                self._terminate_process_tree(process)
                                 raise AnalysisError(
                                     "TruffleHog JSON output exceeded the configured "
                                     f"{self.max_output_bytes}-byte limit."
@@ -237,14 +283,14 @@ class TruffleHogScanner:
                             continue
                         break
             except subprocess.TimeoutExpired as exc:
-                process.kill()
-                process.wait()
+                self._terminate_process_tree(process)
                 raise AnalysisError(
                     f"TruffleHog exceeded the {self.timeout_seconds}-second timeout."
                 ) from exc
             finally:
                 process.stdout.close()
 
+            stderr_tail = self._stderr_tail(stderr_file)
             stdout_file.flush()
             stdout_file.seek(0)
             max_line_bytes = 2 * 1024 * 1024
@@ -274,10 +320,16 @@ class TruffleHogScanner:
                 findings.append(finding)
 
         if parse_error:
-            raise AnalysisError("TruffleHog emitted malformed or oversized JSON output; results were not published.")
+            detail = f" Stderr: {stderr_tail[-2000:]}" if stderr_tail else ""
+            raise AnalysisError(
+                "TruffleHog emitted malformed or oversized JSON output; results were not "
+                f"published.{detail}"
+            )
         if return_code != 0:
+            detail = f" Stderr: {stderr_tail[-2000:]}" if stderr_tail else ""
             raise AnalysisError(
                 f"TruffleHog exited with status {return_code}; results were not published."
+                f"{detail}"
             )
 
         output_dir = self.results_root / package_id / version_code / digest / "trufflehog"
