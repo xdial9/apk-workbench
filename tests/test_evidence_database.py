@@ -291,3 +291,80 @@ def test_database_refuses_symlinked_database_directory(tmp_path):
 
     with pytest.raises(EvidenceDatabaseError, match="symlinked database directory"):
         EvidenceDatabase(workspace).ensure()
+
+
+def test_evidence_relationships_cannot_cross_artifact_boundaries(tmp_path):
+    database = EvidenceDatabase(tmp_path)
+    _, artifact_a, analysis_a, execution_a = seed_analysis(database, tmp_path)
+    app_b = database.create_app_identity("org.other.app")
+    artifact_b = database.register_artifact(
+        app_b, "c" * 64, package_id="org.other.app", version_code=1
+    )
+
+    with pytest.raises(EvidenceDatabaseError, match="must match the artifact"):
+        database.add_finding(
+            execution_a,
+            artifact_b,
+            category="manifest",
+            finding_type="exported_component",
+            title="Cross-artifact finding",
+        )
+
+    finding_id = database.add_finding(
+        execution_a,
+        artifact_a,
+        category="manifest",
+        finding_type="exported_component",
+        title="Valid finding",
+    )
+    with pytest.raises(EvidenceDatabaseError, match="must match its finding"):
+        database.add_evidence_location(
+            finding_id,
+            artifact_b,
+            evidence_kind="manifest_attribute",
+        )
+    with pytest.raises(EvidenceDatabaseError, match="must match its analysis run"):
+        database.add_parser_result(
+            analysis_a, artifact_b, "parser", "1.0", status="success"
+        )
+
+
+def test_acquisition_observation_cannot_reference_another_runs_component(tmp_path):
+    database = EvidenceDatabase(tmp_path)
+    first_run = database.create_acquisition_run("google_play")
+    second_run = database.create_acquisition_run("fdroid")
+    component_id = database.add_bundle_component(
+        first_run, "bundle-a", "base.apk", kind="base_apk"
+    )
+
+    with pytest.raises(EvidenceDatabaseError, match="does not belong"):
+        database.add_acquisition_observation(
+            second_run,
+            component_id=component_id,
+            outcome="downloaded",
+        )
+
+
+def test_analyzer_definition_version_is_immutable(tmp_path):
+    database = EvidenceDatabase(tmp_path)
+    database.register_analyzer(
+        "manifest", "1.0", categories=["manifest"], input_kinds=["apk"]
+    )
+
+    with pytest.raises(EvidenceDatabaseError, match="different definition"):
+        database.register_analyzer(
+            "manifest", "1.0", categories=["secrets"], input_kinds=["apk"]
+        )
+
+
+def test_same_artifact_digest_rejects_conflicting_version_metadata(tmp_path):
+    database = EvidenceDatabase(tmp_path)
+    app_id = database.create_app_identity("org.example.app")
+    database.register_artifact(
+        app_id, APK_HASH, package_id="org.example.app", version_code=12
+    )
+
+    with pytest.raises(EvidenceDatabaseError, match="conflicting immutable metadata"):
+        database.register_artifact(
+            app_id, APK_HASH, package_id="org.example.app", version_code=13
+        )
