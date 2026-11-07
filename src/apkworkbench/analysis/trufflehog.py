@@ -1,8 +1,7 @@
-"""Sequential local TruffleHog scanning with verification explicitly disabled."""
+"""Sequential TruffleHog scanning with verified-only evidence preservation."""
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import logging
 import os
@@ -31,10 +30,10 @@ class AnalysisSummary:
 
 
 class TruffleHogScanner:
-    """Scan completed decompilations without active credential verification."""
+    """Scan complete JADX and Apktool trees with credential verification enabled."""
 
     REQUIRED_HELP_FLAGS = (
-        "--no-verification",
+        "--results",
         "--no-update",
         "--json",
         "--concurrency",
@@ -111,26 +110,9 @@ class TruffleHogScanner:
         return str(file_path), line_number
 
     @staticmethod
-    def _sanitize_finding(item: dict[str, Any]) -> dict[str, Any] | None:
-        detector = item.get("DetectorName")
-        if not isinstance(detector, str) or not detector:
-            return None
-        canonical = json.dumps(
-            item,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8", errors="replace")
-        file_path, line_number = TruffleHogScanner._filesystem_metadata(item)
-        return {
-            "fingerprint": hashlib.sha256(canonical).hexdigest(),
-            "detector_name": detector,
-            "detector_type": item.get("DetectorType"),
-            "decoder_name": item.get("DecoderName"),
-            "file_path": file_path,
-            "line": line_number,
-            "verification": "disabled",
-        }
+    def _preserve_finding(item: dict[str, Any]) -> dict[str, Any]:
+        """Keep every field exactly as emitted by TruffleHog."""
+        return item
 
     def _atomic_json(self, path: Path, value: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,7 +134,7 @@ class TruffleHogScanner:
             finally:
                 os.close(directory_fd)
         except OSError as exc:
-            raise AnalysisError(f"Cannot publish sanitized scan results: {exc}") from exc
+            raise AnalysisError(f"Cannot publish scanner evidence: {exc}") from exc
         finally:
             if temporary.exists():
                 temporary.unlink()
@@ -176,20 +158,19 @@ class TruffleHogScanner:
             "filesystem",
             "--concurrency=1",
             "--no-update",
-            "--no-verification",
+            "--results=verified",
             "--json",
             "--fail-on-scan-errors",
             *(str(path) for path in directories),
         ]
         findings: list[dict[str, Any]] = []
-        fingerprints: set[str] = set()
         parse_error = False
-        with tempfile.TemporaryFile(mode="w+b") as stdout_file:
+        with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(mode="w+b") as stderr_file:
             try:
                 process = subprocess.Popen(
                     command,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
+                    stderr=stderr_file,
                     bufsize=0,
                 )
             except (OSError, subprocess.SubprocessError) as exc:
@@ -254,7 +235,7 @@ class TruffleHogScanner:
                     break
                 if len(raw_line) > max_line_bytes:
                     parse_error = True
-                    while raw_line and not raw_line.endswith(b"\\n"):
+                    while raw_line and not raw_line.endswith(b"\n"):
                         raw_line = stdout_file.readline(64 * 1024)
                     continue
                 if not raw_line.strip():
@@ -267,11 +248,11 @@ class TruffleHogScanner:
                 if not isinstance(item, dict):
                     parse_error = True
                     continue
-                finding = self._sanitize_finding(item)
-                if finding is None or finding["fingerprint"] in fingerprints:
-                    continue
-                fingerprints.add(finding["fingerprint"])
-                findings.append(finding)
+                findings.append(self._preserve_finding(item))
+            stdout_file.seek(0)
+            raw_stdout = stdout_file.read()
+            stderr_file.seek(0)
+            raw_stderr = stderr_file.read()
 
         if parse_error:
             raise AnalysisError("TruffleHog emitted malformed or oversized JSON output; results were not published.")
@@ -296,11 +277,21 @@ class TruffleHogScanner:
                 f"TruffleHog output path escapes or aliases the results workspace: {output_dir}"
             ) from exc
         self._atomic_json(output_dir / "findings.json", findings)
+        verified = [item for item in findings if item.get("Verified") is True]
+        self._atomic_json(output_dir / "findings-verified.json", verified)
+        raw_output_path = output_dir / "stdout.jsonl"
+        raw_output_path.write_bytes(raw_stdout)
+        stderr_path = output_dir / "stderr.log"
+        stderr_path.write_bytes(raw_stderr)
         log_text = (
-            f"COMMAND: {' '.join(command)}\n"
+            f"COMMAND: {json.dumps(command)}\n"
             f"RETURN CODE: {return_code}\n"
-            f"FINDINGS: {len(findings)}\n"
-            "CREDENTIAL VERIFICATION: DISABLED (--no-verification)\n"
+            f"FINDINGS EMITTED: {len(findings)}\n"
+            f"VERIFIED FINDINGS: {len(verified)}\n"
+            "CREDENTIAL VERIFICATION: ENABLED\n"
+            "RESULT SELECTION: --results=verified\n"
+            f"STDOUT EVIDENCE: {raw_output_path.name}\n"
+            f"STDERR EVIDENCE: {stderr_path.name}\n"
         )
         (output_dir / "trufflehog.log").write_text(log_text, encoding="utf-8")
         return findings
@@ -331,7 +322,7 @@ class TruffleHogScanner:
             "decoder_name",
             "file_path",
             "line",
-            "verification",
+            "finding_json",
         ]
         rows: list[dict[str, object]] = []
         processing = self.database.read_processing_status()
@@ -360,7 +351,7 @@ class TruffleHogScanner:
                             "package_id": package_id,
                             "version_code": version_code,
                             "sha256": digest,
-                            **{field: finding.get(field, "") for field in fields if field not in {"package_id", "version_code", "sha256"}},
+                            "finding_json": json.dumps(finding, ensure_ascii=False, sort_keys=True),
                         }
                     )
 
@@ -377,6 +368,9 @@ class TruffleHogScanner:
                 os.fsync(handle.fileno())
             os.chmod(temporary, 0o600)
             os.replace(temporary, destination)
+            verified_destination = report_dir / "findings-verified.csv"
+            verified_destination.write_bytes(destination.read_bytes())
+            os.chmod(verified_destination, 0o600)
         except OSError as exc:
             raise AnalysisError(f"Cannot update aggregate findings CSV: {exc}") from exc
         finally:

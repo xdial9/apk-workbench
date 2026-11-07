@@ -1,4 +1,4 @@
-"""Tests for the TruffleHog wrapper's no-verification and redaction guarantees."""
+"""Tests for verified TruffleHog scans and complete evidence retention."""
 from __future__ import annotations
 
 import csv
@@ -17,7 +17,7 @@ from apkworkbench.database.workspace import WorkspaceDatabase
 
 RAW_SECRET = "AKIAIOSFODNN7EXAMPLE"
 HELP_TEXT = (
-    "filesystem command help --no-verification --no-update --json "
+    "filesystem command help --results=RESULTS --no-update --json "
     "--concurrency --fail-on-scan-errors"
 )
 
@@ -51,7 +51,7 @@ def result_json(raw=RAW_SECRET):
         "DetectorType": 2,
         "DetectorName": "AWS",
         "DecoderName": "PLAIN",
-        "Verified": False,
+        "Verified": True,
         "Raw": raw,
         "RawV2": "secret-part",
         "Redacted": "AKIA...EXAMPLE",
@@ -120,7 +120,7 @@ def install_fakes(monkeypatch, output, *, return_code=0, help_text=HELP_TEXT):
     def fake_popen(command, **kwargs):
         calls.append(("scan", command))
         assert kwargs["stdout"] is subprocess.PIPE
-        assert kwargs["stderr"] is subprocess.DEVNULL
+        assert kwargs["stderr"] is not None
         assert kwargs["bufsize"] == 0
         return process
 
@@ -129,7 +129,7 @@ def install_fakes(monkeypatch, output, *, return_code=0, help_text=HELP_TEXT):
     return calls, process
 
 
-def test_scanner_disables_verification_and_persists_only_sanitized_fields(monkeypatch, tmp_path):
+def test_scanner_enables_verification_and_preserves_complete_findings(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
     line = json.dumps(result_json()).encode() + b"\n"
     calls, _ = install_fakes(monkeypatch, line)
@@ -147,7 +147,8 @@ def test_scanner_disables_verification_and_persists_only_sanitized_fields(monkey
     assert summary.failed == 0
     command = next(entry[1] for entry in calls if entry[0] == "scan")
     assert command[0:2] == ["trufflehog", "filesystem"]
-    assert "--no-verification" in command
+    assert "--results=verified" in command
+    assert "--no-verification" not in command
     assert "--no-update" in command
     assert "--json" in command
     assert "--concurrency=1" in command
@@ -156,23 +157,25 @@ def test_scanner_disables_verification_and_persists_only_sanitized_fields(monkey
     assert command[-1].endswith("/apktool")
 
     output = tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings.json"
-    sanitized = output.read_text(encoding="utf-8")
-    assert RAW_SECRET not in sanitized
-    assert "secret-part" not in sanitized
-    assert "do-not-store" not in sanitized
-    records = json.loads(sanitized)
-    assert records[0]["detector_name"] == "AWS"
-    assert records[0]["file_path"].endswith("Config.java")
-    assert records[0]["line"] == 23
-    assert records[0]["verification"] == "disabled"
-    assert len(records[0]["fingerprint"]) == 64
-    assert RAW_SECRET not in (tmp_path / "reports/findings.csv").read_text(encoding="utf-8")
+    preserved = output.read_text(encoding="utf-8")
+    assert RAW_SECRET in preserved
+    assert "secret-part" in preserved
+    assert "do-not-store" in preserved
+    records = json.loads(preserved)
+    assert records[0]["DetectorName"] == "AWS"
+    assert records[0]["Raw"] == RAW_SECRET
+    assert records[0]["RawV2"] == "secret-part"
+    assert records[0]["ExtraData"]["sensitive"] == "do-not-store"
+    verified = json.loads((output.parent / "findings-verified.json").read_text(encoding="utf-8"))
+    assert verified == records
+    assert RAW_SECRET in (tmp_path / "reports/findings.csv").read_text(encoding="utf-8")
+    assert (output.parent / "stdout.jsonl").read_text(encoding="utf-8").strip()
     assert database.read_processing_status()[digest]["scan_status"] == "success"
 
 
-def test_scanner_refuses_to_run_when_no_verification_flag_is_unavailable(monkeypatch, tmp_path):
+def test_scanner_refuses_to_run_when_results_flag_is_unavailable(monkeypatch, tmp_path):
     database, _ = make_workspace(tmp_path)
-    calls, _ = install_fakes(monkeypatch, b"", help_text="filesystem help --json --concurrency")
+    calls, _ = install_fakes(monkeypatch, b"", help_text="filesystem help --no-update --json --concurrency")
 
     scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
     summary = scanner.run()
@@ -233,9 +236,8 @@ def test_aggregate_csv_is_sanitized_and_has_expected_columns(monkeypatch, tmp_pa
         rows = list(csv.DictReader(handle))
     assert len(rows) == 1
     assert rows[0]["package_id"] == "org.example.app"
-    assert rows[0]["detector_name"] == "AWS"
-    assert rows[0]["verification"] == "disabled"
-    assert RAW_SECRET not in str(rows)
+    assert RAW_SECRET in rows[0]["finding_json"]
+    assert "ExtraData" in rows[0]["finding_json"]
 
 
 
@@ -307,7 +309,7 @@ def test_scanner_accepts_kong_style_negative_boolean_flag_syntax(monkeypatch, tm
         monkeypatch,
         b"",
         help_text=(
-            "filesystem --[no-]verification --[no-]update "
+            "filesystem --results=RESULTS --[no-]update "
             "--json --concurrency --fail-on-scan-errors"
         ),
     )

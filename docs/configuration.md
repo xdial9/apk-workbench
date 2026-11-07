@@ -110,7 +110,7 @@ The signed index and detached signature are stored in the application state dire
 | **analysis.timeout_seconds** | 7200 | Maximum TruffleHog execution time per APK |
 | **analysis.max_output_bytes** | 536870912 | Maximum captured scanner output (512 MiB) |
 
-TruffleHog runs with credential verification disabled. Do not weaken that behavior or its CLI capability checks.
+TruffleHog runs with credential verification enabled and `--results=verified`. Both complete JADX and Apktool output trees are scanned without endpoint or file-pattern exclusions. Each APK retains the complete emitted JSON finding objects in `trufflehog/findings.json`, a verified-only `findings-verified.json`, raw JSONL stdout, stderr, and the command/exit-status log. The aggregate verified-only view is written to `reports/findings-verified.csv`.
 
 ### External executables
 

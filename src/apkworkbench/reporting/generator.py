@@ -24,19 +24,8 @@ class ReportSummary:
     total_findings: int
 
 
-_FINDING_FIELDS = (
-    "fingerprint",
-    "detector_name",
-    "detector_type",
-    "decoder_name",
-    "file_path",
-    "line",
-    "verification",
-)
-
-
 class ReportGenerator:
-    """Generate individual reports using only explicitly allowlisted sanitized fields."""
+    """Generate reports while preserving complete scanner finding objects."""
 
     def __init__(self, database: WorkspaceDatabase, *, workspace: str | Path):
         self.database = database
@@ -52,23 +41,16 @@ class ReportGenerator:
             raise ReportingError(f"Unsafe version code in download history: {version_code!r}")
 
     @staticmethod
-    def _read_sanitized_findings(path: Path) -> list[dict[str, Any]]:
+    def _read_findings(path: Path) -> list[dict[str, Any]]:
         if not path.exists():
             return []
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise ReportingError(f"Cannot read sanitized findings at {path}: {exc}") from exc
+            raise ReportingError(f"Cannot read scanner findings at {path}: {exc}") from exc
         if not isinstance(data, list):
-            raise ReportingError(f"Sanitized findings at {path} must contain a JSON array.")
-        findings = []
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            # Never copy arbitrary scanner fields into reports: Raw, RawV2,
-            # Redacted, ExtraData, and StructuredData are intentionally excluded.
-            findings.append({field: item.get(field, "") for field in _FINDING_FIELDS})
-        return findings
+            raise ReportingError(f"Scanner findings at {path} must contain a JSON array.")
+        return [item for item in data if isinstance(item, dict)]
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
@@ -127,8 +109,8 @@ class ReportGenerator:
             f"<li>Apktool: {html.escape(str(status.get('apktool_status', 'pending')))}</li>",
             f"<li>TruffleHog: {html.escape(str(status.get('scan_status', 'pending')))}</li>",
             "</ul>",
-            f"<h2>Static analysis candidates ({len(findings)})</h2>",
-            "<p class='muted'>Credential verification was disabled. Findings are unverified indicators for manual review.</p>",
+            f"<h2>Verified TruffleHog findings ({len(findings)})</h2>",
+            "<p class='muted'>Credential verification was enabled. This report contains TruffleHog verified results only.</p>",
         ]
         if findings:
             parts.extend(
@@ -137,12 +119,16 @@ class ReportGenerator:
                 ]
             )
             for finding in findings:
+                source_metadata = finding.get("SourceMetadata")
+                source_data = source_metadata.get("Data") if isinstance(source_metadata, dict) else {}
+                filesystem = source_data.get("Filesystem") if isinstance(source_data, dict) else {}
+                filesystem = filesystem if isinstance(filesystem, dict) else {}
                 parts.append(
                     "<tr>"
-                    f"<td>{html.escape(str(finding.get('detector_name', '')))}</td>"
-                    f"<td><code>{html.escape(str(finding.get('file_path', '')))}</code></td>"
-                    f"<td>{html.escape(str(finding.get('line', '')))}</td>"
-                    f"<td><code>{html.escape(str(finding.get('fingerprint', '')))}</code></td>"
+                    f"<td>{html.escape(str(finding.get('DetectorName', '')))}</td>"
+                    f"<td><code>{html.escape(str(filesystem.get('file', '')))}</code></td>"
+                    f"<td>{html.escape(str(filesystem.get('line', '')))}</td>"
+                    f"<td><code>{html.escape(str(finding.get('DetectorType', '')))}</code></td>"
                     "</tr>"
                 )
             parts.append("</tbody></table>")
@@ -189,7 +175,7 @@ class ReportGenerator:
             except ValueError as exc:
                 raise ReportingError("Finding path resolves outside the results workspace.") from exc
             findings = (
-                self._read_sanitized_findings(findings_path)
+                self._read_findings(findings_path)
                 if status.get("scan_status") == "success"
                 else []
             )
@@ -213,7 +199,7 @@ class ReportGenerator:
                 "schema_version": 1,
                 "artifact": artifact,
                 "processing": processing,
-                "analysis": {"verification": "disabled", "finding_count": len(findings)},
+                "analysis": {"verification": "enabled", "result_selection": "verified", "finding_count": len(findings)},
                 "findings": findings,
             }
             output_dir = self.reports_root / package_id / version_code / digest
