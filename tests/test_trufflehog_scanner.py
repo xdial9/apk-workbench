@@ -58,10 +58,10 @@ def result_json(raw=RAW_SECRET):
 def make_workspace(tmp_path: Path):
     database = WorkspaceDatabase(tmp_path)
     database.ensure()
+    digest = hashlib.sha256(b"downloaded apk").hexdigest()
     apk = tmp_path / "downloads/org.example.app/7" / digest / "app.apk"
     apk.parent.mkdir(parents=True, exist_ok=True)
     apk.write_bytes(b"downloaded apk")
-    digest = hashlib.sha256(b"downloaded apk").hexdigest()
     database.append_history(
         {
             "sha256": digest,
