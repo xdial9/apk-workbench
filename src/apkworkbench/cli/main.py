@@ -573,6 +573,40 @@ def run(
 
 
 @main.command()
+@click.option("--run-id", required=True, type=str, help="Frozen acquisition run ID to reconcile.")
+@_workspace_locked
+def reconcile(run_id: str) -> None:
+    """Report the terminal outcome of every item in a frozen acquisition manifest."""
+    database = WorkspaceDatabase(Config().get("workspace"))
+    try:
+        result = database.reconcile_run(run_id)
+    except DatabaseError as exc:
+        click.echo(f"Reconciliation unavailable: {exc}", err=True)
+        raise click.exceptions.Exit(1) from exc
+
+    click.echo(BANNER)
+    click.echo(f"RUN RECONCILIATION: {run_id}")
+    click.echo(f"  Manifest items: {result['total']}")
+    click.echo(f"  Complete: {result['complete']}")
+    for outcome, count in result["counts"].items():
+        click.echo(f"  {outcome}: {count}")
+
+    unresolved = [item for item in result["items"] if item["status"] != "complete"]
+    if unresolved:
+        click.echo("UNRESOLVED ITEMS")
+        for item in unresolved:
+            click.echo(
+                f"  {item['package_id']} {item['version_code']} "
+                f"[{item['sha256'][:12]}]: {item['status']}"
+            )
+            if item["detail"]:
+                click.echo(f"    {item['detail']}")
+        raise click.exceptions.Exit(1)
+
+    click.echo("All manifest items have a complete terminal outcome.")
+
+
+@main.command()
 def version() -> None:
     """Print the installed package version."""
     click.echo(__version__)
