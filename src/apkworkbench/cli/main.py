@@ -1,6 +1,4 @@
 """APK Workbench command-line entry point."""
-from __future__ import annotations
-
 import click
 
 from apkworkbench import __version__
