@@ -45,15 +45,17 @@ class TruffleHogScanner:
         workspace: str | Path,
         executable: str = "trufflehog",
         timeout_seconds: int = 7200,
+        max_output_bytes: int = 512 * 1024 * 1024,
         logger: logging.Logger | None = None,
     ):
-        if timeout_seconds < 1:
-            raise ValueError("timeout_seconds must be positive")
+        if timeout_seconds < 1 or max_output_bytes < 1:
+            raise ValueError("timeout_seconds and max_output_bytes must be positive")
         self.database = database
         self.workspace = Path(workspace).expanduser().resolve()
         self.results_root = self.workspace / "results"
         self.executable = executable
         self.timeout_seconds = timeout_seconds
+        self.max_output_bytes = max_output_bytes
         self.logger = logger or logging.getLogger("apkworkbench.analysis")
         self._help_checked = False
 
@@ -172,42 +174,20 @@ class TruffleHogScanner:
         findings: list[dict[str, Any]] = []
         fingerprints: set[str] = set()
         parse_error = False
-        process = None
-        with tempfile.TemporaryFile(mode="w+b") as stderr_file:
+        with (
+            tempfile.TemporaryFile(mode="w+b") as stdout_file,
+            tempfile.TemporaryFile(mode="w+b") as stderr_file,
+        ):
             try:
                 process = subprocess.Popen(
                     command,
-                    stdout=subprocess.PIPE,
+                    stdout=stdout_file,
                     stderr=stderr_file,
                 )
             except OSError as exc:
                 raise AnalysisError(f"Could not start TruffleHog: {exc}") from exc
 
-            if process.stdout is None:
-                process.kill()
-                process.wait()
-                raise AnalysisError("TruffleHog stdout pipe was not created.")
-
             try:
-                for raw_line in process.stdout:
-                    if len(raw_line) > 2 * 1024 * 1024:
-                        parse_error = True
-                        continue
-                    if not raw_line.strip():
-                        continue
-                    try:
-                        item = json.loads(raw_line.decode("utf-8"))
-                    except (UnicodeDecodeError, json.JSONDecodeError):
-                        parse_error = True
-                        continue
-                    if not isinstance(item, dict):
-                        parse_error = True
-                        continue
-                    finding = self._sanitize_finding(item)
-                    if finding is None or finding["fingerprint"] in fingerprints:
-                        continue
-                    fingerprints.add(finding["fingerprint"])
-                    findings.append(finding)
                 return_code = process.wait(timeout=self.timeout_seconds)
             except subprocess.TimeoutExpired as exc:
                 process.kill()
@@ -215,8 +195,33 @@ class TruffleHogScanner:
                 raise AnalysisError(
                     f"TruffleHog exceeded the {self.timeout_seconds}-second timeout."
                 ) from exc
-            finally:
-                process.stdout.close()
+
+            stdout_file.flush()
+            output_size = stdout_file.tell()
+            if output_size > self.max_output_bytes:
+                raise AnalysisError(
+                    f"TruffleHog JSON output exceeded the {self.max_output_bytes}-byte limit."
+                )
+            stdout_file.seek(0)
+            for raw_line in stdout_file:
+                if len(raw_line) > 2 * 1024 * 1024:
+                    parse_error = True
+                    continue
+                if not raw_line.strip():
+                    continue
+                try:
+                    item = json.loads(raw_line.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    parse_error = True
+                    continue
+                if not isinstance(item, dict):
+                    parse_error = True
+                    continue
+                finding = self._sanitize_finding(item)
+                if finding is None or finding["fingerprint"] in fingerprints:
+                    continue
+                fingerprints.add(finding["fingerprint"])
+                findings.append(finding)
 
         if parse_error:
             raise AnalysisError("TruffleHog emitted malformed or oversized JSON output; results were not published.")
