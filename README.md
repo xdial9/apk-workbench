@@ -119,9 +119,12 @@ All five required executables—GnuPG, Java, JADX, Apktool, and TruffleHog—mus
 
 ~~~bash
 apkworkbench discover --limit 20
+apkworkbench discover --refresh-index
 ~~~
 
 The client retrieves the F-Droid signing key, signed index, and detached signature over HTTPS. It checks the imported OpenPGP primary fingerprint and verifies the detached signature **before parsing any index metadata**.
+
+The signed index and detached signature are cached under **~/.local/state/apkworkbench/fdroid-cache/** for six hours by default. Cached data is cryptographically re-verified on every use. Use **--refresh-index** with **discover**, **download**, or **run** to bypass the cache and retrieve a fresh signed copy.
 
 A successful discovery reports **Index signature: VERIFIED**. Progress messages show the active retrieval phase and index byte counts. Discovery does not download APKs.
 
@@ -158,6 +161,7 @@ apkworkbench version
 apkworkbench discover
 apkworkbench discover --limit 50
 apkworkbench discover --package org.example.app
+apkworkbench discover --refresh-index
 ~~~
 
 The limit controls display count only. Package filtering is an exact Android application ID match.
@@ -213,6 +217,7 @@ apkworkbench run --apk-count 3
 apkworkbench run --apk-count 25
 apkworkbench run --apk-count 10 --package org.example.app
 apkworkbench run --apk-count 10 --force-decompile --force-analyze
+apkworkbench run --apk-count 10 --refresh-index
 ~~~
 
 | Option | Purpose |

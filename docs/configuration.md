@@ -29,6 +29,7 @@ sources:
     timeout_seconds: 30
     max_index_bytes: 134217728
     max_signature_bytes: 1048576
+    cache_ttl_seconds: 21600
     max_key_bytes: 2097152
     download_timeout_seconds: 60
 
@@ -88,10 +89,11 @@ The application's GPG home is separate from the user's personal keyring.
 | **sources.fdroid.timeout_seconds** | 30 | HTTP request timeout |
 | **sources.fdroid.max_index_bytes** | 134217728 | Maximum index response size (128 MiB) |
 | **sources.fdroid.max_signature_bytes** | 1048576 | Maximum signature response size (1 MiB) |
+| **sources.fdroid.cache_ttl_seconds** | 21600 | Signed-index cache lifetime (six hours); 0 disables cache use |
 | **sources.fdroid.max_key_bytes** | 2097152 | Maximum key response size (2 MiB) |
 | **sources.fdroid.download_timeout_seconds** | 60 | Timeout for an APK download |
 
-The HTTP client requires HTTPS, rejects redirects, and enforces response-size limits. The pinned fingerprint—not the keyserver URL—defines the expected signing identity.
+ The signed index and detached signature are stored in the application state directory with restrictive permissions. The detached signature is checked again on every cache hit. Use **--refresh-index** with **discover**, **download**, or **run** to force network retrieval.The HTTP client requires HTTPS, rejects redirects, and enforces response-size limits. The pinned fingerprint—not the keyserver URL—defines the expected signing identity.
 
 ### Decompilation
 

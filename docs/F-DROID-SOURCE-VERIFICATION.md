@@ -66,7 +66,15 @@ Relevant configured defaults:
 | Public-key maximum | 2 MiB |
 | HTTP timeout | 30 seconds |
 
-## 04 · Index data model
+## 04 · Authenticated index cache
+
+The signed index and detached signature are cached in the application state directory under **fdroid-cache/**. The default lifetime is 21,600 seconds (six hours), configurable with **sources.fdroid.cache_ttl_seconds**.
+
+On every cache hit, the client reads bounded local files and re-verifies the detached signature against the configured pinned primary fingerprint before returning index bytes to the parser. Missing, expired, malformed, or invalid cached material is never trusted; the client retrieves a fresh key/index/signature set and verifies the network response before caching it.
+
+Use **--refresh-index** with **discover**, **download**, or **run** to force a new network retrieval. Setting the cache TTL to 0 disables cache use.
+
+## 05 · Index data model## 04 · Index data model
 
 The root JSON object contains a **packages** mapping keyed by Android package ID. A package record contains metadata and a **versions** mapping.
 
@@ -85,7 +93,7 @@ Version mapping keys are not assumed to be version codes. The parser operates on
 
 The APK signing certificate and repository-index OpenPGP key are different identities. The former is package-signing metadata; the latter authenticates the repository index.
 
-## 05 · Artifact verification
+## 06 · Artifact verification
 
 The index's expected SHA-256 and file size are carried into the frozen run manifest. The downloader:
 
@@ -98,7 +106,7 @@ The index's expected SHA-256 and file size are carried into the frozen run manif
 
 Every artifact is re-hashed before decompilation. An APK that changes after acquisition is rejected before it is passed to JADX or Apktool.
 
-## 06 · Batch identity and processing scope
+## 07 · Batch identity and processing scope
 
 Each acquisition invocation publishes an immutable UUID run manifest before the first download. It records selected package/version identities, download URLs, expected size and SHA-256, selection order, and the digest of the authenticated index.
 
@@ -106,7 +114,7 @@ The **run** command passes this manifest ID to decompilation and analysis. Only 
 
 Standalone **decompile** and **analyze** commands without **--run-id** remain available for intentional workspace-wide processing.
 
-## 07 · Security boundaries and limitations
+## 08 · Security boundaries and limitations
 
 - HTTPS protects transport.
 - The pinned OpenPGP signature authenticates the repository index.
@@ -118,7 +126,7 @@ Standalone **decompile** and **analyze** commands without **--run-id** remain av
 
 APK WORKBENCH does not install or execute acquired APKs. Treat APKs and all generated decompiler output as untrusted input.
 
-## 08 · Official references
+## 09 · Official references
 
 - F-Droid, All our APIs: https://f-droid.org/en/docs/All_our_APIs/
 - F-Droid, Release Channels and Signing Keys: https://f-droid.org/en/docs/Release_Channels_and_Signing_Keys/

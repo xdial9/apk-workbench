@@ -44,14 +44,16 @@ apkworkbench discover
 apkworkbench discover --limit 50
 apkworkbench discover --package org.example.app
 apkworkbench discover --package org.example.app --limit 5
+apkworkbench discover --refresh-index
 ~~~
 
 | Option | Default | Meaning |
 |---|---:|---|
 | **--limit INTEGER** | 20 | Maximum package records displayed; 0 displays none |
+| **--refresh-index** | off | Bypass local cache and retrieve a fresh signed index |
 | **--package TEXT** | — | Exact Android application ID filter |
 
-Discovery does not download APK files. Success reports the signer fingerprint, index digest, record counts, and **Index signature: VERIFIED**.
+The authenticated index and detached signature are cached for six hours by default. The signature is re-verified on every cache hit. Discovery does not download APK files. Success reports the signer fingerprint, index digest, record counts, and **Index signature: VERIFIED**.
 
 ## 03 · download
 
@@ -59,11 +61,13 @@ Discovery does not download APK files. Success reports the signer fingerprint, i
 apkworkbench download
 apkworkbench download --apk-count 3
 apkworkbench download --apk-count 5 --package org.example.app
+apkworkbench download --apk-count 10 --refresh-index
 ~~~
 
 | Option | Default | Meaning |
 |---|---:|---|
 | **--apk-count INTEGER** | 10 | Number of new unique APK binaries to select; minimum 1 |
+| **--refresh-index** | off | Bypass local cache and retrieve a fresh signed index |
 | **--package TEXT** | — | Restrict selection to one exact package ID |
 
 Previously acquired SHA-256 hashes and duplicates in the current selection are excluded. A frozen manifest is atomically published before downloads begin. It records selection order, package/version identity, expected size and digest, source URL, and authenticated index digest.
@@ -145,6 +149,7 @@ apkworkbench run --apk-count 3
 apkworkbench run --apk-count 10 --package org.example.app
 apkworkbench run --apk-count 25
 apkworkbench run --apk-count 10 --force-decompile --force-analyze
+apkworkbench run --apk-count 10 --refresh-index
 ~~~
 
 | Option | Default | Meaning |
@@ -152,6 +157,7 @@ apkworkbench run --apk-count 10 --force-decompile --force-analyze
 | **--apk-count INTEGER** | 10 | New unique APK binaries to select; minimum 1 |
 | **--package TEXT** | — | Exact package ID filter for acquisition |
 | **--force-decompile** | off | Repeat successful decompilation for this batch |
+| **--refresh-index** | off | Bypass local cache and retrieve a fresh signed index |
 | **--force-analyze** | off | Repeat successful scans for this batch |
 
 Pipeline stages:

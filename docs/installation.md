@@ -164,6 +164,12 @@ Index signature: VERIFIED
 
 The repository client retrieves the pinned signing key, signed index, and detached signature. It checks the imported primary fingerprint and verifies the detached signature before parsing JSON.
 
+The signed index and detached signature are cached under **~/.local/state/apkworkbench/fdroid-cache/** for six hours by default. The signature is re-verified every time cached data is used. To bypass the cache and retrieve a fresh signed copy, run:
+
+~~~bash
+apkworkbench discover --refresh-index
+~~~
+
 The CLI reports the retrieval phase and index byte counts. Signature failures are fatal. Do not remove or weaken the fingerprint pin.
 
 ## 10 · Run the first end-to-end batch
