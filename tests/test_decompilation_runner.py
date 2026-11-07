@@ -84,7 +84,7 @@ def install_fake_popen(monkeypatch, behavior):
 
 
 def successful_tool(command, kwargs, text="decompiled output"):
-    kwargs["stdout"].write(f"{command[0]} output\\n".encode())
+    kwargs["stdout"].write(f"{command[0]} output\n".encode())
     destination = output_path(command)
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "fixture.txt").write_text(text, encoding="utf-8")
