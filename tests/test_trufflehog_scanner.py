@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from apkworkbench.analysis.trufflehog import AnalysisError, TruffleHogScanner
+from apkworkbench.analysis.trufflehog import TruffleHogScanner
 from apkworkbench.database.workspace import WorkspaceDatabase
 
 
@@ -172,9 +172,9 @@ def test_scanner_refuses_to_run_when_no_verification_flag_is_unavailable(monkeyp
     calls, _ = install_fakes(monkeypatch, b"", help_text="filesystem help --json --concurrency")
 
     scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
-    with pytest.raises(AnalysisError, match="--no-verification"):
-        scanner.run()
+    summary = scanner.run()
 
+    assert summary.failed == 1
     assert [entry[0] for entry in calls] == ["help"]
     assert not (tmp_path / "results/org.example.app/7/trufflehog/findings.json").exists()
 
