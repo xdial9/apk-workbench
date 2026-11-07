@@ -547,12 +547,29 @@ def run(
                     "continuing with eligible artifacts from this run."
                 )
 
+    run_id = context.meta.get("apkworkbench_run_id")
+    if run_id:
+        try:
+            reconciliation = WorkspaceDatabase(Config().get("workspace")).reconcile_run(run_id)
+        except DatabaseError as exc:
+            click.echo(f"RUN RECONCILIATION FAILED: {exc}", err=True)
+            stages_with_issues.append("reconciliation")
+        else:
+            click.echo("\nRUN RECONCILIATION")
+            for outcome, count in reconciliation["counts"].items():
+                click.echo(f"  {outcome}: {count}")
+            total = int(reconciliation["total"])
+            complete = int(reconciliation["complete"])
+            click.echo(f"  Final accounting: {complete}/{total} artifacts complete.")
+            if complete != total:
+                stages_with_issues.append("reconciliation")
+
     click.echo("\nFULL PIPELINE SUMMARY")
     if stages_with_issues:
         click.echo("Stages requiring attention: " + ", ".join(stages_with_issues))
         click.echo("Review 'apkworkbench status' and the per-artifact logs.")
         raise click.exceptions.Exit(1)
-    click.echo("All pipeline stages completed without reported errors.")
+    click.echo("All pipeline stages completed and every manifest item is accounted for.")
 
 
 @main.command()
