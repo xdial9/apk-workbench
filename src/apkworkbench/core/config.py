@@ -63,7 +63,9 @@ class Config:
                     "max_key_bytes": 2097152,
                 },
             },
-            "decompilation": {"timeout_seconds": 3600},\n            "analysis": {"timeout_seconds": 7200},\n            "tools": {
+            "decompilation": {"timeout_seconds": 3600},
+            "analysis": {"timeout_seconds": 7200},
+            "tools": {
                 "gpg": "gpg",
                 "java": "java",
                 "jadx": "jadx",
