@@ -514,7 +514,7 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
 )
 @_workspace_locked
 def analyze(limit: int, force: bool, run_id: str | None) -> None:
-    """Scan usable full or partial decompilations locally; verification is disabled."""
+    """Scan usable full or partial decompilations and retain verified findings."""
     config = Config()
     logger = setup_logging(config)
     database = WorkspaceDatabase(config.get("workspace"))
@@ -527,7 +527,7 @@ def analyze(limit: int, force: bool, run_id: str | None) -> None:
         logger=logger,
     )
     click.echo(BANNER)
-    click.echo("Starting local TruffleHog analysis with credential verification disabled.")
+    click.echo("Starting TruffleHog analysis with verified-result selection (--results=verified).")
     try:
         summary = scanner.run(limit=limit or None, force=force, run_id=run_id)
     except (AnalysisError, DatabaseError, OSError, ValueError) as exc:
