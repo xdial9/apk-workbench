@@ -223,6 +223,11 @@ class GooglePlaySource:
         certificates = certificate_hashes(doc)
         signer_sha256 = tuple(sorted({sha256 for _sha1, sha256 in certificates}))
         raw_files = play_download.play_files(package_id, delivery)
+        base_file = next((item for item in raw_files if item.name == "base.apk"), None)
+        if base_file is None or not base_file.url:
+            raise GooglePlayUnavailableError(
+                f"Google Play has no downloadable delivery for {package_id} on this device profile."
+            )
         files: list[PlayFile] = []
         for item in raw_files:
             name = str(item.name)
@@ -230,6 +235,8 @@ class GooglePlaySource:
                 raise GooglePlayError(f"Google Play returned an unsafe bundle filename: {name!r}")
             if not (name.endswith((".apk", ".obb"))):
                 raise GooglePlayError(f"Google Play returned an unsupported bundle component: {name!r}")
+            if not item.url:
+                raise GooglePlayError(f"Google Play delivery omitted the download URL for {name}")
             algorithm, expected = item.expected_digest()
             if name.endswith(".apk") and algorithm != "sha256":
                 raise GooglePlayError(f"Play did not provide a SHA-256 hash for APK component {name}")

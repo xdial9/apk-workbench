@@ -70,6 +70,19 @@ def test_inspect_captures_play_delivery_hashes(monkeypatch):
     assert all(len(item.sha256) == 64 for item in plan.files)
 
 
+def test_inspect_skips_apps_without_a_device_compatible_play_delivery(monkeypatch):
+    base = FakePlayFile("base.apk", b"base bytes")
+    base.url = ""
+    monkeypatch.setattr(gp.play_download, "play_files", lambda _package, _delivery: [base])
+    source = gp.GooglePlaySource()
+    source._call = lambda operation: operation(
+        SimpleNamespace(app_delivery=lambda _package, _version=None: (_doc(), object()))
+    )
+
+    with pytest.raises(gp.GooglePlayUnavailableError, match="no downloadable delivery"):
+        source.inspect("com.example.app")
+
+
 def test_download_preserves_and_verifies_base_split_and_obb(monkeypatch, tmp_path):
     payloads = {
         "base.apk": b"base apk",
