@@ -17,7 +17,7 @@ git clone https://github.com/xdial9/apk-workbench.git
 cd apk-workbench
 
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip gnupg openjdk-21-jre-headless curl unzip
+sudo apt install -y git python3 python3-venv python3-pip gnupg default-jre-headless curl unzip
 
 python3 -m venv .venv
 source .venv/bin/activate
