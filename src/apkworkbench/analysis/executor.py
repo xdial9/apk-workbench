@@ -57,6 +57,7 @@ def _result_payload(result: AnalyzerResult) -> dict[str, Any]:
                 "rule_id": finding.rule_id,
                 "rule_version": finding.rule_version,
                 "dedup_key": finding.dedup_key,
+                "raw_data": dict(finding.raw_data),
                 "evidence": [
                     {
                         "evidence_kind": evidence.evidence_kind,
