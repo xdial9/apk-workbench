@@ -180,3 +180,20 @@ def test_registry_can_plan_from_analyzer_context():
     assert len(registry.plan_for_context(context)) == 0
     plan = registry.plan_for_context(context, requested_ids=["manifest"])
     assert plan[0].definition.analyzer_id == "manifest"
+
+
+def test_default_plan_skips_analyzers_without_matching_input_or_capabilities():
+    registry = AnalyzerRegistry()
+    registry.register(FixtureAnalyzer("apk-default", default_enabled=True))
+    registry.register(FixtureAnalyzer("dex-default", default_enabled=True, kinds=("dex",)))
+    registry.register(
+        FixtureAnalyzer(
+            "capability-default",
+            default_enabled=True,
+            required=("decoded_manifest",),
+        )
+    )
+
+    plan = registry.plan(input_kind="apk")
+
+    assert [item.definition.analyzer_id for item in plan] == ["apk-default"]
