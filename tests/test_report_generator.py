@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import pytest
+import shutil
 from pathlib import Path
 
 from apkworkbench.database.workspace import WorkspaceDatabase
@@ -132,7 +134,6 @@ def test_report_generator_rejects_results_root_symlink_escape(tmp_path):
     results = tmp_path / "results"
     for child in results.iterdir():
         if child.is_dir():
-            import shutil
             shutil.rmtree(child)
         else:
             child.unlink()
@@ -148,6 +149,7 @@ def test_report_generator_rejects_results_root_symlink_escape(tmp_path):
 def test_report_generator_rejects_reports_root_symlink_escape(tmp_path):
     database = setup_workspace(tmp_path)
     reports = tmp_path / "reports"
+    reports.mkdir()
     reports.rmdir()
     outside = tmp_path / "outside-reports"
     outside.mkdir()
