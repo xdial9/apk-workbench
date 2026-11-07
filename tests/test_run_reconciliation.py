@@ -194,3 +194,42 @@ def test_manifest_reader_rejects_package_path_injection(tmp_path):
 
     with pytest.raises(DatabaseError, match="invalid package ID"):
         database.read_manifest(RUN_ID)
+
+
+def test_reconcile_preserves_partial_decompilation_warning_after_analysis(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+    awaiting = manifest_row(11)
+    complete = manifest_row(12)
+    database.write_manifest(RUN_ID, [awaiting, complete])
+    add_history(database, awaiting)
+    add_processing(
+        database,
+        awaiting,
+        jadx="partial",
+        apktool="success",
+        scan="pending",
+        error="JADX completed with errors; partial output retained.",
+    )
+    add_history(database, complete)
+    add_processing(
+        database,
+        complete,
+        jadx="partial",
+        apktool="success",
+        scan="success",
+        error="JADX completed with errors; partial output retained.",
+    )
+    findings = (
+        tmp_path / "results" / complete["package_id"] / "1"
+        / complete["sha256"] / "trufflehog" / "findings.json"
+    )
+    findings.parent.mkdir(parents=True, exist_ok=True)
+    findings.write_text("[]", encoding="utf-8")
+
+    result = database.reconcile_run(RUN_ID)
+
+    assert result["complete"] == 0
+    assert result["counts"] == {
+        "awaiting_analysis_with_decompilation_warnings": 1,
+        "complete_with_decompilation_warnings": 1,
+    }
