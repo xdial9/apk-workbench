@@ -222,14 +222,15 @@ class ReportGenerator:
             }
             output_dir = self.reports_root / package_id / version_code / digest
             try:
-                output_dir.mkdir(parents=True, exist_ok=True)
-                output_dir.resolve(strict=True).relative_to(self.reports_root)
-                if any(part.is_symlink() for part in (
+                output_components = (
                     self.reports_root / package_id,
                     self.reports_root / package_id / version_code,
                     output_dir,
-                )):
+                )
+                if any(part.is_symlink() for part in output_components):
                     raise ValueError("symlinked report output component")
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_dir.resolve(strict=True).relative_to(self.reports_root)
             except (OSError, ValueError) as exc:
                 raise ReportingError(
                     f"Report output path escapes or aliases the reports workspace: {output_dir}"
