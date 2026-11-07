@@ -1,5 +1,7 @@
 # APK WORKBENCH
 
+[![Tests](https://github.com/xdial9/apk-workbench/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/xdial9/apk-workbench/actions/workflows/tests.yml) [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 **DISCOVER · DOWNLOAD · DECOMPILE · ANALYZE · CATALOGUE**
 
 A Linux-native Python command-line workbench for acquiring Android APKs from F-Droid, verifying artifact integrity, decompiling with JADX and Apktool, scanning local decompilation output with TruffleHog, and producing sanitized reports.
