@@ -1,6 +1,9 @@
 """Strict parser for authenticated F-Droid index-v2 JSON.
 
 Callers must verify the detached OpenPGP signature before passing index bytes here.
+F-Droid index-v2 maps each package version entry by the APK's SHA-256, not
+by versionCode. APK file names are repository-root-relative and commonly
+begin with one leading slash.
 """
 from __future__ import annotations
 
@@ -54,25 +57,54 @@ class FdroidIndexParser:
             (parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "")
         )
 
-    def _download_url(self, repository_path: str) -> str:
+    @staticmethod
+    def _normalize_repository_path(repository_path: str) -> str:
         parsed = urlsplit(repository_path)
+        raw_path = parsed.path
         if (
             parsed.scheme
             or parsed.netloc
             or parsed.query
             or parsed.fragment
-            or parsed.path.startswith("/")
-            or "\\" in parsed.path
-            or "%" in parsed.path
-            or any(ord(char) < 32 or ord(char) == 127 for char in parsed.path)
+            or raw_path.startswith("//")
+            or "\\" in raw_path
+            or "%" in raw_path
+            or any(ord(char) < 32 or ord(char) == 127 for char in raw_path)
         ):
-            raise FdroidIndexError(f"Unsafe repository artifact path: {repository_path!r}")
-        path = parsed.path
+            raise FdroidIndexError(
+                f"Unsafe repository artifact path: {repository_path!r}"
+            )
+
+        # index-v2 file names are root-relative; F-Droid normally serializes
+        # these with exactly one leading slash (e.g. /org.example_123.apk).
+        path = raw_path[1:] if raw_path.startswith("/") else raw_path
         parts = path.split("/")
         if not path or any(part in {"", ".", ".."} for part in parts):
-            raise FdroidIndexError(f"Unsafe repository artifact path: {repository_path!r}")
+            raise FdroidIndexError(
+                f"Unsafe repository artifact path: {repository_path!r}"
+            )
+        return path
+
+    def _download_url(self, repository_path: str) -> str:
+        path = self._normalize_repository_path(repository_path)
         encoded_path = quote(path, safe="/-._~")
         return f"{self.repository_url}/{encoded_path}"
+
+    @staticmethod
+    def _localized_name(value: Any) -> str | None:
+        if isinstance(value, str):
+            return value
+        if not isinstance(value, dict):
+            return None
+        for locale in ("en-US", "en"):
+            localized = value.get(locale)
+            if isinstance(localized, str) and localized:
+                return localized
+        for locale in sorted(value):
+            localized = value[locale]
+            if isinstance(localized, str) and localized:
+                return localized
+        return None
 
     @staticmethod
     def _signer_fingerprints(manifest: dict[str, Any]) -> tuple[str, ...]:
@@ -114,17 +146,23 @@ class FdroidIndexParser:
             metadata = package.get("metadata", {})
             if not isinstance(metadata, dict):
                 raise FdroidIndexError(f"Package {package_id} metadata must be an object.")
-            app_name = metadata.get("name")
-            if not isinstance(app_name, str):
-                app_name = None
+            app_name = self._localized_name(metadata.get("name"))
 
             for version_key, version in versions.items():
+                if not isinstance(version_key, str) or not _SHA256_RE.fullmatch(version_key):
+                    raise FdroidIndexError(
+                        f"Package {package_id} version map key must be an APK SHA-256."
+                    )
                 if not isinstance(version, dict):
-                    raise FdroidIndexError(f"Package {package_id} version {version_key} is malformed.")
+                    raise FdroidIndexError(
+                        f"Package {package_id} version {version_key} is malformed."
+                    )
                 file_info = version.get("file")
                 manifest = version.get("manifest")
                 if not isinstance(file_info, dict) or not isinstance(manifest, dict):
-                    raise FdroidIndexError(f"Package {package_id} version {version_key} lacks file/manifest.")
+                    raise FdroidIndexError(
+                        f"Package {package_id} version {version_key} lacks file/manifest."
+                    )
                 repository_path = file_info.get("name")
                 digest = file_info.get("sha256")
                 size = file_info.get("size")
@@ -133,30 +171,42 @@ class FdroidIndexParser:
                 if not isinstance(repository_path, str):
                     raise FdroidIndexError(f"Package {package_id} has no artifact path.")
                 if not isinstance(digest, str) or not _SHA256_RE.fullmatch(digest):
-                    raise FdroidIndexError(f"Package {package_id} has an invalid APK SHA-256.")
+                    raise FdroidIndexError(
+                        f"Package {package_id} has an invalid APK SHA-256."
+                    )
+                if version_key.lower() != digest.lower():
+                    raise FdroidIndexError(
+                        f"Package {package_id} version map key does not match file SHA-256."
+                    )
                 if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
                     raise FdroidIndexError(f"Package {package_id} has an invalid APK size.")
                 if isinstance(raw_version_code, bool):
-                    raise FdroidIndexError(f"Package {package_id} has an invalid versionCode.")
+                    raise FdroidIndexError(
+                        f"Package {package_id} has an invalid versionCode."
+                    )
                 try:
                     version_code = int(raw_version_code)
-                    key_version_code = int(version_key)
                 except (TypeError, ValueError) as exc:
-                    raise FdroidIndexError(f"Package {package_id} has an invalid versionCode.") from exc
-                if version_code < 0 or key_version_code != version_code:
                     raise FdroidIndexError(
-                        f"Package {package_id} version key and manifest versionCode do not match."
+                        f"Package {package_id} has an invalid versionCode."
+                    ) from exc
+                if version_code < 0:
+                    raise FdroidIndexError(
+                        f"Package {package_id} has a negative versionCode."
                     )
                 if version_name is not None and not isinstance(version_name, str):
-                    raise FdroidIndexError(f"Package {package_id} has an invalid versionName.")
+                    raise FdroidIndexError(
+                        f"Package {package_id} has an invalid versionName."
+                    )
 
+                normalized_path = self._normalize_repository_path(repository_path)
                 artifacts.append(
                     FdroidArtifact(
                         package_id=package_id,
                         version_code=version_code,
                         version_name=version_name,
                         app_name=app_name,
-                        repository_path=repository_path,
+                        repository_path=normalized_path,
                         download_url=self._download_url(repository_path),
                         sha256=digest.lower(),
                         size=size,
