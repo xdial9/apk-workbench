@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from apkworkbench.database.workspace import WorkspaceDatabase
-from apkworkbench.reporting.generator import ReportGenerator
+from apkworkbench.reporting.generator import ReportGenerator, ReportingError
 
 
 def setup_workspace(tmp_path: Path):
@@ -125,3 +125,33 @@ def test_previous_findings_are_hidden_when_latest_scan_failed(tmp_path):
     )
     assert parsed["findings"] == []
     assert parsed["processing"]["scan_status"] == "failed"
+
+
+def test_report_generator_rejects_results_root_symlink_escape(tmp_path):
+    database = setup_workspace(tmp_path)
+    results = tmp_path / "results"
+    for child in results.iterdir():
+        if child.is_dir():
+            import shutil
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    results.rmdir()
+    outside = tmp_path / "outside-results"
+    outside.mkdir()
+    results.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ReportingError, match="results directory resolves outside"):
+        ReportGenerator(database, workspace=tmp_path).run()
+
+
+def test_report_generator_rejects_reports_root_symlink_escape(tmp_path):
+    database = setup_workspace(tmp_path)
+    reports = tmp_path / "reports"
+    reports.rmdir()
+    outside = tmp_path / "outside-reports"
+    outside.mkdir()
+    reports.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ReportingError, match="reports directory resolves outside"):
+        ReportGenerator(database, workspace=tmp_path).run()
