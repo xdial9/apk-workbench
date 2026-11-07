@@ -95,7 +95,7 @@ def discover(package_id: str | None, limit: int) -> None:
     click.echo("Retrieving the F-Droid repository index and detached signature...")
 
     try:
-        _client, index_data, artifacts = _load_fdroid_artifacts(config)
+        client, index_data, artifacts = _load_fdroid_artifacts(config)
     except (FdroidRepositoryError, FdroidIndexError, KeyError, TypeError, ValueError) as exc:
         logger.error("F-Droid discovery failed: %s", exc)
         click.echo(f"Discovery failed: {exc}", err=True)
@@ -165,7 +165,7 @@ def download(apk_count: int, package_id: str | None) -> None:
     click.echo("Authenticating F-Droid index before selecting APKs...")
 
     try:
-        client, index_data, artifacts = _load_fdroid_artifacts(config)
+        _client, index_data, artifacts = _load_fdroid_artifacts(config)
         index_sha256 = hashlib.sha256(index_data).hexdigest()
         database = WorkspaceDatabase(config.get("workspace"))
         database.ensure()
