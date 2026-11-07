@@ -61,6 +61,8 @@ class Config:
                     "max_index_bytes": 134217728,
                     "max_signature_bytes": 1048576,
                     "max_key_bytes": 2097152,
+                    # Cached index bytes are re-verified against the pinned key on each use.
+                    "cache_ttl_seconds": 21600,
                 },
             },
             "decompilation": {"timeout_seconds": 3600},

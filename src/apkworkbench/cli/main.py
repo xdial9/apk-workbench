@@ -29,8 +29,8 @@ CO-DEVELOPED BY dial9 + ChatGPT
 SLOW. SIMPLE. SEQUENTIAL. VERIFIED."""
 
 
-def _load_fdroid_artifacts(config: Config):
-    """Retrieve, authenticate, and parse the configured F-Droid repository index."""
+def _load_fdroid_artifacts(config: Config, *, force_refresh: bool = False):
+    """Retrieve or reuse a re-verified F-Droid index, then parse authenticated bytes."""
     source = config.get("sources.fdroid", {})
     repository_url = str(source.get("repository_url", "https://f-droid.org/repo"))
     verifier = GpgVerifier(config)
@@ -45,7 +45,13 @@ def _load_fdroid_artifacts(config: Config):
         max_key_bytes=int(source.get("max_key_bytes", 2 * 1024 * 1024)),
         progress_callback=click.echo,
     )
-    index_data = client.fetch_verified_index()
+    state_dir = config.get("state_dir")
+    cache_dir = Path(state_dir).expanduser() / "fdroid-cache" if state_dir else None
+    index_data = client.fetch_verified_index(
+        cache_dir=cache_dir,
+        cache_ttl_seconds=int(source.get("cache_ttl_seconds", 21600)),
+        force_refresh=force_refresh,
+    )
     artifacts = FdroidIndexParser(repository_url).parse(index_data)
     return client, index_data, artifacts
 
@@ -91,7 +97,12 @@ def doctor() -> None:
     show_default=True,
     help="Maximum number of latest-per-package records to display; 0 displays none.",
 )
-def discover(package_id: str | None, limit: int) -> None:
+@click.option(
+    "--refresh-index",
+    is_flag=True,
+    help="Ignore the local index cache and retrieve a fresh signed index.",
+)
+def discover(package_id: str | None, limit: int, refresh_index: bool) -> None:
     """Fetch, authenticate, and summarize the official F-Droid index-v2."""
     config = Config()
     logger = setup_logging(config)
@@ -99,7 +110,7 @@ def discover(package_id: str | None, limit: int) -> None:
     click.echo("Retrieving the F-Droid repository index and detached signature...")
 
     try:
-        client, index_data, artifacts = _load_fdroid_artifacts(config)
+        client, index_data, artifacts = _load_fdroid_artifacts(config, force_refresh=refresh_index)
     except (FdroidRepositoryError, FdroidIndexError, KeyError, TypeError, ValueError) as exc:
         logger.error("F-Droid discovery failed: %s", exc)
         click.echo(f"Discovery failed: {exc}", err=True)
@@ -161,7 +172,12 @@ def discover(package_id: str | None, limit: int) -> None:
     default=None,
     help="Restrict selection to this exact Android application ID.",
 )
-def download(apk_count: int, package_id: str | None) -> None:
+@click.option(
+    "--refresh-index",
+    is_flag=True,
+    help="Ignore the local index cache and retrieve a fresh signed index.",
+)
+def download(apk_count: int, package_id: str | None, refresh_index: bool) -> None:
     """Select new APK binaries, freeze a run manifest, and download sequentially."""
     config = Config()
     logger = setup_logging(config)
@@ -170,7 +186,7 @@ def download(apk_count: int, package_id: str | None) -> None:
     click.echo("Authenticating F-Droid index before selecting APKs...")
 
     try:
-        _client, index_data, artifacts = _load_fdroid_artifacts(config)
+        _client, index_data, artifacts = _load_fdroid_artifacts(config, force_refresh=refresh_index)
         index_sha256 = hashlib.sha256(index_data).hexdigest()
         database = WorkspaceDatabase(config.get("workspace"))
         database.ensure()
@@ -459,11 +475,17 @@ def status() -> None:
 )
 @click.option("--force-decompile", is_flag=True, help="Re-run completed decompilations.")
 @click.option("--force-analyze", is_flag=True, help="Re-run successful TruffleHog scans.")
+@click.option(
+    "--refresh-index",
+    is_flag=True,
+    help="Ignore the local index cache and retrieve a fresh signed index.",
+)
 def run(
     apk_count: int,
     package_id: str | None,
     force_decompile: bool,
     force_analyze: bool,
+    refresh_index: bool,
 ) -> None:
     """Run discovery, acquisition, decompilation, analysis, and reporting in order."""
     context = click.get_current_context()
@@ -473,7 +495,7 @@ def run(
     click.echo("FULL SEQUENTIAL PIPELINE")
 
     for stage_name, command, kwargs in (
-        ("download", download, {"apk_count": apk_count, "package_id": package_id}),
+        ("download", download, {"apk_count": apk_count, "package_id": package_id, "refresh_index": refresh_index}),
         ("decompile", decompile, {"limit": 0, "force": force_decompile}),
         ("analyze", analyze, {"limit": 0, "force": force_analyze}),
         ("report", report, {}),

@@ -34,7 +34,8 @@ class StubRepositoryClient:
         self.signer_fingerprint = kwargs["signer_fingerprint"]
         self.kwargs = kwargs
 
-    def fetch_verified_index(self):
+    def fetch_verified_index(self, **kwargs):
+        self.fetch_kwargs = kwargs
         return b"authenticated-index-bytes"
 
 
@@ -110,7 +111,7 @@ def test_discover_stops_when_index_authentication_fails(monkeypatch):
     install_discovery_stubs(monkeypatch)
 
     class RejectingClient(StubRepositoryClient):
-        def fetch_verified_index(self):
+        def fetch_verified_index(self, **kwargs):
             from apkworkbench.sources.fdroid_repository import FdroidRepositoryError
 
             raise FdroidRepositoryError("invalid detached signature")
@@ -175,7 +176,7 @@ def install_download_stubs(monkeypatch, tmp_path, artifacts):
     config.workspace = tmp_path
     monkeypatch.setattr(cli, "Config", lambda: config)
     monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-download"))
-    monkeypatch.setattr(cli, "_load_fdroid_artifacts", lambda _config: (
+    monkeypatch.setattr(cli, "_load_fdroid_artifacts", lambda _config, **kwargs: (
         SimpleNamespace(signer_fingerprint="test"),
         b"authenticated index bytes",
         artifacts,

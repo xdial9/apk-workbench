@@ -181,3 +181,93 @@ def test_invalid_content_length_is_rejected():
 
     with pytest.raises(FdroidRepositoryError, match="Invalid Content-Length"):
         client.fetch_verified_index()
+
+
+
+def test_fresh_verified_cache_is_reused_and_signature_is_rechecked(tmp_path):
+    first_session = good_session()
+    first_client = make_client(first_session)
+    first = first_client.fetch_verified_index(
+        cache_dir=tmp_path / "cache",
+        cache_ttl_seconds=3600,
+    )
+
+    assert first == b'{"packages": {}}'
+    assert len(first_session.calls) == 3
+    cache_files = list((tmp_path / "cache").glob("*.index-v2.json*"))
+    assert len(cache_files) == 2
+    assert all(path.stat().st_mode & 0o777 == 0o600 for path in cache_files)
+    assert (tmp_path / "cache").stat().st_mode & 0o777 == 0o700
+
+    second_session = FakeSession([])
+    second_verifier = FakeVerifier()
+    second_client = make_client(second_session, second_verifier)
+    second = second_client.fetch_verified_index(
+        cache_dir=tmp_path / "cache",
+        cache_ttl_seconds=3600,
+    )
+
+    assert second == first
+    assert second_session.calls == []
+    assert second_verifier.verified_payload == (
+        b'{"packages": {}}',
+        b"-----BEGIN PGP SIGNATURE-----",
+    )
+
+
+def test_expired_cache_is_refreshed_from_the_repository(tmp_path):
+    import os
+    import time
+
+    make_client(good_session()).fetch_verified_index(
+        cache_dir=tmp_path / "cache",
+        cache_ttl_seconds=3600,
+    )
+
+    old_time = time.time() - 7200
+    for path in (tmp_path / "cache").glob("*.index-v2.json*"):
+        os.utime(path, (old_time, old_time))
+
+    fresh_session = good_session()
+    result = make_client(fresh_session).fetch_verified_index(
+        cache_dir=tmp_path / "cache",
+        cache_ttl_seconds=60,
+    )
+
+    assert result == b'{"packages": {}}'
+    assert len(fresh_session.calls) == 3
+
+
+def test_force_refresh_bypasses_a_valid_cache(tmp_path):
+    make_client(good_session()).fetch_verified_index(
+        cache_dir=tmp_path / "cache",
+        cache_ttl_seconds=3600,
+    )
+
+    session = good_session()
+    result = make_client(session).fetch_verified_index(
+        cache_dir=tmp_path / "cache",
+        cache_ttl_seconds=3600,
+        force_refresh=True,
+    )
+
+    assert result == b'{"packages": {}}'
+    assert len(session.calls) == 3
+
+
+def test_invalid_cached_signature_is_never_used_and_network_refresh_must_verify(tmp_path):
+    make_client(good_session()).fetch_verified_index(
+        cache_dir=tmp_path / "cache",
+        cache_ttl_seconds=3600,
+    )
+
+    session = good_session()
+    client = make_client(session, FakeVerifier(valid=False))
+
+    with pytest.raises(FdroidRepositoryError, match="signature is invalid"):
+        client.fetch_verified_index(
+            cache_dir=tmp_path / "cache",
+            cache_ttl_seconds=3600,
+        )
+
+    assert len(session.calls) == 3

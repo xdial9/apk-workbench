@@ -22,6 +22,7 @@ def make_stage_command(name, calls, *, exit_code=0):
         params = [
             click.Option(["--apk-count"], type=int),
             click.Option(["--package"], default=None),
+            click.Option(["--refresh-index"], is_flag=True),
         ]
     elif name in {"decompile", "analyze"}:
         params = [
@@ -70,7 +71,9 @@ def test_run_returns_success_when_all_stages_finish_without_errors(monkeypatch):
     monkeypatch.setattr(cli, "analyze", make_stage_command("analyze", calls))
     monkeypatch.setattr(cli, "report", make_stage_command("report", calls))
 
-    result = CliRunner().invoke(cli.main, ["run", "--apk-count", "1"])
+    result = CliRunner().invoke(
+        cli.main, ["run", "--apk-count", "1", "--refresh-index"]
+    )
 
     assert result.exit_code == 0, result.output
     assert [name for name, _kwargs in calls] == [
@@ -81,4 +84,5 @@ def test_run_returns_success_when_all_stages_finish_without_errors(monkeypatch):
     ]
     assert calls[1][1]["run_id"] == "run-123"
     assert calls[2][1]["run_id"] == "run-123"
+    assert calls[0][1]["refresh_index"] is True
     assert "All pipeline stages completed without reported errors." in result.output
