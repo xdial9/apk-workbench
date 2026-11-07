@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from ..database.workspace import WorkspaceDatabase, utc_now
 
@@ -73,7 +73,7 @@ class DecompilationRunner:
             raise DecompilationError(f"Acquired artifact is not a regular APK file: {apk_path}")
 
         expected_hash = row.get("sha256", "").lower()
-        if len(expected_hash) != 64:
+        if len(expected_hash) != 64 or any(char not in "0123456789abcdef" for char in expected_hash):
             raise DecompilationError("Download history contains a malformed SHA-256 digest.")
         actual_hash, actual_size = self._sha256(apk_path)
         if actual_hash != expected_hash:
@@ -89,7 +89,7 @@ class DecompilationRunner:
             )
         return apk_path
 
-    def _run_tool(self, command: list[str], log_path: Path, label: str) -> tuple[str, str]:
+    def _run_tool(self, command: list[str], log_path: Path, label: str) -> None:
         try:
             result = subprocess.run(
                 command,
@@ -98,33 +98,14 @@ class DecompilationRunner:
                 timeout=self.timeout_seconds,
                 check=False,
             )
-            stdout = result.stdout or ""
-            stderr = result.stderr or ""
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text(
-                f"COMMAND: {' '.join(command)}\n"
-                f"RETURN CODE: {result.returncode}\n"
-                "\n--- STDOUT ---\n"
-                f"{stdout}\n"
-                "\n--- STDERR ---\n"
-                f"{stderr}",
-                encoding="utf-8",
-                errors="replace",
-            )
-            if result.returncode != 0:
-                detail = (stderr or stdout).strip()[-2000:]
-                raise DecompilationError(
-                    f"{label} exited with status {result.returncode}. {detail}"
-                )
-            return stdout, stderr
         except subprocess.TimeoutExpired as exc:
-            output = exc.stdout or ""
-            error = exc.stderr or ""
+            stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_path.write_text(
                 f"COMMAND: {' '.join(command)}\n"
                 f"TIMEOUT AFTER: {self.timeout_seconds} seconds\n"
-                f"STDOUT: {output}\nSTDERR: {error}",
+                f"STDOUT: {stdout}\nSTDERR: {stderr}",
                 encoding="utf-8",
                 errors="replace",
             )
@@ -136,12 +117,32 @@ class DecompilationRunner:
         except OSError as exc:
             raise DecompilationError(f"Could not execute {label}: {exc}") from exc
 
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(
+            f"COMMAND: {' '.join(command)}\n"
+            f"RETURN CODE: {result.returncode}\n"
+            "\n--- STDOUT ---\n"
+            f"{stdout}\n"
+            "\n--- STDERR ---\n"
+            f"{stderr}",
+            encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode != 0:
+            detail = (stderr or stdout).strip()[-2000:]
+            raise DecompilationError(
+                f"{label} exited with status {result.returncode}. {detail}"
+            )
+
     def _status_update(
         self,
         row: dict[str, str],
         *,
         jadx_status: str,
         apktool_status: str,
+        scan_status: str,
         error: str = "",
     ) -> None:
         self.database.update_processing_status(
@@ -151,7 +152,7 @@ class DecompilationRunner:
                 "version_code": row.get("version_code", ""),
                 "jadx_status": jadx_status,
                 "apktool_status": apktool_status,
-                "scan_status": "pending",
+                "scan_status": scan_status,
                 "updated_at": utc_now(),
                 "error": error[:2000],
             }
@@ -170,6 +171,7 @@ class DecompilationRunner:
             if not digest:
                 continue
             previous = statuses.get(digest, {})
+            scan_status = previous.get("scan_status") or "pending"
             if (
                 not force
                 and previous.get("jadx_status") == "success"
@@ -181,19 +183,16 @@ class DecompilationRunner:
                 break
             examined += 1
 
-            jadx_status = "pending"
-            apktool_status = "pending"
             errors: list[str] = []
             try:
                 apk_path = self._validated_apk_path(row)
             except (DecompilationError, OSError, ValueError) as exc:
                 errors.append(str(exc))
-                jadx_status = "failed"
-                apktool_status = "failed"
                 self._status_update(
                     row,
-                    jadx_status=jadx_status,
-                    apktool_status=apktool_status,
+                    jadx_status="failed",
+                    apktool_status="failed",
+                    scan_status=scan_status,
                     error="; ".join(errors),
                 )
                 failed += 1
@@ -201,7 +200,34 @@ class DecompilationRunner:
 
             package_id = row.get("package_id", "unknown")
             version_code = row.get("version_code", "unknown")
-            output_root = self.results_root / package_id / str(version_code)
+            if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id):
+                errors.append(f"Unsafe package ID in download history: {package_id!r}")
+                self._status_update(
+                    row,
+                    jadx_status="failed",
+                    apktool_status="failed",
+                    scan_status=scan_status,
+                    error="; ".join(errors),
+                )
+                failed += 1
+                continue
+            if not version_code.isdigit():
+                errors.append(f"Unsafe version code in download history: {version_code!r}")
+                self._status_update(
+                    row,
+                    jadx_status="failed",
+                    apktool_status="failed",
+                    scan_status=scan_status,
+                    error="; ".join(errors),
+                )
+                failed += 1
+                continue
+
+            output_root = self.results_root / package_id / version_code
+            try:
+                output_root.resolve().relative_to(self.results_root.resolve())
+            except ValueError as exc:
+                raise DecompilationError("Resolved decompilation path escapes results workspace.") from exc
             jadx_output = output_root / "jadx"
             apktool_output = output_root / "apktool"
             output_root.mkdir(parents=True, exist_ok=True)
@@ -210,6 +236,7 @@ class DecompilationRunner:
                 row,
                 jadx_status="running",
                 apktool_status="pending",
+                scan_status=scan_status,
             )
             shutil.rmtree(jadx_output, ignore_errors=True)
             jadx_command = [
@@ -230,6 +257,7 @@ class DecompilationRunner:
                 row,
                 jadx_status=jadx_status,
                 apktool_status="running",
+                scan_status=scan_status,
                 error="; ".join(errors),
             )
 
@@ -255,6 +283,7 @@ class DecompilationRunner:
                 row,
                 jadx_status=jadx_status,
                 apktool_status=apktool_status,
+                scan_status=scan_status,
                 error="; ".join(errors),
             )
             if jadx_status == "success" and apktool_status == "success":
