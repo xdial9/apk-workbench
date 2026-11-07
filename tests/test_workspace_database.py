@@ -214,17 +214,17 @@ def test_database_rejects_symlinked_history_file(tmp_path):
         database.read_download_history()
 
 
-def test_nested_workspace_lock_releases_cleanly_after_exception(tmp_path):
+def test_nested_workspace_lock_releases_cleanly_after_keyboard_interrupt(tmp_path):
     database = WorkspaceDatabase(tmp_path)
     database.ensure()
 
     with (
-        pytest.raises(RuntimeError, match="simulated interruption"),
+        pytest.raises(KeyboardInterrupt),
         database._write_lock(),
         database._write_lock(),
         database._write_lock(),
     ):
-        raise RuntimeError("simulated interruption")
+        raise KeyboardInterrupt("simulated Ctrl+C")
 
     # A subsequent write must acquire the same process/thread lock normally.
     database.append_history(history_row("c" * 64))
