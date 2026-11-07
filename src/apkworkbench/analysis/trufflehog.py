@@ -75,9 +75,7 @@ class TruffleHogScanner:
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise AnalysisError(f"Unable to inspect TruffleHog CLI capabilities: {exc}") from exc
         help_text = (result.stdout or "") + "\n" + (result.stderr or "")
-        # Kong renders boolean flags as --[no-]flag. For negative flags
-        # such as --no-update, the advertised spelling is --[no-]no-update.
-        # Accept both the literal spelling and Kong's documented form.
+
         def supported(flag: str) -> bool:
             if flag in help_text:
                 return True
@@ -116,6 +114,32 @@ class TruffleHogScanner:
         """Keep every field exactly as emitted by TruffleHog."""
         return item
 
+    @staticmethod
+    def _atomic_bytes(path: Path, payload: bytes) -> None:
+        """Publish scanner-owned evidence without exposing partial output."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError as exc:
+            raise AnalysisError(f"Cannot publish scanner evidence {path.name}: {exc}") from exc
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
     def _atomic_json(self, path: Path, value: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary_name = tempfile.mkstemp(
@@ -141,20 +165,62 @@ class TruffleHogScanner:
             if temporary.exists():
                 temporary.unlink()
 
-    def _run_one(
+    def _scanner_output_dir(
         self, package_id: str, version_code: str, digest: str, directories: list[Path]
-    ) -> list[dict[str, Any]]:
-        self._check_cli_support()
+    ) -> Path:
+        """Resolve a dedicated TruffleHog output sibling, never an input tree."""
+        if len(directories) != 2:
+            raise AnalysisError("TruffleHog requires separate JADX and Apktool input directories.")
+        resolved_inputs: list[Path] = []
         for directory in directories:
             try:
-                directory.resolve(strict=True).relative_to(self.results_root.resolve())
+                resolved = directory.resolve(strict=True)
+                resolved.relative_to(self.results_root.resolve(strict=True))
             except (OSError, ValueError) as exc:
                 raise AnalysisError(
                     f"Refusing to scan a decompilation directory outside results/: {directory}"
                 ) from exc
-            if not directory.is_dir():
+            if not resolved.is_dir():
                 raise AnalysisError(f"Decompiled input directory is missing: {directory}")
+            if resolved.name not in {"jadx", "apktool"}:
+                raise AnalysisError(
+                    f"Refusing unexpected tool input directory (expected jadx/apktool): {resolved}"
+                )
+            resolved_inputs.append(resolved)
+        if resolved_inputs[0] == resolved_inputs[1] or {p.name for p in resolved_inputs} != {"jadx", "apktool"}:
+            raise AnalysisError("JADX and Apktool inputs must be distinct tool-owned directories.")
 
+        output_dir = self.results_root / package_id / version_code / digest / "trufflehog"
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            resolved_output = output_dir.resolve(strict=True)
+            resolved_output.relative_to(self.results_root.resolve(strict=True))
+            if any(
+                component.is_symlink()
+                for component in (
+                    self.results_root / package_id,
+                    self.results_root / package_id / version_code,
+                    self.results_root / package_id / version_code / digest,
+                    output_dir,
+                )
+            ):
+                raise ValueError("symlinked output component")
+        except (OSError, ValueError) as exc:
+            raise AnalysisError(
+                f"TruffleHog output path escapes or aliases the results workspace: {output_dir}"
+            ) from exc
+        for input_dir in resolved_inputs:
+            if resolved_output == input_dir or input_dir in resolved_output.parents or resolved_output in input_dir.parents:
+                raise AnalysisError(
+                    "TruffleHog output must be isolated from and must not modify another tool's results."
+                )
+        return resolved_output
+
+    def _run_one(
+        self, package_id: str, version_code: str, digest: str, directories: list[Path]
+    ) -> list[dict[str, Any]]:
+        self._check_cli_support()
+        output_dir = self._scanner_output_dir(package_id, version_code, digest, directories)
         command = [
             self.executable,
             "filesystem",
@@ -163,7 +229,7 @@ class TruffleHogScanner:
             "--results=verified",
             "--json",
             "--fail-on-scan-errors",
-            *(str(path) for path in directories),
+            *(str(path.resolve(strict=True)) for path in directories),
         ]
         findings: list[dict[str, Any]] = []
         parse_error = False
@@ -262,40 +328,32 @@ class TruffleHogScanner:
             raise AnalysisError(
                 f"TruffleHog exited with status {return_code}; results were not published."
             )
-
-        output_dir = self.results_root / package_id / version_code / digest / "trufflehog"
-        try:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_dir.resolve(strict=True).relative_to(self.results_root.resolve())
-            if any(part.is_symlink() for part in (
-                self.results_root / package_id,
-                self.results_root / package_id / version_code,
-                self.results_root / package_id / version_code / digest,
-                output_dir,
-            )):
-                raise ValueError("symlinked output component")
-        except (OSError, ValueError) as exc:
+        unverified = [item for item in findings if item.get("Verified") is not True]
+        if unverified:
             raise AnalysisError(
-                f"TruffleHog output path escapes or aliases the results workspace: {output_dir}"
-            ) from exc
+                "TruffleHog emitted findings that are not explicitly verified; "
+                "results were not published."
+            )
+
+        # All published files belong exclusively to TruffleHog. The scanner only reads
+        # the distinct JADX/Apktool trees passed above; it never asks a tool to write there.
         self._atomic_json(output_dir / "findings.json", findings)
-        verified = [item for item in findings if item.get("Verified") is True]
-        self._atomic_json(output_dir / "findings-verified.json", verified)
+        self._atomic_json(output_dir / "findings-verified.json", findings)
         raw_output_path = output_dir / "stdout.jsonl"
-        raw_output_path.write_bytes(raw_stdout)
+        self._atomic_bytes(raw_output_path, raw_stdout)
         stderr_path = output_dir / "stderr.log"
-        stderr_path.write_bytes(raw_stderr)
+        self._atomic_bytes(stderr_path, raw_stderr)
         log_text = (
             f"COMMAND: {json.dumps(command)}\n"
             f"RETURN CODE: {return_code}\n"
             f"FINDINGS EMITTED: {len(findings)}\n"
-            f"VERIFIED FINDINGS: {len(verified)}\n"
+            f"VERIFIED FINDINGS: {len(findings)}\n"
             "CREDENTIAL VERIFICATION: ENABLED\n"
             "RESULT SELECTION: --results=verified\n"
             f"STDOUT EVIDENCE: {raw_output_path.name}\n"
             f"STDERR EVIDENCE: {stderr_path.name}\n"
         )
-        (output_dir / "trufflehog.log").write_text(log_text, encoding="utf-8")
+        self._atomic_bytes(output_dir / "trufflehog.log", log_text.encode("utf-8"))
         return findings
 
     def _update_status(self, row: dict[str, str], status: str, error: str = "") -> None:
@@ -347,7 +405,7 @@ class TruffleHogScanner:
             if not isinstance(loaded, list):
                 continue
             for finding in loaded:
-                if isinstance(finding, dict):
+                if isinstance(finding, dict) and finding.get("Verified") is True:
                     rows.append(
                         {
                             "package_id": package_id,
@@ -371,8 +429,7 @@ class TruffleHogScanner:
             os.chmod(temporary, 0o600)
             os.replace(temporary, destination)
             verified_destination = report_dir / "findings-verified.csv"
-            verified_destination.write_bytes(destination.read_bytes())
-            os.chmod(verified_destination, 0o600)
+            self._atomic_bytes(verified_destination, destination.read_bytes())
         except OSError as exc:
             raise AnalysisError(f"Cannot update aggregate findings CSV: {exc}") from exc
         finally:
@@ -429,7 +486,7 @@ class TruffleHogScanner:
             if not digest:
                 continue
             previous = statuses.get(digest, {})
-            if previous.get("jadx_status") != "success" or previous.get("apktool_status") != "success":
+            if previous.get("jadx_status") not in {"success", "partial"} or previous.get("apktool_status") != "success":
                 skipped += 1
                 continue
             if not force and previous.get("scan_status") == "success":
@@ -464,7 +521,7 @@ class TruffleHogScanner:
             scanned += 1
             findings_count += len(findings)
             self.logger.info(
-                "TruffleHog found %d candidates in %s", len(findings), package_id
+                "TruffleHog found %d verified findings in %s", len(findings), package_id
             )
 
         self._write_aggregate_csv()
