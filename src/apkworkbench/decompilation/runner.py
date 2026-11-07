@@ -89,49 +89,52 @@ class DecompilationRunner:
             )
         return apk_path
 
+    @staticmethod
+    def _log_tail(log_path: Path, limit: int = 2000) -> str:
+        """Read only a bounded tail of a tool log for concise failure reporting."""
+        with log_path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - limit))
+            return handle.read(limit).decode("utf-8", errors="replace").strip()
+
     def _run_tool(self, command: list[str], log_path: Path, label: str) -> None:
+        """Run a tool with output streamed to disk rather than buffered in memory."""
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                check=False,
-            )
+            with log_path.open("wb") as log_file:
+                log_file.write(
+                    (f"COMMAND: {' '.join(command)}\n"
+                     "STDOUT AND STDERR (combined):\n").encode("utf-8", errors="replace")
+                )
+                log_file.flush()
+                result = subprocess.run(
+                    command,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    timeout=self.timeout_seconds,
+                    check=False,
+                )
+                log_file.write(f"\nRETURN CODE: {result.returncode}\n".encode("ascii"))
         except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-            stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text(
-                f"COMMAND: {' '.join(command)}\n"
-                f"TIMEOUT AFTER: {self.timeout_seconds} seconds\n"
-                f"STDOUT: {stdout}\nSTDERR: {stderr}",
-                encoding="utf-8",
-                errors="replace",
-            )
+            try:
+                with log_path.open("ab") as log_file:
+                    log_file.write(
+                        f"\nTIMEOUT AFTER: {self.timeout_seconds} seconds\n".encode("ascii")
+                    )
+            except OSError:
+                pass
             raise DecompilationError(
-                f"{label} exceeded the {self.timeout_seconds}-second timeout."
+                f"{label} exceeded the {self.timeout_seconds}-second timeout. "
+                f"See log: {log_path}"
             ) from exc
         except FileNotFoundError as exc:
             raise DecompilationError(f"Required executable was not found: {command[0]}") from exc
         except OSError as exc:
             raise DecompilationError(f"Could not execute {label}: {exc}") from exc
 
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(
-            f"COMMAND: {' '.join(command)}\n"
-            f"RETURN CODE: {result.returncode}\n"
-            "\n--- STDOUT ---\n"
-            f"{stdout}\n"
-            "\n--- STDERR ---\n"
-            f"{stderr}",
-            encoding="utf-8",
-            errors="replace",
-        )
         if result.returncode != 0:
-            detail = (stderr or stdout).strip()[-2000:]
+            detail = self._log_tail(log_path)
             raise DecompilationError(
                 f"{label} exited with status {result.returncode}. {detail}"
             )
