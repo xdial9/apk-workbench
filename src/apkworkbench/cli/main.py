@@ -10,6 +10,7 @@ from apkworkbench.acquisition.selector import select_new_artifacts
 from apkworkbench.core.config import Config
 from apkworkbench.core.logging import setup_logging
 from apkworkbench.database.workspace import DatabaseError, WorkspaceDatabase, utc_now
+from apkworkbench.decompilation.runner import DecompilationRunner
 from apkworkbench.dependencies.detector import DependencyDetector
 from apkworkbench.security.gpg_verifier import GpgVerifier
 from apkworkbench.sources.fdroid import FdroidArtifact, FdroidIndexError, FdroidIndexParser
@@ -270,6 +271,50 @@ def download(apk_count: int, package_id: str | None) -> None:
         raise click.exceptions.Exit(1)
     if selection.shortfall:
         raise click.exceptions.Exit(2)
+
+
+@main.command()
+@click.option(
+    "--limit",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Maximum number of APKs to process; 0 processes all eligible downloads.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Re-run decompilation even when both tools previously succeeded.",
+)
+def decompile(limit: int, force: bool) -> None:
+    """Run JADX and Apktool sequentially against verified acquired APKs."""
+    config = Config()
+    logger = setup_logging(config)
+    database = WorkspaceDatabase(config.get("workspace"))
+    runner = DecompilationRunner(
+        database,
+        workspace=config.get("workspace"),
+        jadx_executable=str(config.get("tools.jadx", "jadx")),
+        apktool_executable=str(config.get("tools.apktool", "apktool")),
+        timeout_seconds=int(config.get("decompilation.timeout_seconds", 3600)),
+        logger=logger,
+    )
+    click.echo(BANNER)
+    click.echo("Starting sequential decompilation; each APK is SHA-256 checked first.")
+    try:
+        summary = runner.run(limit=limit or None, force=force)
+    except (DatabaseError, OSError, ValueError) as exc:
+        logger.error("Decompilation run failed: %s", exc)
+        click.echo(f"Decompilation failed: {exc}", err=True)
+        raise click.exceptions.Exit(1) from exc
+
+    click.echo("DECOMPILATION SUMMARY")
+    click.echo(f"  Examined: {summary.examined}")
+    click.echo(f"  Completed: {summary.completed}")
+    click.echo(f"  Failed: {summary.failed}")
+    click.echo(f"  Already complete / skipped: {summary.skipped}")
+    if summary.failed:
+        raise click.exceptions.Exit(1)
 
 
 @main.command()
