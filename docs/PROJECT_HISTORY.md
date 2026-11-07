@@ -56,9 +56,9 @@ The implementation-ready specifications are in [Target Architecture](architectur
 
 ## Repository evidence and current-state caveats
 
-- The initial F-Droid implementation was merged to main by commit 867f04e918197560018e38ef36d11bf67169f278 on 2026-11-07.
+- The initial F-Droid implementation was merged to main by commit 867f04e918197560018e38ef36d11bf67169f278 on 2026-11-07. The documentation PR is based on the later main head 08f662632bd50ff3c69c9372eada3b3c320d32d4.
 - The reliability, Google Play acquisition and package-list validation work is represented by PRs #2–#4 and their associated branches. Do not infer merge status from their existence; check GitHub live state before release decisions.
-- The Google Play PR explicitly describes itself as a replacement for the F-Droid acquisition path. The main snapshot referenced above still documents F-Droid. The branch history is therefore essential context.
+- The Google Play PR explicitly describes itself as a replacement for the F-Droid acquisition path. The main snapshot at the documentation PR base 08f662632bd50ff3c69c9372eada3b3c320d32d4 still documents F-Droid. The branch history is therefore essential context.
 - The 108-test result cited in PR #2 used synthetic external-tool executables; it is not a real APK corpus validation.
 - The laptop installation return-code-3 issue remains an operational item requiring actual laptop stderr, tool versions and command reproduction.
 - MobSF and Androguard are candidates for comparative evaluation, not adopted dependencies.
