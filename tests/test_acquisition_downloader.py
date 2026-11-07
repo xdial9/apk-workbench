@@ -7,7 +7,7 @@ import hashlib
 import pytest
 
 from apkworkbench.acquisition.downloader import ArtifactDownloader, DownloadError
-from apkworkbench.database.workspace import WorkspaceDatabase
+from apkworkbench.database.workspace import DatabaseError, WorkspaceDatabase
 from apkworkbench.sources.fdroid import FdroidArtifact
 
 
@@ -183,3 +183,23 @@ def test_existing_file_with_wrong_hash_is_never_overwritten(tmp_path):
     assert destination.read_bytes() == b"not the expected APK"
     assert session.calls == []
     assert database.history_hashes() == set()
+
+
+
+def test_successful_verified_download_remains_success_when_attempt_log_fails(tmp_path):
+    response = FakeResponse(PAYLOAD)
+    downloader, database, _ = make_downloader(tmp_path, response)
+    artifact = make_artifact()
+
+    def fail_attempt_log(_row):
+        raise DatabaseError("attempt log is read-only")
+
+    database.append_attempt = fail_attempt_log
+    result = downloader.download(
+        artifact,
+        run_id="run-123",
+        index_sha256="d" * 64,
+    )
+
+    assert result.path.read_bytes() == PAYLOAD
+    assert database.history_hashes() == {artifact.sha256}
