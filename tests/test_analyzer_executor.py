@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import time
+
+import pytest
 from pathlib import Path
 from threading import Event
 
@@ -12,7 +14,7 @@ from apkworkbench.analysis.contracts import (
     Finding,
     ResourceProfile,
 )
-from apkworkbench.analysis.executor import AnalyzerExecutor
+from apkworkbench.analysis.executor import AnalyzerExecutionError, AnalyzerExecutor
 from apkworkbench.analysis.registry import AnalyzerRegistry
 
 
@@ -197,9 +199,5 @@ def test_executor_rejects_missing_capabilities_before_start():
         def analyze(self, context):
             return AnalyzerResult(status="success")
 
-    try:
+    with pytest.raises(AnalyzerExecutionError, match="missing capabilities"):
         AnalyzerExecutor().execute(CapabilityAnalyzer(), make_context())
-    except Exception as exc:
-        assert "missing capabilities" in str(exc)
-    else:
-        raise AssertionError("Expected capability validation to fail.")
