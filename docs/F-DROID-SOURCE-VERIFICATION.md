@@ -74,7 +74,7 @@ On every cache hit, the client reads bounded local files and re-verifies the det
 
 Use **--refresh-index** with **discover**, **download**, or **run** to force a new network retrieval. Setting the cache TTL to 0 disables cache use.
 
-## 05 · Index data model## 04 · Index data model
+## 05 · Index data model
 
 The root JSON object contains a **packages** mapping keyed by Android package ID. A package record contains metadata and a **versions** mapping.
 
