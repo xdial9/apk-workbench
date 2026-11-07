@@ -188,7 +188,8 @@ def test_malformed_json_prevents_results_from_being_published(monkeypatch, tmp_p
 
     assert summary.failed == 1
     assert summary.scanned == 0
-    assert not (tmp_path / "results/org.example.app/7/trufflehog/findings.json").exists()
+    assert prior.is_file()
+    assert "STALE" in prior.read_text(encoding="utf-8")
     assert database.read_processing_status()[digest]["scan_status"] == "failed"
     with (tmp_path / "reports/findings.csv").open(encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
