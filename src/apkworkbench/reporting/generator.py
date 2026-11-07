@@ -175,7 +175,10 @@ class ReportGenerator:
     def run(self) -> ReportSummary:
         self._validate_workspace_roots()
         self.database.ensure()
-        history = self.database.read_download_history()
+        history = [
+            row for row in self.database.read_download_history()
+            if row.get("source") == "google_play"
+        ]
         statuses = self.database.read_processing_status()
         generated = with_findings = total_findings = 0
 

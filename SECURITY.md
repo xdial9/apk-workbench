@@ -1,50 +1,25 @@
-![APK WORKBENCH](docs/assets/apk-workbench-banner.svg)
-
 # Security Policy
 
-APK WORKBENCH processes third-party Android packages and generated decompiler output. Treat both as untrusted input.
+APK Workbench acquires Android application bundles from Google Play Store and performs local static analysis. It does not install or execute acquired apps.
 
-## Supported versions
+## Acquisition provenance
 
-Security reports are accepted for the current default branch, **main**.
+- Google Play Store is the only configured acquisition source.
+- The pinned upstream `playstore-cli` client verifies delivered APK components against Play-provided SHA-256 hashes and OBB files against Play-provided SHA-1 hashes.
+- APK Workbench independently hashes each acquired file and records each APK component separately.
+- Each bundle retains a JSON metadata record with package/version, component names, sizes, local hashes, Play-hash verification status, and available signing-certificate digests.
+- Each APK is re-hashed before decompilation.
+
+## Google account risk
+
+The upstream client uses Google's unofficial internal Play API. It is an alpha research project, not an official Google API. Its use may violate Google's terms of service and may result in account restrictions. Use a dedicated research account, not a primary account.
+
+The upstream client stores a long-lived AAS authentication token under `~/.config/playstore-cli` by default. Restrict filesystem permissions, back up only if necessary using encrypted storage, and never commit or share account/device/session files. Do not paste credentials, cookies, or tokens into ChatGPT, issues, logs, or pull requests.
+
+## Untrusted inputs
+
+Treat APKs, OBBs, generated source, decompiler output, and scanner output as untrusted. Keep JADX, Apktool, and TruffleHog current. Do not install acquired APKs on a production device.
 
 ## Reporting a vulnerability
 
-Do not publish an unpatched vulnerability, exploit details, credentials, private APK contents, or personal data in a public issue.
-
-Use GitHub's **Report a vulnerability** flow from the repository Security tab when private vulnerability reporting is available. If it is unavailable, contact the repository owner through the GitHub profile and request a private reporting channel.
-
-Include:
-
-- Affected commit or release.
-- Affected component and relevant configuration.
-- Concise reproduction steps.
-- Impact and realistic prerequisites.
-- Suggested mitigation, if known.
-
-Use synthetic data and redact secrets. Do not include active credentials or sensitive APK contents.
-
-## Security design
-
-The application is designed to:
-
-- Retrieve the F-Droid repository index over HTTPS.
-- Verify the detached OpenPGP signature against a pinned primary fingerprint before parsing index content.
-- Enforce response-size and request-time limits.
-- Verify downloaded APK byte count and SHA-256 before publishing an artifact.
-- Record acquisition in append-only history and immutable run manifests.
-- Re-check APK integrity before decompilation.
-- Use sequential external subprocess execution with timeouts.
-- Run TruffleHog with credential verification disabled.
-- Persist sanitized finding metadata and one-way fingerprints rather than raw secret values.
-- Reject paths that escape managed workspace boundaries.
-
-These controls reduce defined risks; they do not prove that an APK is safe or benign.
-
-## Safe handling
-
-APK WORKBENCH performs static analysis. It does not install or execute acquired APKs. Do not manually install or launch untrusted APKs as part of a static-analysis workflow.
-
-Run the application with least privilege, keep the operating system and external tools patched, and treat APKs, decompiler output, and scanner output as untrusted data.
-
-Scanner findings are unverified candidate indicators. They are not proof that a credential is active, valid, or exploitable.
+Do not include live credentials, private APKs, or raw secret values in a public issue. Report a minimal reproduction and sanitized logs through the repository's private reporting channel when available.

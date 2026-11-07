@@ -5,7 +5,7 @@
 APK WORKBENCH uses explicit YAML overrides. Defaults are built into the Python package; add only settings that need to change.
 
 **Configuration file:** ~/.config/apkworkbench/config.yaml  
-**Default runtime workspace:** ~/APK-Workbench/
+**Default runtime workspace:** ~/APK-Workbench-Google-Play/
 
 ---
 

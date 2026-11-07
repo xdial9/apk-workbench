@@ -89,3 +89,10 @@ tool binaries.
 
 A representative real APK batch and a sustained overnight soak test are still
 required before treating the toolchain as production-validated.
+
+
+## Google Play bundle acquisition
+
+Google Play deliveries may contain `base.apk`, multiple `split_*.apk` files, and OBB expansion files. The acquisition adapter retains the complete delivery directory and writes `google-play-bundle.json` with component names, sizes, local SHA-256 digests, Play-hash verification status, package/version metadata, and signing-certificate digests. Every APK component is recorded separately in the acquisition history and run manifest so each is independently re-hashed before JADX/Apktool and TruffleHog. OBBs are retained and integrity-checked but are not passed to APK decompilers.
+
+The Play client is an unofficial client for Google's internal Play API. Use a dedicated research Google account. The account token remains in the upstream client's private local configuration directory and must never be copied into the workbench, committed, or shared.
