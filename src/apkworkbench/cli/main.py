@@ -1,6 +1,7 @@
 """APK Workbench command-line entry point."""
 import hashlib
 import uuid
+from functools import wraps
 from pathlib import Path
 
 import click
@@ -21,6 +22,18 @@ from apkworkbench.sources.fdroid_repository import (
     FdroidRepositoryClient,
     FdroidRepositoryError,
 )
+
+
+def _workspace_locked(command):
+    """Hold the workspace process lock for each command and the full pipeline."""
+    @wraps(command)
+    def wrapped(*args, **kwargs):
+        workspace = Config().get("workspace")
+        database = WorkspaceDatabase(workspace)
+        with database._write_lock():
+            return command(*args, **kwargs)
+
+    return wrapped
 
 
 BANNER = """APK WORKBENCH
@@ -63,6 +76,7 @@ def main() -> None:
 
 
 @main.command()
+@_workspace_locked
 def doctor() -> None:
     """Check required and optional external dependencies."""
     config = Config()
@@ -102,6 +116,7 @@ def doctor() -> None:
     is_flag=True,
     help="Ignore the local index cache and retrieve a fresh signed index.",
 )
+@_workspace_locked
 def discover(package_id: str | None, limit: int, refresh_index: bool) -> None:
     """Fetch, authenticate, and summarize the official F-Droid index-v2."""
     config = Config()
@@ -177,6 +192,7 @@ def discover(package_id: str | None, limit: int, refresh_index: bool) -> None:
     is_flag=True,
     help="Ignore the local index cache and retrieve a fresh signed index.",
 )
+@_workspace_locked
 def download(apk_count: int, package_id: str | None, refresh_index: bool) -> None:
     """Select new APK binaries, freeze a run manifest, and download sequentially."""
     config = Config()
@@ -323,6 +339,7 @@ def download(apk_count: int, package_id: str | None, refresh_index: bool) -> Non
     default=None,
     help="Restrict processing to artifacts in this frozen download manifest.",
 )
+@_workspace_locked
 def decompile(limit: int, force: bool, run_id: str | None) -> None:
     """Run JADX and Apktool sequentially against verified acquired APKs."""
     config = Config()
@@ -375,6 +392,7 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
     default=None,
     help="Restrict analysis to artifacts in this frozen download manifest.",
 )
+@_workspace_locked
 def analyze(limit: int, force: bool, run_id: str | None) -> None:
     """Scan completed decompilations locally with TruffleHog; verification is disabled."""
     config = Config()
@@ -410,6 +428,7 @@ def analyze(limit: int, force: bool, run_id: str | None) -> None:
 
 
 @main.command()
+@_workspace_locked
 def report() -> None:
     """Generate sanitized per-APK JSON and HTML reports."""
     config = Config()
@@ -434,6 +453,7 @@ def report() -> None:
 
 
 @main.command()
+@_workspace_locked
 def status() -> None:
     """Summarize acquisition, decompilation, and scan state."""
     config = Config()
@@ -488,6 +508,7 @@ def status() -> None:
     is_flag=True,
     help="Ignore the local index cache and retrieve a fresh signed index.",
 )
+@_workspace_locked
 def run(
     apk_count: int,
     package_id: str | None,
