@@ -412,3 +412,28 @@ def test_malformed_history_digest_is_counted_as_failed(monkeypatch, tmp_path):
     assert summary.examined == 0
     assert summary.failed == 1
     assert summary.skipped == 0
+
+
+def test_keyboard_interrupt_terminates_decompiler_process_group(monkeypatch, tmp_path):
+    runner = make_runner(tmp_path)[0]
+    log_path = tmp_path / "results/tool.log"
+    terminated = []
+
+    class InterruptedProcess(FakeProcess):
+        def wait(self, timeout=None):
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda *args, **kwargs: InterruptedProcess()
+    )
+    monkeypatch.setattr(
+        runner,
+        "_terminate_process_tree",
+        lambda process: terminated.append(process.pid),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        runner._run_tool(["example-tool", "input.apk"], log_path, "Example")
+
+    assert terminated == [424242]
+    assert b"INTERRUPTED: process group terminated" in log_path.read_bytes()
