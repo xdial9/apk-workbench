@@ -193,7 +193,7 @@ def test_scanner_preserves_repeated_original_objects_without_deduplication(monke
 
 
 
-def test_scanner_refuses_to_run_when_no_verification_flag_is_unavailable(monkeypatch, tmp_path):
+def test_scanner_refuses_to_run_when_results_flag_is_unavailable(monkeypatch, tmp_path):
     database, _ = make_workspace(tmp_path)
     calls, _ = install_fakes(monkeypatch, b"", help_text="filesystem help --json --concurrency")
 
@@ -307,7 +307,7 @@ def test_aggregate_csv_contains_complete_original_finding_json(monkeypatch, tmp_
     assert len(rows) == 1
     assert rows[0]["package_id"] == "org.example.app"
     assert rows[0]["detector_name"] == "AWS"
-    assert rows[0]["verification"] == "disabled"
+    assert rows[0]["verification"] == "verified"
     assert json.loads(rows[0]["finding_json"]) == result_json()
     assert RAW_SECRET in rows[0]["finding_json"]
 
@@ -378,13 +378,13 @@ def test_scanner_rejects_results_root_symlink_escape(tmp_path):
 
 
 
-def test_scanner_accepts_kong_style_negative_boolean_flag_syntax(monkeypatch, tmp_path):
+def test_scanner_accepts_kong_style_results_flag_syntax(monkeypatch, tmp_path):
     database, _digest = make_workspace(tmp_path)
     calls, _process = install_fakes(
         monkeypatch,
         b"",
         help_text=(
-            "filesystem --[no-]no-verification --[no-]no-update "
+            "filesystem --results=RESULTS --[no-]no-update "
             "--[no-]json --concurrency=N --[no-]fail-on-scan-errors"
         ),
     )
