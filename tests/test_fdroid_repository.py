@@ -20,7 +20,7 @@ KEY_URL = (
 
 class FakeVerifier:
     def __init__(self, *, trusted: set[str] | None = None, valid: bool = True):
-        self.trusted_fingerprints = trusted or {FINGERPRINT}
+        self.trusted_fingerprints = {FINGERPRINT} if trusted is None else trusted
         self.valid = valid
         self.imported = None
         self.verified_payload = None
