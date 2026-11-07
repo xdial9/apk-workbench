@@ -20,7 +20,7 @@ Supported runtime: Linux, Python 3.10+, Java 11+, JADX, Apktool, and TruffleHog.
 sudo apt update
 sudo apt install -y ca-certificates git curl unzip python3 python3-venv python3-pip default-jre-headless
 
-git clone --branch fix/google-play-acquisition https://github.com/xdial9/apk-workbench.git
+git clone https://github.com/xdial9/apk-workbench.git
 cd apk-workbench
 
 python3 -m venv .venv
@@ -94,6 +94,18 @@ The run manifest is frozen after Play delivery metadata and expected hashes have
 - `apkworkbench doctor`
 
 See [CLI reference](docs/commands.md), [configuration](docs/configuration.md), [installation](docs/installation.md), and [reliability and recovery](docs/reliability-and-recovery.md).
+
+## Project history and engineering references
+
+This repository preserves the actual development history, including earlier F-Droid work, the Google Play pivot, reliability corrections, and the evolution of the analysis architecture. Earlier approaches and mistakes remain part of the record.
+
+- [Project history](docs/PROJECT_HISTORY.md)
+- [Target architecture](docs/architecture/TARGET_ARCHITECTURE.md)
+- [Evidence schema](docs/architecture/EVIDENCE_SCHEMA.md)
+- [Airtable engineering map](docs/engineering/AIRTABLE_ENGINEERING_MAP.md)
+- [Complete Airtable snapshot](docs/engineering/airtable-snapshot.json)
+
+Airtable is the engineering coordination mirror. Runtime APK data remains local to the workbench.
 
 ## Verification boundary
 
