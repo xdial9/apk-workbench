@@ -149,7 +149,9 @@ class TruffleHogScanner:
             if temporary.exists():
                 temporary.unlink()
 
-    def _run_one(\n        self, package_id: str, version_code: str, digest: str, directories: list[Path]\n    ) -> list[dict[str, Any]]:
+    def _run_one(
+        self, package_id: str, version_code: str, digest: str, directories: list[Path]
+    ) -> list[dict[str, Any]]:
         self._check_cli_support()
         for directory in directories:
             try:
@@ -260,6 +262,7 @@ class TruffleHogScanner:
         fields = [
             "package_id",
             "version_code",
+            "sha256",
             "fingerprint",
             "detector_name",
             "detector_type",
@@ -293,7 +296,8 @@ class TruffleHogScanner:
                         {
                             "package_id": package_id,
                             "version_code": version_code,
-                            **{field: finding.get(field, "") for field in fields if field not in {"package_id", "version_code"}},
+                            "sha256": digest,
+                            **{field: finding.get(field, "") for field in fields if field not in {"package_id", "version_code", "sha256"}},
                         }
                     )
 
