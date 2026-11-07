@@ -499,3 +499,130 @@ def test_decompiler_refuses_symlinked_log_without_writing_outside_workspace(monk
     assert outside.read_text(encoding="utf-8") == "preserve this file"
     assert (output_root / "jadx.log").is_symlink()
     assert database.read_processing_status()[digest]["jadx_status"] == "failed"
+
+
+def test_jadx_exit_code_three_publishes_usable_partial_output_and_runs_apktool(
+    monkeypatch, tmp_path
+):
+    runner, database, digest, _ = make_runner(tmp_path)
+    calls = []
+
+    def fake_popen(command, **kwargs):
+        calls.append(command[0])
+        if command[0] == "jadx":
+            kwargs["stdout"].write(b"JADX finished with decompilation errors")
+            destination = output_path(command)
+            destination.mkdir(parents=True, exist_ok=True)
+            (destination / "partial.java").write_text(
+                "class Partial {}", encoding="utf-8"
+            )
+            return FakeProcess(3)
+        successful_tool(command, kwargs, "apktool decoded resources")
+        return FakeProcess(0)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    summary = runner.run()
+
+    assert summary.examined == 1
+    assert summary.completed == 0
+    assert summary.partial == 1
+    assert summary.failed == 0
+    assert calls == ["jadx", "apktool"]
+    state = database.read_processing_status()[digest]
+    assert state["jadx_status"] == "partial"
+    assert state["apktool_status"] == "success"
+    assert "JADX completed with decompilation errors" in state["error"]
+    log = (
+        tmp_path / "results/org.example.app/7" / digest / "jadx.log"
+    ).read_text(encoding="utf-8")
+    assert "RETURN CODE: 3" in log
+
+
+def test_jadx_exit_code_three_without_usable_output_remains_a_failure(
+    monkeypatch, tmp_path
+):
+    runner, database, digest, _ = make_runner(tmp_path)
+    calls = []
+
+    def fake_popen(command, **kwargs):
+        calls.append(command[0])
+        if command[0] == "jadx":
+            kwargs["stdout"].write(b"JADX returned errors but wrote no files")
+            return FakeProcess(3)
+        successful_tool(command, kwargs, "apktool output")
+        return FakeProcess(0)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    summary = runner.run()
+
+    assert summary.failed == 1
+    assert summary.partial == 0
+    assert calls == ["jadx", "apktool"]
+    state = database.read_processing_status()[digest]
+    assert state["jadx_status"] == "failed"
+    assert state["apktool_status"] == "success"
+    assert "status 3 but produced no usable output" in state["error"]
+
+
+def test_apktool_exit_code_three_is_not_treated_as_partial_success(
+    monkeypatch, tmp_path
+):
+    runner, database, digest, _ = make_runner(tmp_path)
+
+    def fake_popen(command, **kwargs):
+        if command[0] == "jadx":
+            successful_tool(command, kwargs, "jadx output")
+            return FakeProcess(0)
+        successful_tool(command, kwargs, "apktool output")
+        return FakeProcess(3)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    summary = runner.run()
+
+    assert summary.failed == 1
+    assert summary.partial == 0
+    state = database.read_processing_status()[digest]
+    assert state["jadx_status"] == "success"
+    assert state["apktool_status"] == "failed"
+
+
+def test_retry_after_apktool_failure_reuses_partial_jadx_output(monkeypatch, tmp_path):
+    runner, database, digest, _ = make_runner(tmp_path)
+    first_calls = []
+
+    def first_popen(command, **kwargs):
+        first_calls.append(command[0])
+        if command[0] == "jadx":
+            kwargs["stdout"].write(b"partial JADX output")
+            destination = output_path(command)
+            destination.mkdir(parents=True, exist_ok=True)
+            (destination / "partial.java").write_text("class Partial {}", encoding="utf-8")
+            return FakeProcess(3)
+        kwargs["stdout"].write(b"Apktool failed")
+        return FakeProcess(9)
+
+    monkeypatch.setattr(subprocess, "Popen", first_popen)
+    first_summary = runner.run()
+    assert first_summary.failed == 1
+    assert first_summary.partial == 0
+    assert first_calls == ["jadx", "apktool"]
+    assert database.read_processing_status()[digest]["jadx_status"] == "partial"
+
+    retry_calls = []
+
+    def retry_popen(command, **kwargs):
+        retry_calls.append(command[0])
+        assert command[0] == "apktool"
+        successful_tool(command, kwargs, "retried Apktool")
+        return FakeProcess(0)
+
+    monkeypatch.setattr(subprocess, "Popen", retry_popen)
+    retry_summary = runner.run()
+
+    assert retry_calls == ["apktool"]
+    assert retry_summary.completed == 0
+    assert retry_summary.partial == 1
+    assert retry_summary.failed == 0
+    state = database.read_processing_status()[digest]
+    assert state["jadx_status"] == "partial"
+    assert state["apktool_status"] == "success"
