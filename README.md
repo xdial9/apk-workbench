@@ -129,8 +129,8 @@ Only artifacts for which both decompilers succeeded are eligible for TruffleHog 
 Per-artifact reports are written to:
 
 ```text
-reports/<package>/<versionCode>/report.json
-reports/<package>/<versionCode>/report.html
+reports/<package>/<versionCode>/<sha256>/report.json
+reports/<package>/<versionCode>/<sha256>/report.html
 ```
 
 The aggregate sanitized findings CSV is:
@@ -153,7 +153,7 @@ APK-Workbench/
 │   ├── processing_status.csv
 │   └── run_manifests/
 ├── downloads/<package>/<versionCode>/<sha256>/app.apk
-├── results/<package>/<versionCode>/
+├── results/<package>/<versionCode>/<sha256>/
 │   ├── jadx/
 │   ├── apktool/
 │   ├── trufflehog/
