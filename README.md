@@ -152,7 +152,7 @@ APK-Workbench/
 │   ├── download_attempts.csv
 │   ├── processing_status.csv
 │   └── run_manifests/
-├── downloads/<package>/<versionCode>/app.apk
+├── downloads/<package>/<versionCode>/<sha256>/app.apk
 ├── results/<package>/<versionCode>/
 │   ├── jadx/
 │   ├── apktool/
