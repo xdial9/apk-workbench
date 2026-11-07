@@ -536,3 +536,28 @@ def test_scanner_rejects_symlinked_parent_of_decompilation_directories(monkeypat
     assert "symlinked decompilation path component" in database.read_processing_status()[
         _digest
     ]["error"]
+
+
+def test_scanner_accepts_usable_partial_jadx_output(monkeypatch, tmp_path):
+    database, digest = make_workspace(tmp_path)
+    database.update_processing_status(
+        {
+            "sha256": digest,
+            "package_id": "org.example.app",
+            "version_code": "7",
+            "jadx_status": "partial",
+            "apktool_status": "success",
+            "scan_status": "pending",
+            "error": "JADX completed with decompilation errors (exit code 3).",
+        }
+    )
+    line = json.dumps(result_json()).encode() + b"\n"
+    calls, _ = install_fakes(monkeypatch, line)
+    scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
+
+    summary = scanner.run()
+
+    assert summary.scanned == 1
+    assert summary.failed == 0
+    assert [entry[0] for entry in calls] == ["help", "scan"]
+    assert database.read_processing_status()[digest]["scan_status"] == "success"
