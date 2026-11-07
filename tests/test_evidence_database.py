@@ -259,7 +259,7 @@ def test_parser_result_and_raw_outputs_are_versioned_and_deduplicated(tmp_path):
 
 def test_execution_requires_registered_analyzer_and_valid_status(tmp_path):
     database = EvidenceDatabase(tmp_path)
-    _, artifact_id, analysis_id, _ = seed_analysis(database, tmp_path)
+    _, _artifact_id, analysis_id, _ = seed_analysis(database, tmp_path)
 
     with pytest.raises(EvidenceDatabaseError, match="SQLite evidence store error"):
         database.record_execution(
