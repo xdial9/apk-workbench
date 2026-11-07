@@ -131,8 +131,10 @@ class Finding:
     rule_version: str | None = None
     dedup_key: str | None = None
     evidence: tuple[EvidenceLocation, ...] = ()
+    raw_data: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "raw_data", MappingProxyType(dict(self.raw_data)))
         for name in ("category", "finding_type", "title"):
             if not getattr(self, name).strip():
                 raise AnalyzerContractError(f"{name} must be non-empty.")
@@ -141,10 +143,6 @@ class Finding:
         if self.verification_state not in VERIFICATION_STATES:
             raise AnalyzerContractError(
                 f"Unsupported verification_state: {self.verification_state}"
-            )
-        if self.sensitive and self.normalized_value is not None:
-            raise AnalyzerContractError(
-                "Sensitive findings must not carry normalized_value; provide a fingerprint."
             )
         if self.value_fingerprint is not None and not SHA256_RE.fullmatch(
             self.value_fingerprint
