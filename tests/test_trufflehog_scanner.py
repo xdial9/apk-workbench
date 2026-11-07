@@ -363,8 +363,8 @@ def test_scanner_accepts_kong_style_negative_boolean_flag_syntax(monkeypatch, tm
         monkeypatch,
         b"",
         help_text=(
-            "filesystem --[no-]verification --[no-]update "
-            "--json --concurrency --fail-on-scan-errors"
+            "filesystem --[no-]no-verification --[no-]no-update "
+            "--[no-]json --concurrency=N --[no-]fail-on-scan-errors"
         ),
     )
     scanner = TruffleHogScanner(database, workspace=tmp_path)
