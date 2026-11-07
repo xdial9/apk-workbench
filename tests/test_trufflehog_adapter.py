@@ -1,4 +1,4 @@
-"""Tests for the TruffleHog adapter's normalized, sanitized output."""
+"""Tests for complete TruffleHog objects carried by the analyzer adapter."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -47,13 +47,12 @@ def test_adapter_maps_sanitized_secret_finding_to_common_contract(tmp_path):
     scanner = FakeScanner(
         results_root,
         [{
-            "fingerprint": "b" * 64,
-            "detector_name": "ExampleToken",
-            "detector_type": "api_key",
-            "decoder_name": "PLAIN",
-            "file_path": str(file_path),
-            "line": 42,
-            "verification": "disabled",
+            "DetectorName": "ExampleToken",
+            "DetectorType": 7,
+            "DecoderName": "PLAIN",
+            "SourceMetadata": {"Data": {"Filesystem": {"file": str(file_path), "line": 42}}},
+            "Raw": "original-secret-value",
+            "ExtraData": {"preserve": True},
         }],
     )
     analyzer = TruffleHogAnalyzer(scanner, tool_version="3.90.0")
@@ -65,10 +64,11 @@ def test_adapter_maps_sanitized_secret_finding_to_common_contract(tmp_path):
     assert result.status == "success"
     finding = result.findings[0]
     assert finding.category == "secrets"
-    assert finding.finding_type == "api_key"
+    assert finding.finding_type == "7"
     assert finding.sensitive is True
-    assert finding.normalized_value is None
-    assert finding.value_fingerprint == "b" * 64
+    assert finding.raw_data["Raw"] == "original-secret-value"
+    assert finding.raw_data["ExtraData"] == {"preserve": True}
+    assert len(finding.value_fingerprint) == 64
     assert finding.evidence[0].source_path.endswith("jadx/Example.java")
     assert finding.evidence[0].line_start == 42
     assert result.diagnostics[0].code == "credential_verification_disabled"
@@ -79,10 +79,8 @@ def test_adapter_rejects_source_path_outside_results_workspace(tmp_path):
     scanner = FakeScanner(
         results_root,
         [{
-            "fingerprint": "b" * 64,
-            "detector_name": "ExampleToken",
-            "file_path": str(tmp_path / "outside" / "secret.txt"),
-            "line": 1,
+            "DetectorName": "ExampleToken",
+            "SourceMetadata": {"Data": {"Filesystem": {"file": str(tmp_path / "outside" / "secret.txt"), "line": 1}}},
         }],
     )
     analyzer = TruffleHogAnalyzer(scanner, tool_version="3.90.0")
