@@ -173,7 +173,7 @@ class ReportGenerator:
             findings = self._read_sanitized_findings(findings_path)
             artifact = {
                 "package_id": package_id,
-                "app_name": row.get("version_name", ""),
+                "app_name": row.get("app_name", ""),
                 "version_code": version_code,
                 "version_name": row.get("version_name", ""),
                 "sha256": digest,
