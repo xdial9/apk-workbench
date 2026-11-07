@@ -190,13 +190,19 @@ class TruffleHogScanner:
     ) -> list[dict[str, Any]]:
         self._check_cli_support()
         for directory in directories:
+            relative = directory.relative_to(self.results_root)
+            components = [self.results_root / part for part in relative.parts]
+            if any(component.is_symlink() for component in components):
+                raise AnalysisError(
+                    f"Refusing to scan a symlinked decompilation path component: {directory}"
+                )
             try:
                 directory.resolve(strict=True).relative_to(self.results_root.resolve())
             except (OSError, ValueError) as exc:
                 raise AnalysisError(
                     f"Refusing to scan a decompilation directory outside results/: {directory}"
                 ) from exc
-            if directory.is_symlink() or not directory.is_dir():
+            if not directory.is_dir():
                 raise AnalysisError(f"Decompiled input directory is missing or unsafe: {directory}")
             has_usable_file = False
             try:
@@ -348,16 +354,17 @@ class TruffleHogScanner:
             )
 
         output_dir = self.results_root / package_id / version_code / digest / "trufflehog"
+        output_components = (
+            self.results_root / package_id,
+            self.results_root / package_id / version_code,
+            self.results_root / package_id / version_code / digest,
+            output_dir,
+        )
         try:
+            if any(part.is_symlink() for part in output_components):
+                raise ValueError("symlinked output component")
             output_dir.mkdir(parents=True, exist_ok=True)
             output_dir.resolve(strict=True).relative_to(self.results_root.resolve())
-            if any(part.is_symlink() for part in (
-                self.results_root / package_id,
-                self.results_root / package_id / version_code,
-                self.results_root / package_id / version_code / digest,
-                output_dir,
-            )):
-                raise ValueError("symlinked output component")
         except (OSError, ValueError) as exc:
             raise AnalysisError(
                 f"TruffleHog output path escapes or aliases the results workspace: {output_dir}"
