@@ -328,7 +328,7 @@ class WorkspaceDatabase:
                         ):
                             outcome = "analysis_failed"
                             detail = (
-                                "Processing status says scan succeeded, but the sanitized "
+                                "Processing status says scan succeeded, but the complete "
                                 "findings file is missing or unsafe."
                             )
                         else:
