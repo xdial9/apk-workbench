@@ -119,11 +119,15 @@ class ReportGenerator:
                 ]
             )
             for finding in findings:
+                source_metadata = finding.get("SourceMetadata")
+                source_data = source_metadata.get("Data") if isinstance(source_metadata, dict) else {}
+                filesystem = source_data.get("Filesystem") if isinstance(source_data, dict) else {}
+                filesystem = filesystem if isinstance(filesystem, dict) else {}
                 parts.append(
                     "<tr>"
                     f"<td>{html.escape(str(finding.get('DetectorName', '')))}</td>"
-                    f"<td><code>{html.escape(str(((finding.get('SourceMetadata') or {}).get('Data') or {}).get('Filesystem') or {}).get('file', '')))}</code></td>"
-                    f"<td>{html.escape(str((((finding.get('SourceMetadata') or {}).get('Data') or {}).get('Filesystem') or {}).get('line', '')))}</td>"
+                    f"<td><code>{html.escape(str(filesystem.get('file', '')))}</code></td>"
+                    f"<td>{html.escape(str(filesystem.get('line', '')))}</td>"
                     f"<td><code>{html.escape(str(finding.get('DetectorType', '')))}</code></td>"
                     "</tr>"
                 )
