@@ -300,7 +300,8 @@ class WorkspaceDatabase:
                     outcome = "decompilation_failed"
                 elif "running" in {jadx, apktool, scan}:
                     outcome = "interrupted_or_running"
-                elif jadx == "success" and apktool == "success":
+                elif jadx in {"success", "partial"} and apktool == "success":
+                    has_decompilation_warnings = jadx == "partial" or apktool == "partial"
                     if scan == "failed":
                         outcome = "analysis_failed"
                     elif scan == "success":
