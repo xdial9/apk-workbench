@@ -64,7 +64,7 @@ class Config:
                 },
             },
             "decompilation": {"timeout_seconds": 3600},
-            "analysis": {"timeout_seconds": 7200},
+            "analysis": {"timeout_seconds": 7200, "max_output_bytes": 536870912},
             "tools": {
                 "gpg": "gpg",
                 "java": "java",
