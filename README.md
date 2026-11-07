@@ -360,3 +360,4 @@ GitHub Actions tests Python 3.10, 3.11, and 3.12. Automated tests use generated 
 
 **APK WORKBENCH — CO-DEVELOPED BY dial9 + ChatGPT**  
 **SLOW. SIMPLE. SEQUENTIAL. VERIFIED.**
+- [Reliability and recovery](docs/reliability-and-recovery.md) — process isolation, retries, workspace locking, and per-run reconciliation.
