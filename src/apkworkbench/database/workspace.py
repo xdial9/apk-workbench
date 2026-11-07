@@ -106,6 +106,10 @@ class WorkspaceDatabase:
                 header = next(csv.reader(handle), None)
         except OSError as exc:
             raise DatabaseError(f"Cannot read database file {path}: {exc}") from exc
+        try:
+            os.chmod(path, 0o600)
+        except OSError as exc:
+            raise DatabaseError(f"Cannot secure database file {path}: {exc}") from exc
         if header != fields:
             raise DatabaseError(
                 f"Unexpected CSV header in {path}; expected {fields!r}, found {header!r}."
@@ -130,7 +134,7 @@ class WorkspaceDatabase:
             with self.history_path.open("r", encoding="utf-8", newline="") as handle:
                 for row in csv.DictReader(handle):
                     digest = (row.get("sha256") or "").strip().lower()
-                    if len(digest) != 64:
+                    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
                         raise DatabaseError(
                             f"Malformed SHA-256 value in {self.history_path}: {digest!r}"
                         )
