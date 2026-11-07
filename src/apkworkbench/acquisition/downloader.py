@@ -6,7 +6,10 @@ import logging
 import os
 import re
 import tempfile
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -18,6 +21,7 @@ from ..sources.fdroid import FdroidArtifact
 
 _LOGGER = logging.getLogger("apkworkbench.acquisition")
 _PACKAGE_RE = re.compile(r"^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$")
+_RETRYABLE_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
 
 
 class DownloadError(RuntimeError):
@@ -43,14 +47,20 @@ class ArtifactDownloader:
         workspace: str | Path,
         timeout_seconds: int = 60,
         chunk_size: int = 256 * 1024,
+        max_retries: int = 3,
+        retry_backoff_seconds: float = 1.0,
         session: requests.Session | None = None,
     ):
         if timeout_seconds < 1 or chunk_size < 1:
             raise ValueError("timeout_seconds and chunk_size must be positive")
+        if max_retries < 0 or retry_backoff_seconds < 0:
+            raise ValueError("max_retries and retry_backoff_seconds cannot be negative")
         self.database = database
         self.workspace = Path(workspace).expanduser().resolve()
         self.timeout_seconds = timeout_seconds
         self.chunk_size = chunk_size
+        self.max_retries = max_retries
+        self.retry_backoff_seconds = retry_backoff_seconds
         self.session = session or requests.Session()
 
     def destination_for(self, artifact: FdroidArtifact) -> Path:
@@ -83,6 +93,45 @@ class ArtifactDownloader:
             or parsed.fragment
         ):
             raise DownloadError("APK download URL must be HTTPS without credentials or fragment.")
+
+    def _retry_delay(self, attempt: int, retry_after: str | None) -> float:
+        if retry_after:
+            try:
+                return min(60.0, max(0.0, float(retry_after)))
+            except ValueError:
+                try:
+                    retry_at = parsedate_to_datetime(retry_after)
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=timezone.utc)
+                    return min(
+                        60.0,
+                        max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds()),
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    pass
+        return min(30.0, self.retry_backoff_seconds * (2**attempt))
+
+    def _get_response(self, url: str, **kwargs) -> requests.Response:
+        """Retry bounded transient transport and HTTP failures before returning a response."""
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = self.session.get(url, **kwargs)
+            except requests.RequestException:
+                if attempt >= self.max_retries:
+                    raise
+                time.sleep(self._retry_delay(attempt, None))
+                continue
+
+            if response.status_code not in _RETRYABLE_HTTP_STATUSES:
+                return response
+            if attempt >= self.max_retries:
+                return response
+
+            retry_after = response.headers.get("Retry-After")
+            response.close()
+            time.sleep(self._retry_delay(attempt, retry_after))
+
+        raise DownloadError("APK download retry loop ended without a response.")
 
     def download(
         self,
@@ -140,7 +189,7 @@ class ArtifactDownloader:
                     artifact, destination, existing_hash, existing_size, reused_existing=True
                 )
 
-            response = self.session.get(
+            response = self._get_response(
                 artifact.download_url,
                 stream=True,
                 timeout=(min(15, self.timeout_seconds), self.timeout_seconds),
