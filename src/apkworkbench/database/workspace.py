@@ -120,12 +120,15 @@ class WorkspaceDatabase:
         if held is None:
             held = {}
             _LOCK_STATE.held = held
-        if key in held:
-            held[key]["depth"] += 1
+        state = held.get(key)
+        if state is not None:
+            # Keep a local reference to the state. A signal/exception during nested
+            # unwinding must not turn a second dictionary lookup into a KeyError.
+            state["depth"] += 1
             try:
                 yield
             finally:
-                held[key]["depth"] -= 1
+                state["depth"] -= 1
             return
 
         handle = None
@@ -138,11 +141,14 @@ class WorkspaceDatabase:
                 handle.close()
             raise DatabaseError(f"Cannot acquire workspace database lock: {exc}") from exc
 
-        held[key] = {"depth": 1, "handle": handle}
+        state = {"depth": 1, "handle": handle}
+        held[key] = state
         try:
             yield
         finally:
-            held.pop(key, None)
+            # Only remove the entry installed by this outermost acquisition.
+            if held.get(key) is state:
+                held.pop(key, None)
             try:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             finally:
