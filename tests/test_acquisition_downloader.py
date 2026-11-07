@@ -203,3 +203,25 @@ def test_successful_verified_download_remains_success_when_attempt_log_fails(tmp
 
     assert result.path.read_bytes() == PAYLOAD
     assert database.history_hashes() == {artifact.sha256}
+
+
+
+def test_history_commit_failure_leaves_verified_file_for_retry(tmp_path):
+    response = FakeResponse(PAYLOAD)
+    downloader, database, _ = make_downloader(tmp_path, response)
+    artifact = make_artifact()
+
+    def fail_history_commit(_row):
+        raise DatabaseError("history is read-only")
+
+    database.append_history = fail_history_commit
+    with pytest.raises(DownloadError, match="verified file was left in place"):
+        downloader.download(
+            artifact,
+            run_id="run-123",
+            index_sha256="d" * 64,
+        )
+
+    destination = downloader.destination_for(artifact)
+    assert destination.read_bytes() == PAYLOAD
+    assert database.history_hashes() == set()
