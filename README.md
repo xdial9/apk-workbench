@@ -101,6 +101,8 @@ This OpenPGP identity is distinct from the Android APK signing-certificate finge
 
 The application rejects HTTP redirects, bounds index/key/signature response sizes, and applies request timeouts. A failed signature or unexpected signer is a hard failure.
 
+The index-v2 `packages` object maps package IDs to version records. Each `versions` map is keyed by the APK SHA-256 digest (which must equal `file.sha256`); the APK's numeric `manifest.versionCode` is a separate field. Repository `file.name` paths may begin with one slash and are normalized as paths relative to the repository root.
+
 ## Acquisition model
 
 - Binary identity is SHA-256, not package name or version label.
