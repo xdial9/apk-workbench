@@ -127,12 +127,22 @@ class ReportGenerator:
                 ]
             )
             for finding in findings:
+                source_metadata = finding.get("SourceMetadata")
+                source_data = source_metadata.get("Data", {}) if isinstance(source_metadata, dict) else {}
+                filesystem = source_data.get("Filesystem", {}) if isinstance(source_data, dict) else {}
+                if not isinstance(filesystem, dict):
+                    filesystem = {}
+                file_path = filesystem.get("file", "")
+                line_number = filesystem.get("line", "")
+                fingerprint = hashlib.sha256(
+                    json.dumps(finding, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                ).hexdigest()
                 parts.append(
                     "<tr>"
                     f"<td>{html.escape(str(finding.get('DetectorName', '')))}</td>"
-                    f"<td><code>{html.escape(str((finding.get("SourceMetadata", {}).get("Data", {}).get("Filesystem", {}) or {}).get("file", "")))}</code></td>"
-                    f"<td>{html.escape(str((finding.get("SourceMetadata", {}).get("Data", {}).get("Filesystem", {}) or {}).get("line", "")))}</td>"
-                    f"<td><code>{html.escape(str(hashlib.sha256(json.dumps(finding, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()))}</code></td>"
+                    f"<td><code>{html.escape(str(file_path))}</code></td>"
+                    f"<td>{html.escape(str(line_number))}</td>"
+                    f"<td><code>{html.escape(fingerprint)}</code></td>"
                     "</tr>"
                 )
             parts.append("</tbody></table>")
