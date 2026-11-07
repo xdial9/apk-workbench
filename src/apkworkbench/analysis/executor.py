@@ -162,7 +162,7 @@ def _worker_entry(analyzer: Analyzer, context: AnalyzerContext, send_connection,
             }
             encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         send_connection.send_bytes(encoded)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - isolate arbitrary analyzer failures in child process.
         payload = {
             "status": "failed",
             "findings": [],
