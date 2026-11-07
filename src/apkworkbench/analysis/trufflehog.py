@@ -20,6 +20,13 @@ class AnalysisError(RuntimeError):
     """Raised when local secret scanning cannot run safely or completely."""
 
 
+def _set_file_size_limit(max_bytes: int) -> None:
+    """Bound files written by the child process on supported Unix hosts."""
+    _soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_FSIZE)
+    limit = max_bytes if hard_limit == resource.RLIM_INFINITY else min(max_bytes, hard_limit)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+
+
 @dataclass(frozen=True)
 class AnalysisSummary:
     scanned: int
@@ -186,12 +193,9 @@ class TruffleHogScanner:
                     command,
                     stdout=stdout_file,
                     stderr=stderr_file,
-                    preexec_fn=lambda: resource.setrlimit(
-                        resource.RLIMIT_FSIZE,
-                        (self.max_output_bytes, self.max_output_bytes),
-                    ),
+                    preexec_fn=lambda: _set_file_size_limit(self.max_output_bytes),
                 )
-            except OSError as exc:
+            except (OSError, subprocess.SubprocessError) as exc:
                 raise AnalysisError(f"Could not start TruffleHog: {exc}") from exc
 
             try:
