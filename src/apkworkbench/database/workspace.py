@@ -295,15 +295,39 @@ class WorkspaceDatabase:
                 elif "running" in {jadx, apktool, scan}:
                     outcome = "interrupted_or_running"
                 elif jadx == "success" and apktool == "success":
-                    if scan == "success":
-                        outcome = "complete"
-                    elif scan == "failed":
+                    if scan == "failed":
                         outcome = "analysis_failed"
+                    elif scan == "success":
+                        findings_path = (
+                            self.root / "results" / selected["package_id"]
+                            / str(selected["version_code"]) / digest
+                            / "trufflehog" / "findings.json"
+                        )
+                        findings_components = (
+                            self.root / "results" / selected["package_id"],
+                            self.root / "results" / selected["package_id"]
+                            / str(selected["version_code"]),
+                            self.root / "results" / selected["package_id"]
+                            / str(selected["version_code"]) / digest,
+                            findings_path.parent,
+                            findings_path,
+                        )
+                        if (
+                            any(part.is_symlink() for part in findings_components)
+                            or not findings_path.is_file()
+                        ):
+                            outcome = "analysis_failed"
+                            detail = (
+                                "Processing status says scan succeeded, but the sanitized "
+                                "findings file is missing or unsafe."
+                            )
+                        else:
+                            outcome = "complete"
                     else:
                         outcome = "awaiting_analysis"
                 else:
                     outcome = "pending_decompilation"
-                detail = state.get("error", "")
+                detail = detail or state.get("error", "")
 
             counts[outcome] = counts.get(outcome, 0) + 1
             items.append(
@@ -420,13 +444,45 @@ class WorkspaceDatabase:
             r"[A-Za-z0-9][A-Za-z0-9-]{0,63}", run_id
         ):
             raise DatabaseError("Run ID must contain only letters, digits, and hyphens.")
+        materialized_rows = list(rows)
+        seen_hashes: set[str] = set()
+        seen_orders: set[int] = set()
+        for row in materialized_rows:
+            if row.get("run_id") != run_id:
+                raise DatabaseError("Run manifest row contains a mismatched run ID.")
+            if row.get("source") != "google_play":
+                raise DatabaseError("Only Google Play Store items may enter a run manifest.")
+            if not str(row.get("download_url", "")).startswith("google-play://"):
+                raise DatabaseError(
+                    "Google Play manifest references must use google-play:// identifiers."
+                )
+            package_id = str(row.get("package_id", ""))
+            if not re.fullmatch(r"[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+", package_id):
+                raise DatabaseError(f"Run manifest contains an invalid package ID: {package_id!r}.")
+            if not str(row.get("version_code", "")).isdigit():
+                raise DatabaseError("Run manifest contains an invalid version code.")
+            digest = str(row.get("sha256", "")).lower()
+            if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+                raise DatabaseError(f"Run manifest contains a malformed SHA-256 value: {digest!r}.")
+            if digest in seen_hashes:
+                raise DatabaseError(f"Duplicate artifact SHA-256 in run manifest: {digest}")
+            try:
+                order = int(row.get("selection_order") or "")
+                size = int(row.get("size") or 0)
+            except (TypeError, ValueError) as exc:
+                raise DatabaseError("Run manifest contains an invalid selection order or size.") from exc
+            if order < 1 or order in seen_orders or size < 0:
+                raise DatabaseError("Run manifest contains a duplicate order or invalid size.")
+            seen_hashes.add(digest)
+            seen_orders.add(order)
+
         self.ensure()
         with self._write_lock():
             self.ensure()
             destination = self.manifest_dir / f"run_{run_id}.csv"
-            if destination.exists():
+            if destination.exists() or destination.is_symlink():
                 raise DatabaseError(f"Run manifest already exists and will not be overwritten: {destination}")
-    
+
             fd, temporary_name = tempfile.mkstemp(
                 prefix=f".run_{run_id}.", suffix=".tmp", dir=self.manifest_dir
             )
@@ -435,11 +491,7 @@ class WorkspaceDatabase:
                 with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
                     writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDS, extrasaction="raise")
                     writer.writeheader()
-                    for row in rows:
-                        if row.get("source") != "google_play":
-                            raise DatabaseError("Only Google Play Store items may enter a run manifest.")
-                        if not str(row.get("download_url", "")).startswith("google-play://"):
-                            raise DatabaseError("Google Play manifest references must use google-play:// identifiers.")
+                    for row in materialized_rows:
                         writer.writerow({field: row.get(field, "") for field in MANIFEST_FIELDS})
                     handle.flush()
                     os.fsync(handle.fileno())
@@ -492,6 +544,11 @@ class WorkspaceDatabase:
                             raise DatabaseError(f"Run manifest contains a mismatched run ID: {path}")
                         if row.get("source") != "google_play" or not row.get("download_url", "").startswith("google-play://"):
                             raise DatabaseError(f"Run manifest contains a non-Google Play source reference: {path}")
+                        package_id = row.get("package_id", "")
+                        if not re.fullmatch(r"[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+", package_id):
+                            raise DatabaseError(f"Run manifest contains an invalid package ID: {package_id!r}.")
+                        if not (row.get("version_code") or "").isdigit():
+                            raise DatabaseError("Run manifest contains an invalid version code.")
                         digest = (row.get("sha256") or "").strip().lower()
                         if len(digest) != 64 or any(
                             char not in "0123456789abcdef" for char in digest
