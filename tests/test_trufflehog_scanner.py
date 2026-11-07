@@ -298,3 +298,23 @@ def test_scanner_rejects_results_root_symlink_escape(tmp_path):
     scanner = TruffleHogScanner(database, workspace=tmp_path)
     with pytest.raises(AnalysisError, match="Results directory resolves outside"):
         scanner.run()
+
+
+
+def test_scanner_accepts_kong_style_negative_boolean_flag_syntax(monkeypatch, tmp_path):
+    database, _digest = make_workspace(tmp_path)
+    calls, _process = install_fakes(
+        monkeypatch,
+        b"",
+        help_text=(
+            "filesystem --[no-]verification --[no-]update "
+            "--json --concurrency --fail-on-scan-errors"
+        ),
+    )
+    scanner = TruffleHogScanner(database, workspace=tmp_path)
+
+    summary = scanner.run()
+
+    assert summary.scanned == 1
+    assert summary.failed == 0
+    assert [entry[0] for entry in calls] == ["help", "scan"]
