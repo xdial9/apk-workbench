@@ -109,7 +109,7 @@ def test_hash_mismatch_removes_partial_file_and_does_not_record_history(tmp_path
         downloader.download(artifact, run_id="run-123", index_sha256="d" * 64)
 
     assert database.history_hashes() == set()
-    assert not (tmp_path / "downloads/org.example.app/42/app.apk").exists()
+    assert not list((tmp_path / "downloads/org.example.app/42").glob("*/app.apk"))
     assert not list((tmp_path / "downloads/org.example.app/42").glob("*.part"))
 
 
