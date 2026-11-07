@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 license = { text = "See README disclaimer" }
 authors = [{ name = "dial9 + ChatGPT" }]
 dependencies = [
+  "click>=8.1,<9",
   "requests>=2.31,<3",
   "PyYAML>=6.0,<7",
 ]
