@@ -200,6 +200,94 @@ class WorkspaceDatabase:
             except OSError as exc:
                 raise DatabaseError(f"Cannot read download history: {exc}") from exc
 
+    def read_download_attempts(self) -> list[dict[str, str]]:
+        self.ensure()
+        with self._write_lock():
+            try:
+                with self.attempts_path.open("r", encoding="utf-8", newline="") as handle:
+                    return list(csv.DictReader(handle))
+            except OSError as exc:
+                raise DatabaseError(f"Cannot read download attempts: {exc}") from exc
+
+    def reconcile_run(self, run_id: str) -> dict[str, object]:
+        """Account for every manifest entry using acquisition attempts and stage state."""
+        manifest = self.read_manifest(run_id)
+        history = self.read_download_history()
+        attempts = self.read_download_attempts()
+        processing = self.read_processing_status()
+
+        history_by_hash = {row.get("sha256", "").lower(): row for row in history}
+        attempts_by_hash: dict[str, dict[str, str]] = {}
+        for attempt in attempts:
+            if attempt.get("run_id") == run_id and attempt.get("sha256"):
+                attempts_by_hash[attempt["sha256"].lower()] = attempt
+
+        counts: dict[str, int] = {}
+        items: list[dict[str, str]] = []
+        for selected in manifest:
+            digest = selected["sha256"]
+            acquired = history_by_hash.get(digest)
+            attempt = attempts_by_hash.get(digest)
+            state = processing.get(digest, {})
+            detail = ""
+            if acquired is None:
+                if attempt and attempt.get("status") == "persistence_failed":
+                    outcome = "history_commit_failed"
+                elif attempt and attempt.get("status") == "failed":
+                    outcome = "download_failed"
+                elif attempt and attempt.get("status") in {"success", "success_existing"}:
+                    outcome = "history_missing"
+                    detail = "A success attempt exists without an immutable history record."
+                else:
+                    outcome = "acquisition_unaccounted"
+                    detail = "No verified acquisition history or terminal attempt record exists."
+                if attempt:
+                    detail = detail or attempt.get("error", "")
+            elif (
+                acquired.get("run_id") != run_id
+                or acquired.get("package_id") != selected.get("package_id")
+                or str(acquired.get("version_code", "")) != str(selected.get("version_code", ""))
+            ):
+                outcome = "acquisition_conflict"
+                detail = "Acquisition history does not match the frozen manifest entry."
+            else:
+                jadx = state.get("jadx_status", "pending")
+                apktool = state.get("apktool_status", "pending")
+                scan = state.get("scan_status", "pending")
+                if "failed" in {jadx, apktool}:
+                    outcome = "decompilation_failed"
+                elif "running" in {jadx, apktool, scan}:
+                    outcome = "interrupted_or_running"
+                elif jadx == "success" and apktool == "success":
+                    if scan == "success":
+                        outcome = "complete"
+                    elif scan == "failed":
+                        outcome = "analysis_failed"
+                    else:
+                        outcome = "awaiting_analysis"
+                else:
+                    outcome = "pending_decompilation"
+                detail = state.get("error", "")
+
+            counts[outcome] = counts.get(outcome, 0) + 1
+            items.append(
+                {
+                    "sha256": digest,
+                    "package_id": selected.get("package_id", ""),
+                    "version_code": str(selected.get("version_code", "")),
+                    "status": outcome,
+                    "detail": detail,
+                }
+            )
+
+        return {
+            "run_id": run_id,
+            "total": len(manifest),
+            "complete": counts.get("complete", 0),
+            "counts": dict(sorted(counts.items())),
+            "items": items,
+        }
+
     def read_processing_status(self) -> dict[str, dict[str, str]]:
         self.ensure()
         with self._write_lock():
