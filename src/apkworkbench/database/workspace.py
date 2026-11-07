@@ -26,6 +26,16 @@ HISTORY_FIELDS = [
     "downloaded_at",
     "index_sha256",
 ]
+PROCESSING_FIELDS = [
+    "sha256",
+    "package_id",
+    "version_code",
+    "jadx_status",
+    "apktool_status",
+    "scan_status",
+    "updated_at",
+    "error",
+]
 ATTEMPT_FIELDS = [
     "timestamp",
     "run_id",
@@ -75,7 +85,7 @@ class WorkspaceDatabase:
         for path, fields in (
             (self.history_path, HISTORY_FIELDS),
             (self.attempts_path, ATTEMPT_FIELDS),
-            (self.processing_path, ["sha256", "package_id", "version_code", "jadx_status", "apktool_status", "scan_status", "updated_at", "error"]),
+            (self.processing_path, PROCESSING_FIELDS),
         ):
             self._ensure_header(path, fields)
 
@@ -127,6 +137,64 @@ class WorkspaceDatabase:
         except OSError as exc:
             raise DatabaseError(f"Cannot read download history: {exc}") from exc
         return hashes
+
+    def read_download_history(self) -> list[dict[str, str]]:
+        self.ensure()
+        try:
+            with self.history_path.open("r", encoding="utf-8", newline="") as handle:
+                return list(csv.DictReader(handle))
+        except OSError as exc:
+            raise DatabaseError(f"Cannot read download history: {exc}") from exc
+
+    def read_processing_status(self) -> dict[str, dict[str, str]]:
+        self.ensure()
+        try:
+            with self.processing_path.open("r", encoding="utf-8", newline="") as handle:
+                return {
+                    row["sha256"]: row
+                    for row in csv.DictReader(handle)
+                    if row.get("sha256")
+                }
+        except OSError as exc:
+            raise DatabaseError(f"Cannot read processing status: {exc}") from exc
+
+    def update_processing_status(self, row: Mapping[str, object]) -> None:
+        """Atomically replace mutable processing state keyed by artifact SHA-256."""
+        digest = str(row.get("sha256", "")).lower()
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise DatabaseError("Refusing to update processing status with malformed SHA-256.")
+        self.ensure()
+        existing = self.read_processing_status()
+        current = existing.get(digest, {field: "" for field in PROCESSING_FIELDS})
+        current.update({field: str(row.get(field, current.get(field, ""))) for field in PROCESSING_FIELDS})
+        current["sha256"] = digest
+        current["updated_at"] = str(row.get("updated_at") or utc_now())
+        existing[digest] = current
+
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=".processing_status.", suffix=".tmp", dir=self.database_dir
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=PROCESSING_FIELDS, extrasaction="raise")
+                writer.writeheader()
+                for key in sorted(existing):
+                    writer.writerow({field: existing[key].get(field, "") for field in PROCESSING_FIELDS})
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, self.processing_path)
+            directory_fd = os.open(self.database_dir, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError as exc:
+            raise DatabaseError(f"Cannot atomically update processing status: {exc}") from exc
+        finally:
+            if temporary.exists():
+                temporary.unlink()
 
     def append_attempt(self, row: Mapping[str, object]) -> None:
         self._append_row(self.attempts_path, ATTEMPT_FIELDS, row)
