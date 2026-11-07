@@ -223,7 +223,7 @@ class DecompilationRunner:
                 failed += 1
                 continue
 
-            output_root = self.results_root / package_id / version_code
+            output_root = self.results_root / package_id / version_code / digest
             try:
                 output_root.resolve().relative_to(self.results_root.resolve())
             except ValueError as exc:
