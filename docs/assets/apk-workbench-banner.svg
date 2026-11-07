@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="250" viewBox="0 0 1200 250" role="img" aria-labelledby="title desc">
+  <title id="title">APK WORKBENCH</title>
+  <desc id="desc">APK WORKBENCH by dial9 and ChatGPT. Discover, download, decompile, analyze, catalogue.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101b2b"/>
+      <stop offset="1" stop-color="#182b40"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#42d6c5"/>
+      <stop offset="1" stop-color="#91f0d5"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="250" rx="20" fill="url(#bg)"/>
+  <path d="M0 204H1200" stroke="#31475d" stroke-width="1"/>
+  <path d="M0 0H1200" stroke="#42d6c5" stroke-width="7"/>
+  <g transform="translate(64 57)">
+    <rect x="0" y="0" width="112" height="112" rx="22" fill="#203b51" stroke="#42d6c5" stroke-width="2"/>
+    <path d="M25 35L56 19L87 35L56 51Z" fill="#91f0d5"/>
+    <path d="M25 50L56 66L87 50V76L56 93L25 76Z" fill="#42d6c5"/>
+    <path d="M41 57L53 69L75 45" fill="none" stroke="#102233" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="218" y="111" fill="#f5f8fb" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="55" font-weight="800" letter-spacing="3">APK WORKBENCH</text>
+  <text x="221" y="151" fill="#91f0d5" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="600" letter-spacing="2.8">DISCOVER  /  DOWNLOAD  /  DECOMPILE  /  ANALYZE  /  CATALOGUE</text>
+  <text x="221" y="184" fill="#b9c7d5" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" letter-spacing="1.4">CO-DEVELOPED BY DIAL9 + CHATGPT</text>
+  <text x="1137" y="231" text-anchor="end" fill="#8197aa" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" letter-spacing="2">SLOW. SIMPLE. SEQUENTIAL. VERIFIED.</text>
+</svg>
