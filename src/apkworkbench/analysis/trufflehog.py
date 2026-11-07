@@ -269,10 +269,18 @@ class TruffleHogScanner:
             "verification",
         ]
         rows: list[dict[str, object]] = []
+        processing = self.database.read_processing_status()
+        eligible = {
+            (row.get("package_id", ""), str(row.get("version_code", "")))
+            for row in processing.values()
+            if row.get("scan_status") == "success"
+        }
         for path in sorted(self.results_root.glob("*/*/trufflehog/findings.json")):
             try:
                 package_id = path.parents[2].name
                 version_code = path.parents[1].name
+                if (package_id, version_code) not in eligible:
+                    continue
                 loaded = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
