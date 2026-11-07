@@ -1,5 +1,3 @@
-![APK WORKBENCH](docs/assets/apk-workbench-banner.svg)
-
 # Security Policy
 
 APK WORKBENCH processes third-party Android packages and generated decompiler output. Treat both as untrusted input.
@@ -12,7 +10,7 @@ Security reports are accepted for the current default branch, **main**.
 
 Do not publish an unpatched vulnerability, exploit details, credentials, private APK contents, or personal data in a public issue.
 
-Use GitHub's **Report a vulnerability** flow from the repository Security tab when private vulnerability reporting is available. If it is unavailable, contact the repository owner through the GitHub profile and request a private reporting channel.
+Use GitHub's **Report a vulnerability** flow from the repository Security tab when private vulnerability reporting is available. If it is unavailable, contact the repository owner through the GitHub issue tracker or repository maintainers.
 
 Include:
 
@@ -35,8 +33,8 @@ The application is designed to:
 - Record acquisition in append-only history and immutable run manifests.
 - Re-check APK integrity before decompilation.
 - Use sequential external subprocess execution with timeouts.
-- Run TruffleHog with credential verification disabled.
-- Persist sanitized finding metadata and one-way fingerprints rather than raw secret values.
+- Run TruffleHog with credential verification enabled and publish only verified findings.
+- Persist verified finding metadata and one-way fingerprints rather than raw secret values.
 - Reject paths that escape managed workspace boundaries.
 
 These controls reduce defined risks; they do not prove that an APK is safe or benign.
@@ -47,4 +45,4 @@ APK WORKBENCH performs static analysis. It does not install or execute acquired 
 
 Run the application with least privilege, keep the operating system and external tools patched, and treat APKs, decompiler output, and scanner output as untrusted data.
 
-Scanner findings are unverified candidate indicators. They are not proof that a credential is active, valid, or exploitable.
+Scanner findings are verified indicators for manual review. They are not proof that a credential is active, valid, or exploitable.
