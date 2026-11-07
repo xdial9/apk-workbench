@@ -33,7 +33,7 @@ class TruffleHogAnalyzer:
         if not tool_version or not tool_version.strip():
             raise ValueError("tool_version must be the detected installed TruffleHog version.")
         timeout = timeout_seconds or float(scanner.timeout_seconds)
-        output_limit = max_output_bytes or scanner.max_output_bytes
+        output_limit = max_output_bytes or min(scanner.max_output_bytes, 64 * 1024 * 1024)
         self.scanner = scanner
         self.definition = AnalyzerDefinition(
             analyzer_id="trufflehog",
