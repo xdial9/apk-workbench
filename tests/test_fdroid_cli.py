@@ -1,11 +1,14 @@
 """CLI integration tests for authenticated F-Droid discovery."""
 from __future__ import annotations
 
+import csv
 import importlib
 import logging
 from types import SimpleNamespace
 
 from click.testing import CliRunner
+
+from apkworkbench.database.workspace import WorkspaceDatabase
 
 
 cli = importlib.import_module("apkworkbench.cli.main")
@@ -142,13 +145,8 @@ class DownloadConfig:
 
 
 def install_download_stubs(monkeypatch, tmp_path, artifacts):
-    import uuid
-
     calls = []
-    database = __import__(
-        "apkworkbench.database.workspace",
-        fromlist=["WorkspaceDatabase"],
-    ).WorkspaceDatabase(tmp_path)
+    database = WorkspaceDatabase(tmp_path)
 
     class FakeDownloader:
         def __init__(self, db, *, workspace, timeout_seconds):
