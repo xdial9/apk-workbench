@@ -97,7 +97,11 @@ class GpgVerifier:
     ) -> bool:
         """Return True only for a cryptographically valid signature by the pinned primary key."""
         expected = self._normalize_fingerprint(trusted_fingerprint)
-        if self.trusted_fingerprints and expected not in self.trusted_fingerprints:
+        if not self.trusted_fingerprints:
+            raise GpgVerificationError(
+                "No trusted OpenPGP fingerprints are configured; refusing verification."
+            )
+        if expected not in self.trusted_fingerprints:
             raise GpgVerificationError("Requested fingerprint is not in the configured trust allowlist.")
 
         data = Path(data_path)
