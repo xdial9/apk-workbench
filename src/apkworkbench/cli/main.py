@@ -278,6 +278,14 @@ def download(apk_count: int, package_id: str | None, refresh_index: bool) -> Non
                 f"  VERIFIED SHA-256 {result.sha256} ({result.size:,} bytes)"
             )
             click.echo(f"  Saved: {result.path}")
+        except DatabaseError as exc:
+            logger.critical(
+                "Acquisition stopped because workspace persistence failed for %s: %s",
+                artifact.package_id,
+                exc,
+            )
+            click.echo(f"  FATAL WORKSPACE DATABASE ERROR: {exc}", err=True)
+            raise click.exceptions.Exit(1) from exc
         except DownloadError as exc:
             failures += 1
             logger.error("Download failed for %s: %s", artifact.package_id, exc)
