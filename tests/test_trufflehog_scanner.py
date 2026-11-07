@@ -58,7 +58,7 @@ def result_json(raw=RAW_SECRET):
 def make_workspace(tmp_path: Path):
     database = WorkspaceDatabase(tmp_path)
     database.ensure()
-    apk = tmp_path / "downloads/org.example.app/7/app.apk"
+    apk = tmp_path / "downloads/org.example.app/7" / digest / "app.apk"
     apk.parent.mkdir(parents=True, exist_ok=True)
     apk.write_bytes(b"downloaded apk")
     digest = hashlib.sha256(b"downloaded apk").hexdigest()
@@ -78,7 +78,7 @@ def make_workspace(tmp_path: Path):
         }
     )
     for tool in ("jadx", "apktool"):
-        directory = tmp_path / "results/org.example.app/7" / tool
+        directory = tmp_path / "results/org.example.app/7" / digest / tool
         directory.mkdir(parents=True)
         (directory / "placeholder.txt").write_text("source code", encoding="utf-8")
     database.update_processing_status(
@@ -149,7 +149,7 @@ def test_scanner_disables_verification_and_persists_only_sanitized_fields(monkey
     assert command[-2].endswith("/jadx")
     assert command[-1].endswith("/apktool")
 
-    output = tmp_path / "results/org.example.app/7/trufflehog/findings.json"
+    output = tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings.json"
     sanitized = output.read_text(encoding="utf-8")
     assert RAW_SECRET not in sanitized
     assert "secret-part" not in sanitized
