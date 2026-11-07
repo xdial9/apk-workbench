@@ -65,7 +65,10 @@ class DecompilationRunner:
         raw_path = row.get("local_path", "")
         if not raw_path:
             raise DecompilationError("Download history record has no local_path.")
-        apk_path = Path(raw_path).expanduser().resolve(strict=True)
+        candidate_path = Path(raw_path).expanduser()
+        if candidate_path.is_symlink():
+            raise DecompilationError("Acquired APK path must not be a symlink.")
+        apk_path = candidate_path.resolve(strict=True)
         try:
             apk_path.relative_to(self.download_root)
         except ValueError as exc:
@@ -388,11 +391,19 @@ class DecompilationRunner:
                 failed += 1
                 continue
 
-            output_root = self.results_root / package_id / version_code / digest
+            package_root = self.results_root / package_id
+            version_root = package_root / version_code
+            output_root = version_root / digest
+            if any(path.is_symlink() for path in (package_root, version_root, output_root)):
+                raise DecompilationError(
+                    "Decompilation output path contains a symlinked workspace component."
+                )
             try:
                 output_root.resolve().relative_to(self.results_root.resolve())
             except ValueError as exc:
-                raise DecompilationError("Resolved decompilation path escapes results workspace.") from exc
+                raise DecompilationError(
+                    "Resolved decompilation path escapes results workspace."
+                ) from exc
             jadx_output = output_root / "jadx"
             apktool_output = output_root / "apktool"
             output_root.mkdir(parents=True, exist_ok=True)
