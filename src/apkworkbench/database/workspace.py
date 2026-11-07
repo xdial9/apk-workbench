@@ -16,6 +16,7 @@ class DatabaseError(RuntimeError):
 HISTORY_FIELDS = [
     "sha256",
     "package_id",
+    "app_name",
     "version_code",
     "version_name",
     "source",
