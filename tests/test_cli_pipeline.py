@@ -112,4 +112,4 @@ def test_run_returns_success_when_all_stages_finish_without_errors(monkeypatch):
     assert calls[1][1]["run_id"] == "run-123"
     assert calls[2][1]["run_id"] == "run-123"
     assert calls[0][1]["refresh_index"] is True
-    assert "All pipeline stages completed without reported errors." in result.output
+    assert "All pipeline stages completed and every manifest item is accounted for." in result.output
