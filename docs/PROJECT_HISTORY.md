@@ -12,7 +12,7 @@ This is a milestone chronicle, not a claim that every conversation or local expe
 
 ### 1. F-Droid: the original acquisition model
 
-The project began as a sequential Linux-native Python workbench centered on authenticated F-Droid repository discovery, verified APK acquisition, JADX/Apktool decompilation, TruffleHog scanning and sanitized reports. Its early operating principles were deliberately conservative: one artifact at a time, one external process at a time, verify inputs, preserve records.
+The project began as a sequential Linux-native Python workbench centered on authenticated F-Droid repository discovery, verified APK acquisition, JADX/Apktool decompilation, TruffleHog scanning and complete-finding reports. Its early operating principles were deliberately conservative: one artifact at a time, one external process at a time, verify inputs, preserve records.
 
 The initial F-Droid source-verification work established an important integrity boundary: authenticate the signed repository index before trusting its metadata, distinguish the OpenPGP index signer from Android APK signing certificates, and verify downloaded APK bytes against the index SHA-256.
 
@@ -38,7 +38,7 @@ This is documented in [PR #3 — Google Play Store-only APK acquisition](https:/
 
 TruffleHog was initially the analysis engine because it could inspect decompiled files for credential-like material. The later architectural realization was not that TruffleHog is a bad tool. It was that **secret scanning is only one narrow category of APK analysis**. Making it the center of the product would leave the larger discovery objective unserved: manifest structure, endpoints, SDKs, cloud/vendor fingerprints, authentication/configuration indicators, WebViews, network security, crypto and dependency inventory.
 
-The resulting decision is to retain TruffleHog as a supplementary analyzer, preserve its safe no-verification behavior and normalize its sanitized findings into a common evidence model. It is no longer the product architecture.
+The resulting decision is to retain TruffleHog as a supplementary analyzer, preserve its safe no-verification behavior and carry its complete original finding objects alongside common analyzer metadata. It is no longer the product architecture.
 
 ### 6. Airtable enters as an engineering mirror
 
