@@ -226,6 +226,8 @@ def test_history_commit_failure_leaves_verified_file_for_retry(tmp_path):
     destination = downloader.destination_for(artifact)
     assert destination.read_bytes() == PAYLOAD
     assert database.history_hashes() == set()
+    attempts = database.read_download_attempts()
+    assert attempts[-1]["status"] == "persistence_failed"
 
 
 
