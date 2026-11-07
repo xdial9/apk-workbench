@@ -261,7 +261,7 @@ def test_execution_requires_registered_analyzer_and_valid_status(tmp_path):
     database = EvidenceDatabase(tmp_path)
     _, artifact_id, analysis_id, _ = seed_analysis(database, tmp_path)
 
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(EvidenceDatabaseError, match="SQLite evidence store error"):
         database.record_execution(
             analysis_id, "missing", "1.0", status="success"
         )
