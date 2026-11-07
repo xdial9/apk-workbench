@@ -35,7 +35,7 @@ class DependencyDetector:
         "java": (True, ["-version"]),
         "jadx": (True, ["--version"]),
         "apktool": (True, ["--version"]),
-        "trufflehog": (False, ["--version"]),
+        "trufflehog": (True, ["--version"]),
     }
 
     def __init__(self, config: Config | None = None):
