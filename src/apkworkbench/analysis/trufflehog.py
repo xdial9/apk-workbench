@@ -414,13 +414,18 @@ class TruffleHogScanner:
             for digest, row in processing.items()
             if row.get("scan_status") == "success"
         }
+        play_hashes = {
+            row.get("sha256", "").lower()
+            for row in self.database.read_download_history()
+            if row.get("source") == "google_play"
+        }
         for path in sorted(self.results_root.glob("*/*/*/trufflehog/findings.json")):
             try:
                 path.resolve(strict=True).relative_to(self.results_root.resolve())
                 digest = path.parents[1].name
                 package_id = path.parents[3].name
                 version_code = path.parents[2].name
-                if digest not in eligible_hashes:
+                if digest not in eligible_hashes or digest not in play_hashes:
                     continue
                 loaded = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError, json.JSONDecodeError):
@@ -478,7 +483,10 @@ class TruffleHogScanner:
             raise ValueError("limit must be at least 1 when supplied")
         self._validate_results_root()
         self.database.ensure()
-        history = self.database.read_download_history()
+        history = [
+            row for row in self.database.read_download_history()
+            if row.get("source") == "google_play"
+        ]
         statuses = self.database.read_processing_status()
         scanned = findings_count = failed = skipped = 0
 
@@ -486,6 +494,8 @@ class TruffleHogScanner:
             candidate_rows = history
         else:
             manifest_rows = self.database.read_manifest(run_id)
+            if any(row.get("source") != "google_play" for row in manifest_rows):
+                raise AnalysisError("Refusing to scan a manifest that is not Google Play-sourced.")
             history_by_hash = {
                 row.get("sha256", "").lower(): row for row in history if row.get("sha256")
             }

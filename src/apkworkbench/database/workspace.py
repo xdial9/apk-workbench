@@ -172,7 +172,7 @@ class WorkspaceDatabase:
         except (OSError, csv.Error) as exc:
             raise DatabaseError(f"Cannot append to {path}: {exc}") from exc
 
-    def history_hashes(self) -> set[str]:
+    def history_hashes(self, source: str | None = None) -> set[str]:
         self.ensure()
         with self._write_lock():
             hashes: set[str] = set()
@@ -180,6 +180,8 @@ class WorkspaceDatabase:
                 with self.history_path.open("r", encoding="utf-8", newline="") as handle:
                     for row in csv.DictReader(handle):
                         digest = (row.get("sha256") or "").strip().lower()
+                        if source is not None and row.get("source") != source:
+                            continue
                         if len(digest) != 64 or any(
                             char not in "0123456789abcdef" for char in digest
                         ):
@@ -212,7 +214,10 @@ class WorkspaceDatabase:
     def reconcile_run(self, run_id: str) -> dict[str, object]:
         """Account for every manifest entry using acquisition attempts and stage state."""
         manifest = self.read_manifest(run_id)
-        history = self.read_download_history()
+        history = [
+            row for row in self.read_download_history()
+            if row.get("source") == "google_play"
+        ]
         attempts = self.read_download_attempts()
         processing = self.read_processing_status()
 
@@ -247,7 +252,9 @@ class WorkspaceDatabase:
                 if attempt:
                     detail = detail or attempt.get("error", "")
             elif (
-                acquired.get("run_id") != run_id
+                selected.get("source") != "google_play"
+                or acquired.get("source") != "google_play"
+                or acquired.get("run_id") != run_id
                 or acquired.get("package_id") != selected.get("package_id")
                 or str(acquired.get("version_code", "")) != str(selected.get("version_code", ""))
             ):
@@ -359,14 +366,21 @@ class WorkspaceDatabase:
             self._append_row(self.attempts_path, ATTEMPT_FIELDS, row)
 
     def append_history(self, row: Mapping[str, object]) -> None:
+        if row.get("source") != "google_play":
+            raise DatabaseError("Only Google Play Store acquisition records may be appended.")
         digest = str(row.get("sha256", "")).lower()
         if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
             raise DatabaseError("Refusing to append a malformed SHA-256 digest.")
         self.ensure()
         with self._write_lock():
-            if digest in self.history_hashes():
+            source = str(row.get("source", ""))
+            existing = self.read_download_history()
+            if any(
+                item.get("sha256", "").lower() == digest and item.get("source", "") == source
+                for item in existing
+            ):
                 raise DatabaseError(
-                    f"SHA-256 {digest} is already present in immutable download history."
+                    f"SHA-256 {digest} is already present in immutable {source!r} download history."
                 )
             self._append_row(self.history_path, HISTORY_FIELDS, row)
 
@@ -392,6 +406,10 @@ class WorkspaceDatabase:
                     writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDS, extrasaction="raise")
                     writer.writeheader()
                     for row in rows:
+                        if row.get("source") != "google_play":
+                            raise DatabaseError("Only Google Play Store items may enter a run manifest.")
+                        if not str(row.get("download_url", "")).startswith("google-play://"):
+                            raise DatabaseError("Google Play manifest references must use google-play:// identifiers.")
                         writer.writerow({field: row.get(field, "") for field in MANIFEST_FIELDS})
                     handle.flush()
                     os.fsync(handle.fileno())
@@ -442,6 +460,8 @@ class WorkspaceDatabase:
                     for row in reader:
                         if row.get("run_id") != run_id:
                             raise DatabaseError(f"Run manifest contains a mismatched run ID: {path}")
+                        if row.get("source") != "google_play" or not row.get("download_url", "").startswith("google-play://"):
+                            raise DatabaseError(f"Run manifest contains a non-Google Play source reference: {path}")
                         digest = (row.get("sha256") or "").strip().lower()
                         if len(digest) != 64 or any(
                             char not in "0123456789abcdef" for char in digest

@@ -332,7 +332,10 @@ class DecompilationRunner:
             raise ValueError("limit must be at least 1 when supplied")
         self._validate_workspace_roots()
         self.database.ensure()
-        history = self.database.read_download_history()
+        history = [
+            row for row in self.database.read_download_history()
+            if row.get("source") == "google_play"
+        ]
         statuses = self.database.read_processing_status()
         examined = completed = failed = skipped = 0
 
@@ -340,6 +343,8 @@ class DecompilationRunner:
             candidate_rows = history
         else:
             manifest_rows = self.database.read_manifest(run_id)
+            if any(row.get("source") != "google_play" for row in manifest_rows):
+                raise DecompilationError("Refusing to process a manifest that is not Google Play-sourced.")
             history_by_hash = {
                 row.get("sha256", "").lower(): row for row in history if row.get("sha256")
             }

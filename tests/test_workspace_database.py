@@ -14,8 +14,8 @@ def history_row(digest):
         "package_id": "org.example.app",
         "version_code": 1,
         "version_name": "1.0",
-        "source": "fdroid",
-        "download_url": "https://f-droid.org/repo/app.apk",
+        "source": "google_play",
+        "download_url": "google-play://fixture/app.apk",
         "local_path": "/workspace/downloads/org.example.app/1/app.apk",
         "size": 10,
         "run_id": "run-id",
@@ -49,6 +49,15 @@ def test_history_is_append_only_and_hash_deduplicated(tmp_path):
     assert rows[0]["sha256"] == "a" * 64
 
 
+def test_history_rejects_non_google_play_sources(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+    row = history_row("d" * 64)
+    row["source"] = "unsupported_source"
+
+    with pytest.raises(DatabaseError, match="Only Google Play Store"):
+        database.append_history(row)
+
+
 def test_manifest_is_published_complete_and_cannot_be_overwritten(tmp_path):
     database = WorkspaceDatabase(tmp_path)
     row = {
@@ -59,8 +68,8 @@ def test_manifest_is_published_complete_and_cannot_be_overwritten(tmp_path):
         "app_name": "Example",
         "version_code": 1,
         "version_name": "1.0",
-        "source": "fdroid",
-        "download_url": "https://f-droid.org/repo/app.apk",
+        "source": "google_play",
+        "download_url": "google-play://fixture/app.apk",
         "sha256": "a" * 64,
         "size": 10,
         "signer_sha256": "",
@@ -103,8 +112,8 @@ def test_manifest_reader_returns_selection_order_and_rejects_path_injection(tmp_
                 "app_name": "Example",
                 "version_code": 1,
                 "version_name": "1.0",
-                "source": "fdroid",
-                "download_url": "https://f-droid.org/repo/app.apk",
+                "source": "google_play",
+                "download_url": "google-play://fixture/app.apk",
                 "sha256": digest,
                 "size": 10,
                 "signer_sha256": "",

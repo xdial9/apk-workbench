@@ -31,7 +31,7 @@ class DependencyInfo:
 
 class DependencyDetector:
     CHECKS: ClassVar[dict[str, tuple[bool, list[str]]]] = {
-        "gpg": (True, ["--version"]),
+        "playstore-cli": (True, ["--help"]),
         "java": (True, ["-version"]),
         "jadx": (True, ["--version"]),
         "apktool": (True, ["--version"]),
@@ -42,7 +42,8 @@ class DependencyDetector:
         self.config = config or Config()
 
     def _check_tool(self, name: str, required: bool, version_args: list[str]) -> DependencyInfo:
-        executable = str(self.config.get(f"tools.{name}", name))
+        config_name = "playstore_cli" if name == "playstore-cli" else name
+        executable = str(self.config.get(f"tools.{config_name}", name))
         info = DependencyInfo(name=name, required=required, executable=executable)
         resolved = shutil.which(executable)
         if not resolved:
