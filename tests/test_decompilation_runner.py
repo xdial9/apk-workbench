@@ -393,3 +393,22 @@ def test_run_id_limits_processing_to_frozen_manifest(monkeypatch, tmp_path):
     assert calls == [str(selected_path), str(selected_path)]
     assert database.read_processing_status()[selected_digest]["jadx_status"] == "success"
     assert old_digest not in database.read_processing_status()
+
+
+def test_malformed_history_digest_is_counted_as_failed(monkeypatch, tmp_path):
+    runner, database, _digest, _ = make_runner(tmp_path)
+    with database.history_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    rows[0]["sha256"] = ""
+    with database.history_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerow(rows[0])
+
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda *args, **kwargs: pytest.fail("invalid record reached tool")
+    )
+    summary = runner.run()
+    assert summary.examined == 0
+    assert summary.failed == 1
+    assert summary.skipped == 0
