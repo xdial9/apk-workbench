@@ -193,7 +193,7 @@ def discover(
                 package_id = raw.strip()
                 if not package_id or package_id.startswith("#") or package_id in existing:
                     continue
-                if not re.fullmatch(r"[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+", package_id):
+                if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id):
                     raise click.ClickException(f"Invalid Android package ID in {packages_file}: {package_id!r}")
                 apps.append(PlayApp(package_id, package_id, "", "", 0))
                 existing.add(package_id)
