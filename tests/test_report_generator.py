@@ -98,7 +98,7 @@ def test_report_is_generated_even_when_no_findings_file_exists(tmp_path):
     assert summary.with_findings == 0
     assert summary.total_findings == 0
     parsed = json.loads(
-        (tmp_path / "reports/org.example.app/12/report.json").read_text(encoding="utf-8")
+        (tmp_path / "reports/org.example.app/12" / ("a" * 64) / "report.json").read_text(encoding="utf-8")
     )
     assert parsed["findings"] == []
 
