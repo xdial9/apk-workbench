@@ -8,8 +8,6 @@ import json
 import logging
 from pathlib import Path
 
-import pytest
-
 from apkworkbench.analysis.trufflehog import TruffleHogScanner
 from apkworkbench.database.workspace import WorkspaceDatabase
 
@@ -181,7 +179,7 @@ def test_scanner_refuses_to_run_when_no_verification_flag_is_unavailable(monkeyp
 
 def test_malformed_json_prevents_results_from_being_published(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
-    calls, _ = install_fakes(monkeypatch, b"{not-json}\n")
+    _calls, _ = install_fakes(monkeypatch, b"{not-json}\n")
     scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
 
     summary = scanner.run()
