@@ -103,9 +103,9 @@ def test_runs_jadx_then_apktool_streaming_to_disk(monkeypatch, tmp_path):
     assert summary.examined == summary.completed == 1
     assert summary.failed == 0
     assert [command[0] for command in calls] == ["jadx", "apktool"]
-    assert calls[0][1:3] == ["--threads-count", "1"]
+    assert calls[0][1:3] == ["--threads-count", "4"]
     assert calls[0][-1] == str(apk_path)
-    assert calls[1][1:4] == ["d", "--jobs", "1"]
+    assert calls[1][1:4] == ["d", "--jobs", "4"]
     state = database.read_processing_status()[digest]
     assert state["jadx_status"] == state["apktool_status"] == "success"
     assert state["scan_status"] == "pending"

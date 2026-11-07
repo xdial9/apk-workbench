@@ -492,14 +492,14 @@ class DecompilationRunner:
                     self.jadx_executable,
                     jadx_output,
                     "jadx",
-                    ["--threads-count", "1", "--output-dir"],
+                    ["--threads-count", "4", "--output-dir"],
                 ),
                 (
                     "Apktool",
                     self.apktool_executable,
                     apktool_output,
                     "apktool",
-                    ["d", "--jobs", "1", "--force", "-o"],
+                    ["d", "--jobs", "4", "--force", "-o"],
                 ),
             )
             for label, executable, destination, tool_name, arguments in stages:
