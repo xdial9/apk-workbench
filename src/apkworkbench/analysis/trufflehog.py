@@ -76,9 +76,14 @@ class TruffleHogScanner:
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise AnalysisError(f"Unable to inspect TruffleHog CLI capabilities: {exc}") from exc
         help_text = (result.stdout or "") + "\n" + (result.stderr or "")
-        # Kong presents boolean flags as --[no-]flag; normalize that notation.
-        normalized_help = help_text.replace("[no-]", "")
-        missing = [flag for flag in self.REQUIRED_HELP_FLAGS if flag not in normalized_help]
+        # Kong may advertise a boolean option as --[no-]flag, which explicitly
+        # documents both its positive and negative forms.
+        def supported(flag: str) -> bool:
+            if flag in help_text:
+                return True
+            return flag.startswith("--no-") and f"--[no-]{flag[5:]}" in help_text
+
+        missing = [flag for flag in self.REQUIRED_HELP_FLAGS if not supported(flag)]
         if missing:
             raise AnalysisError(
                 "Installed TruffleHog filesystem command does not advertise required safe "
