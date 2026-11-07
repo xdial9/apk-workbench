@@ -113,7 +113,7 @@ def _apply_resource_limits(profile: ResourceProfile) -> None:
         import resource
 
         memory_bytes = profile.max_memory_mb * 1024 * 1024
-        current_soft, current_hard = resource.getrlimit(resource.RLIMIT_AS)
+        _current_soft, current_hard = resource.getrlimit(resource.RLIMIT_AS)
         hard_limit = memory_bytes if current_hard < 0 else min(memory_bytes, current_hard)
         resource.setrlimit(resource.RLIMIT_AS, (min(memory_bytes, hard_limit), hard_limit))
     except (ImportError, OSError, ValueError):
@@ -162,7 +162,7 @@ def _worker_entry(analyzer: Analyzer, context: AnalyzerContext, send_connection,
             }
             encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         send_connection.send_bytes(encoded)
-    except BaseException as exc:
+    except Exception as exc:
         payload = {
             "status": "failed",
             "findings": [],
