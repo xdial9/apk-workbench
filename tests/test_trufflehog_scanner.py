@@ -27,6 +27,7 @@ class FakeProcess:
         self.stdout = stdout
         self.return_code = return_code
         self.killed = False
+        self.pid = 424242
 
     def wait(self, timeout=None):
         return self.return_code
@@ -99,7 +100,7 @@ def make_workspace(tmp_path: Path):
     return database, digest
 
 
-def install_fakes(monkeypatch, output, *, return_code=0, help_text=HELP_TEXT):
+def install_fakes(monkeypatch, output, *, return_code=0, help_text=HELP_TEXT, stderr=b""):
     import subprocess
 
     calls = []
@@ -120,8 +121,10 @@ def install_fakes(monkeypatch, output, *, return_code=0, help_text=HELP_TEXT):
     def fake_popen(command, **kwargs):
         calls.append(("scan", command))
         assert kwargs["stdout"] is subprocess.PIPE
-        assert kwargs["stderr"] is subprocess.DEVNULL
+        assert kwargs["stderr"] is not subprocess.DEVNULL
         assert kwargs["bufsize"] == 0
+        assert kwargs["start_new_session"] is True
+        kwargs["stderr"].write(stderr)
         return process
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -255,6 +258,9 @@ def test_scanner_kills_process_when_timeout_expires(monkeypatch, tmp_path):
         return -9
 
     process.wait = wait_with_timeout
+    monkeypatch.setattr(
+        os, "killpg", lambda _pid, _sig: setattr(process, "killed", True)
+    )
     summary = scanner.run()
 
     assert summary.failed == 1
@@ -415,3 +421,48 @@ def test_scanner_only_processes_artifacts_listed_in_the_selected_run_manifest(mo
     assert len(scan_commands) == 1
     assert all("org.example.old" not in arg for arg in scan_commands[0])
     assert database.read_processing_status()[old_digest]["scan_status"] == "pending"
+
+
+def test_scanner_refuses_empty_decompilation_directories(monkeypatch, tmp_path):
+    database, digest = make_workspace(tmp_path)
+    base = tmp_path / "results/org.example.app/7" / digest
+    for tool in ("jadx", "apktool"):
+        shutil.rmtree(base / tool)
+        (base / tool).mkdir()
+    calls, _ = install_fakes(monkeypatch, b"")
+    scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
+
+    summary = scanner.run()
+
+    assert summary.failed == 1
+    assert summary.scanned == 0
+    assert [entry[0] for entry in calls] == ["help"]
+    assert "no usable files" in database.read_processing_status()[digest]["error"]
+
+
+def test_scanner_rejects_symlinks_inside_decompilation_output(monkeypatch, tmp_path):
+    database, digest = make_workspace(tmp_path)
+    jadx = tmp_path / "results/org.example.app/7" / digest / "jadx"
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("not part of the decompilation", encoding="utf-8")
+    (jadx / "outside.txt").symlink_to(outside)
+    calls, _ = install_fakes(monkeypatch, b"")
+    scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
+
+    summary = scanner.run()
+
+    assert summary.failed == 1
+    assert summary.scanned == 0
+    assert [entry[0] for entry in calls] == ["help"]
+    assert "symlink" in database.read_processing_status()[digest]["error"]
+
+
+def test_scanner_preserves_stderr_diagnostics_on_nonzero_exit(monkeypatch, tmp_path):
+    database, digest = make_workspace(tmp_path)
+    install_fakes(monkeypatch, b"", return_code=9, stderr=b"filesystem scan failed: permission denied")
+    scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
+
+    summary = scanner.run()
+
+    assert summary.failed == 1
+    assert "permission denied" in database.read_processing_status()[digest]["error"]
