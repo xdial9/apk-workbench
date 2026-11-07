@@ -325,7 +325,11 @@ class DecompilationRunner:
 
         for row in candidate_rows:
             digest = row.get("sha256", "").lower()
-            if not digest:
+            if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+                failed += 1
+                self.logger.error(
+                    "Acquisition history contains an invalid SHA-256; item cannot be processed."
+                )
                 continue
             previous = statuses.get(digest, {})
             scan_status = previous.get("scan_status") or "pending"
