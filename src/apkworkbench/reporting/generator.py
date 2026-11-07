@@ -170,7 +170,11 @@ class ReportGenerator:
                 findings_path.resolve().relative_to(self.results_root.resolve())
             except ValueError as exc:
                 raise ReportingError("Finding path resolves outside the results workspace.") from exc
-            findings = self._read_sanitized_findings(findings_path)
+            findings = (
+                self._read_sanitized_findings(findings_path)
+                if status.get("scan_status") == "success"
+                else []
+            )
             artifact = {
                 "package_id": package_id,
                 "app_name": row.get("app_name", ""),
