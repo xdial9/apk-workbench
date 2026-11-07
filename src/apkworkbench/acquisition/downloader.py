@@ -250,6 +250,7 @@ class ArtifactDownloader:
             {
                 "sha256": digest,
                 "package_id": artifact.package_id,
+                "app_name": artifact.app_name or "",
                 "version_code": artifact.version_code,
                 "version_name": artifact.version_name or "",
                 "source": "fdroid",
