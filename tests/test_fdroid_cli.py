@@ -239,6 +239,9 @@ def test_download_aborts_remaining_items_when_workspace_persistence_fails(monkey
         def __init__(self, db, *, workspace, timeout_seconds):
             self.database = db
 
+        def destination_for(self, artifact):
+            return tmp_path / "downloads" / artifact.package_id / "app.apk"
+
         def download(self, artifact, *, run_id, index_sha256):
             attempted.append(artifact.package_id)
             raise DatabaseError("history storage is unavailable")
