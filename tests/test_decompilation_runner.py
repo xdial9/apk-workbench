@@ -169,3 +169,19 @@ def test_history_cannot_point_outside_download_workspace(monkeypatch, tmp_path):
 
     assert summary.failed == 1
     assert "outside the downloads workspace" in database.read_processing_status()[digest]["error"]
+
+
+
+def test_stale_decompiler_output_symlink_is_unlinked_not_followed(tmp_path):
+    target = tmp_path / "outside"
+    target.mkdir()
+    marker = target / "keep.txt"
+    marker.write_text("keep", encoding="utf-8")
+    output = tmp_path / "results/org.example.app/7" / ("a" * 64) / "jadx"
+    output.parent.mkdir(parents=True)
+    output.symlink_to(target, target_is_directory=True)
+
+    DecompilationRunner._remove_existing_output(output)
+
+    assert not output.exists()
+    assert marker.read_text(encoding="utf-8") == "keep"
