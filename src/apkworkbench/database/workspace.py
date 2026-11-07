@@ -80,18 +80,41 @@ class WorkspaceDatabase:
     """Manage the workspace CSV records with append-only and atomic semantics."""
 
     def __init__(self, workspace: str | Path):
-        self.root = Path(workspace).expanduser()
+        self.root = Path(workspace).expanduser().resolve()
         self.database_dir = self.root / "database"
         self.manifest_dir = self.database_dir / "run_manifests"
         self.history_path = self.database_dir / "download_history.csv"
         self.attempts_path = self.database_dir / "download_attempts.csv"
         self.processing_path = self.database_dir / "processing_status.csv"
 
+    def _ensure_workspace_directories(self) -> None:
+        """Create database directories only when they remain inside the workspace."""
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            if self.database_dir.is_symlink():
+                raise DatabaseError("Refusing a symlinked workspace database directory.")
+            self.database_dir.mkdir(parents=True, exist_ok=True)
+            database_root = self.database_dir.resolve(strict=True)
+            database_root.relative_to(self.root)
+
+            if self.manifest_dir.is_symlink():
+                raise DatabaseError("Refusing a symlinked run-manifest directory.")
+            self.manifest_dir.mkdir(parents=True, exist_ok=True)
+            self.manifest_dir.resolve(strict=True).relative_to(database_root)
+        except DatabaseError:
+            raise
+        except (OSError, ValueError) as exc:
+            raise DatabaseError(
+                f"Workspace database directories must remain inside {self.root}: {exc}"
+            ) from exc
+
     @contextmanager
     def _write_lock(self):
         """Serialize workspace reads and mutations across threads and processes."""
-        self.database_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_workspace_directories()
         lock_path = self.database_dir / ".workspace.lock"
+        if lock_path.is_symlink():
+            raise DatabaseError("Refusing a symlinked workspace database lock.")
         key = str(self.database_dir.resolve())
         held = getattr(_LOCK_STATE, "held", None)
         if held is None:
@@ -126,8 +149,7 @@ class WorkspaceDatabase:
                 handle.close()
 
     def ensure(self) -> None:
-        self.manifest_dir.mkdir(parents=True, exist_ok=True)
-        self.database_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_workspace_directories()
         for path, fields in (
             (self.history_path, HISTORY_FIELDS),
             (self.attempts_path, ATTEMPT_FIELDS),
@@ -138,6 +160,10 @@ class WorkspaceDatabase:
     @staticmethod
     def _ensure_header(path: Path, fields: list[str]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_symlink():
+            raise DatabaseError(f"Refusing a symlinked database file: {path}")
+        if path.exists() and not path.is_file():
+            raise DatabaseError(f"Database path is not a regular file: {path}")
         if not path.exists():
             try:
                 with path.open("x", encoding="utf-8", newline="") as handle:
@@ -390,6 +416,10 @@ class WorkspaceDatabase:
         rows: Iterable[Mapping[str, object]],
     ) -> Path:
         """Atomically publish a new manifest; an existing run manifest is never replaced."""
+        if not isinstance(run_id, str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9-]{0,63}", run_id
+        ):
+            raise DatabaseError("Run ID must contain only letters, digits, and hyphens.")
         self.ensure()
         with self._write_lock():
             self.ensure()
