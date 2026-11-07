@@ -6,7 +6,7 @@ import pytest
 from apkworkbench.sources.fdroid import FdroidIndexError, FdroidIndexParser
 
 
-def sample_index(path="/org.example.app_12.apk"):
+def sample_index(path="org.example.app_12.apk"):
     return {
         "packages": {
             "org.example.app": {
