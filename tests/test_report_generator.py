@@ -90,7 +90,7 @@ def test_generates_json_and_html_without_secret_fields(tmp_path):
 
 def test_report_is_generated_even_when_no_findings_file_exists(tmp_path):
     database = setup_workspace(tmp_path)
-    (tmp_path / "results/org.example.app/12/trufflehog/findings.json").unlink()
+    (tmp_path / "results/org.example.app/12" / ("a" * 64) / "trufflehog/findings.json").unlink()
 
     summary = ReportGenerator(database, workspace=tmp_path).run()
 
