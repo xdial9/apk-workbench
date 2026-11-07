@@ -4,8 +4,6 @@ from __future__ import annotations
 import csv
 import hashlib
 import logging
-import os
-import signal
 import subprocess
 from pathlib import Path
 
