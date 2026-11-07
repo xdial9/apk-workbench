@@ -75,19 +75,19 @@ class TruffleHogAnalyzer:
                 "TruffleHog requires exactly two decompilation_dirs: JADX and Apktool."
             )
         directories = [Path(value) for value in raw_directories]
-        sanitized = self.scanner._run_one(
+        original_findings = self.scanner._run_one(
             context.package_id,
             context.version_code,
             context.artifact_sha256,
             directories,
         )
         findings = []
-        for item in sanitized:
-            fingerprint = item.get("fingerprint")
-            detector_name = item.get("detector_name") or "TruffleHog finding"
-            detector_type = item.get("detector_type") or detector_name
-            source_path = self._relative_source_path(str(item.get("file_path") or ""))
-            line_value = item.get("line")
+        for item in original_findings:
+            fingerprint = self.scanner._finding_fingerprint(item)
+            detector_name = item.get("DetectorName") or "TruffleHog finding"
+            detector_type = item.get("DetectorType") or detector_name
+            file_path, line_value = self.scanner._filesystem_metadata(item)
+            source_path = self._relative_source_path(file_path)
             line_number = (
                 line_value
                 if isinstance(line_value, int) and not isinstance(line_value, bool) and line_value > 0
@@ -101,7 +101,7 @@ class TruffleHogAnalyzer:
                         source_path=source_path,
                         line_start=line_number,
                         extractor_coordinate={
-                            "decoder_name": item.get("decoder_name"),
+                            "decoder_name": item.get("DecoderName"),
                             "verification": "disabled",
                         },
                     ),
@@ -119,6 +119,7 @@ class TruffleHogAnalyzer:
                     rule_version=self.definition.version,
                     dedup_key=fingerprint,
                     evidence=evidence,
+                    raw_data=item,
                 )
             )
         return AnalyzerResult(
