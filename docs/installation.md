@@ -43,7 +43,11 @@ curl -fL --retry 3 \
   -o jadx-1.5.6.zip \
   https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip
 unzip -q -o jadx-1.5.6.zip -d "$HOME/.local/opt/jadx-1.5.6"
-ln -sfn "$HOME/.local/opt/jadx-1.5.6/bin/jadx" "$HOME/.local/bin/jadx"
+cat > "$HOME/.local/bin/jadx" <<'EOF'
+#!/bin/sh
+exec "$HOME/.local/opt/jadx-1.5.6/bin/jadx" "$@"
+EOF
+chmod 0755 "$HOME/.local/bin/jadx"
 ```
 
 Add the user-local binary directory to PATH for future terminal sessions:
@@ -64,14 +68,19 @@ If the release URL or asset name changes in a future JADX release, use the offic
 
 ## 3. Install Apktool
 
-Install the official Linux wrapper and Apktool 3.0.3 JAR into the user-local tools directory:
+Download the official Apktool 3.0.3 JAR into the user-local tools directory:
 
 ```bash
 mkdir -p "$HOME/.local/opt/apktool-3.0.3" "$HOME/.local/bin"
 curl -fL --retry 3 \
   -o "$HOME/.local/opt/apktool-3.0.3/apktool.jar" \
   https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar
+printf '%s  %s\n' \
+  'dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423' \
+  "$HOME/.local/opt/apktool-3.0.3/apktool.jar" | sha256sum -c -
 ```
+
+The SHA-256 value above is published in the Apktool 3.0.3 release notes. Stop if the checksum does not match.
 
 Create a small PATH wrapper that invokes the JAR explicitly:
 
@@ -90,7 +99,7 @@ apktool --version
 ```
 
 Official installation and release references:
-- https://apktool.org/docs/2.x/install/
+- https://apktool.org/docs/
 - https://github.com/iBotPeaches/Apktool/releases
 
 ## 4. Install TruffleHog
