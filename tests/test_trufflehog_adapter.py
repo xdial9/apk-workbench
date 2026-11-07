@@ -72,7 +72,7 @@ def test_adapter_maps_complete_secret_finding_to_common_contract(tmp_path):
     assert len(finding.value_fingerprint) == 64
     assert finding.evidence[0].source_path.endswith("jadx/Example.java")
     assert finding.evidence[0].line_start == 42
-    assert finding.verification_state == "verified"
+    assert finding.verification_state == "tool_verified"
     assert result.diagnostics[0].code == "credential_verification_enabled"
 
 
@@ -81,6 +81,7 @@ def test_adapter_rejects_source_path_outside_results_workspace(tmp_path):
     scanner = FakeScanner(
         results_root,
         [{
+            "Verified": True,
             "Verified": True,
             "DetectorName": "ExampleToken",
             "SourceMetadata": {"Data": {"Filesystem": {"file": str(tmp_path / "outside" / "secret.txt"), "line": 1}}},

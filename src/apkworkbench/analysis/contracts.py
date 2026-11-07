@@ -14,7 +14,7 @@ ANALYZER_ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,63}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RESULT_STATUSES = {"success", "partial", "skipped", "failed", "timed_out", "cancelled"}
 VERIFICATION_STATES = {
-    "static_unverified", "corroborated_static", "manually_verified",
+    "static_unverified", "corroborated_static", "tool_verified", "manually_verified",
     "runtime_verified", "rejected",
 }
 

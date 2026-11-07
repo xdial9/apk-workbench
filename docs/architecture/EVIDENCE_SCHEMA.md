@@ -102,7 +102,7 @@ Translate manifest and bundle JSON into component rows; preserve legacy hash alg
 
 **Fields and types**
 
-finding_id UUID; execution_id UUID; artifact_id UUID; category TEXT; finding_type TEXT; title TEXT; normalized_value TEXT nullable; value_fingerprint TEXT nullable; severity TEXT nullable; confidence REAL 0..1; verification_state ENUM(static_unverified, corroborated_static, manually_verified, runtime_verified, rejected); rationale TEXT; rule_id TEXT; rule_version TEXT; first_seen_at; last_seen_at; dedup_key TEXT.
+finding_id UUID; execution_id UUID; artifact_id UUID; category TEXT; finding_type TEXT; title TEXT; normalized_value TEXT nullable; value_fingerprint TEXT nullable; severity TEXT nullable; confidence REAL 0..1; verification_state ENUM(static_unverified, corroborated_static, tool_verified, manually_verified, runtime_verified, rejected); rationale TEXT; rule_id TEXT; rule_version TEXT; first_seen_at; last_seen_at; dedup_key TEXT.
 
 **Keys and constraints**
 
@@ -118,7 +118,7 @@ Immutable per run; state changes captured as analyst assessment events or status
 
 **Migration and compatibility**
 
-TruffleHog findings map to secret category while preserving every original detector field and value in raw_data_json. Legacy line/path becomes Evidence Location.
+TruffleHog findings map to the secret category while preserving every original detector field and value in raw_data_json. The scanner-reported verification state is represented as tool_verified, not runtime_verified. Legacy line/path becomes Evidence Location.
 
 ### 5. Evidence Location
 
@@ -306,7 +306,7 @@ Analysis Run 1-to-many Parser Result and Raw Output references
 
 - static_unverified: extracted from static artifact evidence; no independent confirmation.
 - corroborated_static: supported by multiple independent static signals.
-- manually_verified: reviewed and confirmed by a human using a documented method.
+- tool_verified: the emitting analyzer explicitly marked the finding verified; retain the analyzer and version as provenance. This does not imply application runtime behavior.\n- manually_verified: reviewed and confirmed by a human using a documented method.
 - runtime_verified: confirmed through an explicitly authorized runtime test; not implied by static scanning.
 - rejected: assessed as false positive or otherwise invalid, with rationale retained.
 

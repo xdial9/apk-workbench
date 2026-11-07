@@ -115,7 +115,7 @@ class TruffleHogAnalyzer:
                     title=str(detector_name),
                     value_fingerprint=fingerprint,
                     sensitive=True,
-                    verification_state="verified",
+                    verification_state="tool_verified",
                     rationale="TruffleHog marked this finding as verified.",
                     rule_id=str(detector_name),
                     rule_version=self.definition.version,
