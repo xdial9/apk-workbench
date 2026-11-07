@@ -1,12 +1,14 @@
 """APK Workbench command-line entry point."""
 import hashlib
 import uuid
+from pathlib import Path
 
 import click
 
 from apkworkbench import __version__
 from apkworkbench.acquisition.downloader import ArtifactDownloader, DownloadError
 from apkworkbench.acquisition.selector import select_new_artifacts
+from apkworkbench.analysis.trufflehog import AnalysisError, TruffleHogScanner
 from apkworkbench.core.config import Config
 from apkworkbench.core.logging import setup_logging
 from apkworkbench.database.workspace import DatabaseError, WorkspaceDatabase, utc_now
@@ -313,6 +315,50 @@ def decompile(limit: int, force: bool) -> None:
     click.echo(f"  Completed: {summary.completed}")
     click.echo(f"  Failed: {summary.failed}")
     click.echo(f"  Already complete / skipped: {summary.skipped}")
+    if summary.failed:
+        raise click.exceptions.Exit(1)
+
+
+@main.command()
+@click.option(
+    "--limit",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Maximum number of completed APKs to scan; 0 scans all eligible downloads.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Re-scan APKs whose previous TruffleHog scan succeeded.",
+)
+def analyze(limit: int, force: bool) -> None:
+    """Scan completed decompilations locally with TruffleHog; verification is disabled."""
+    config = Config()
+    logger = setup_logging(config)
+    database = WorkspaceDatabase(config.get("workspace"))
+    scanner = TruffleHogScanner(
+        database,
+        workspace=config.get("workspace"),
+        executable=str(config.get("tools.trufflehog", "trufflehog")),
+        timeout_seconds=int(config.get("analysis.timeout_seconds", 7200)),
+        logger=logger,
+    )
+    click.echo(BANNER)
+    click.echo("Starting local TruffleHog analysis with credential verification disabled.")
+    try:
+        summary = scanner.run(limit=limit or None, force=force)
+    except (AnalysisError, DatabaseError, OSError, ValueError) as exc:
+        logger.error("Static analysis failed: %s", exc)
+        click.echo(f"Analysis failed: {exc}", err=True)
+        raise click.exceptions.Exit(1) from exc
+
+    click.echo("ANALYSIS SUMMARY")
+    click.echo(f"  APKs scanned: {summary.scanned}")
+    click.echo(f"  Candidate findings: {summary.findings}")
+    click.echo(f"  Failed scans: {summary.failed}")
+    click.echo(f"  Skipped / not decompiled: {summary.skipped}")
+    click.echo(f"  Sanitized aggregate: {Path(config.get('workspace')) / 'reports/findings.csv'}")
     if summary.failed:
         raise click.exceptions.Exit(1)
 
