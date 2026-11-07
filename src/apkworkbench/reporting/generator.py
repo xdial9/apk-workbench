@@ -159,7 +159,9 @@ class ReportGenerator:
             ("reports", self.reports_root),
         ):
             if root.is_symlink():
-                raise ReportingError(f"The {label} directory must not be a symlink.")
+                raise ReportingError(
+                    f"The {label} directory resolves outside or aliases the configured workspace."
+                )
             root.mkdir(parents=True, exist_ok=True)
             try:
                 root.resolve(strict=True).relative_to(self.workspace)
