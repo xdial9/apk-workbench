@@ -7,7 +7,7 @@ Airtable is the shared engineering coordination layer for APK WORKBENCH. This re
 - **Tables:** 18
 - **Records:** 286 at snapshot preparation (267 original audit records + 9 architecture specification records + 10 evidence schema records).
 - **Initial repository inventory baseline:** commit 5256bd9b9ccdaa9a9834b72ea9c5802568d41088 on fix/package-file-validation.
-- **Documentation branch baseline:** main commit 867f04e918197560018e38ef36d11bf67169f278.
+- **Documentation branch baseline:** main commit 08f662632bd50ff3c69c9372eada3b3c320d32d4.
 
 Find the live base in Airtable by its exact name or base ID. No direct base URL is published because the connector did not return a verified browser URL.
 
