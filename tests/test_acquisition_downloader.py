@@ -366,3 +366,51 @@ def test_download_retries_transient_network_errors(tmp_path, monkeypatch):
     assert result.path.read_bytes() == PAYLOAD
     assert len(session.calls) == 2
     assert database.history_hashes() == {result.sha256}
+
+
+def test_download_retries_mid_stream_connection_failure_and_removes_partial_file(
+    monkeypatch, tmp_path
+):
+    class InterruptedStreamResponse(FakeResponse):
+        def iter_content(self, chunk_size):
+            yield PAYLOAD[:5]
+            raise requests.ConnectionError("connection reset during body stream")
+
+    broken = InterruptedStreamResponse(PAYLOAD)
+    success = FakeResponse(PAYLOAD)
+    downloader, _database, session = make_retry_downloader(
+        tmp_path, [broken, success]
+    )
+    monkeypatch.setattr(
+        "apkworkbench.acquisition.downloader.time.sleep", lambda _delay: None
+    )
+
+    result = downloader.download(
+        make_artifact(), run_id="stream-retry", index_sha256="d" * 64
+    )
+
+    assert result.path.read_bytes() == PAYLOAD
+    assert len(session.calls) == 2
+    assert broken.closed
+    assert success.closed
+    assert list(result.path.parent.glob("*.part")) == []
+
+
+def test_download_interruption_cleans_partial_file_and_records_state(tmp_path):
+    class InterruptedStreamResponse(FakeResponse):
+        def iter_content(self, chunk_size):
+            yield PAYLOAD[:5]
+            raise KeyboardInterrupt()
+
+    response = InterruptedStreamResponse(PAYLOAD)
+    downloader, database, _session = make_downloader(tmp_path, response)
+
+    with pytest.raises(KeyboardInterrupt):
+        downloader.download(
+            make_artifact(), run_id="interrupted-run", index_sha256="d" * 64
+        )
+
+    destination = downloader.destination_for(make_artifact())
+    assert not destination.exists()
+    assert list(destination.parent.glob("*.part")) == []
+    assert database.read_download_attempts()[-1]["status"] == "interrupted"
