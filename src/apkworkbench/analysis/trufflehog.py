@@ -6,8 +6,10 @@ import hashlib
 import json
 import logging
 import os
-import resource
+import os
+import selectors
 import subprocess
+import time
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -184,39 +186,78 @@ class TruffleHogScanner:
         findings: list[dict[str, Any]] = []
         fingerprints: set[str] = set()
         parse_error = False
-        with (
-            tempfile.TemporaryFile(mode="w+b") as stdout_file,
-            tempfile.TemporaryFile(mode="w+b") as stderr_file,
-        ):
+        with tempfile.TemporaryFile(mode="w+b") as stdout_file:
             try:
                 process = subprocess.Popen(
                     command,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    preexec_fn=lambda: _set_file_size_limit(self.max_output_bytes),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    bufsize=0,
                 )
             except (OSError, subprocess.SubprocessError) as exc:
                 raise AnalysisError(f"Could not start TruffleHog: {exc}") from exc
 
+            if process.stdout is None:
+                process.kill()
+                process.wait()
+                raise AnalysisError("TruffleHog stdout pipe was not created.")
+
+            output_size = 0
+            deadline = time.monotonic() + self.timeout_seconds
             try:
-                return_code = process.wait(timeout=self.timeout_seconds)
+                with selectors.DefaultSelector() as selector:
+                    selector.register(process.stdout, selectors.EVENT_READ)
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            process.kill()
+                            process.wait()
+                            raise AnalysisError(
+                                f"TruffleHog exceeded the {self.timeout_seconds}-second timeout."
+                            )
+                        events = selector.select(timeout=min(remaining, 0.25))
+                        if not events:
+                            continue
+                        for _key, _mask in events:
+                            chunk = os.read(process.stdout.fileno(), 64 * 1024)
+                            if not chunk:
+                                selector.unregister(process.stdout)
+                                return_code = process.wait(
+                                    timeout=max(0.01, deadline - time.monotonic())
+                                )
+                                break
+                            output_size += len(chunk)
+                            if output_size > self.max_output_bytes:
+                                process.kill()
+                                process.wait()
+                                raise AnalysisError(
+                                    "TruffleHog JSON output exceeded the configured "
+                                    f"{self.max_output_bytes}-byte limit."
+                                )
+                            stdout_file.write(chunk)
+                        else:
+                            continue
+                        break
             except subprocess.TimeoutExpired as exc:
                 process.kill()
                 process.wait()
                 raise AnalysisError(
                     f"TruffleHog exceeded the {self.timeout_seconds}-second timeout."
                 ) from exc
+            finally:
+                process.stdout.close()
 
             stdout_file.flush()
-            output_size = stdout_file.tell()
-            if output_size > self.max_output_bytes:
-                raise AnalysisError(
-                    f"TruffleHog JSON output exceeded the {self.max_output_bytes}-byte limit."
-                )
             stdout_file.seek(0)
-            for raw_line in stdout_file:
-                if len(raw_line) > 2 * 1024 * 1024:
+            max_line_bytes = 2 * 1024 * 1024
+            while True:
+                raw_line = stdout_file.readline(max_line_bytes + 1)
+                if not raw_line:
+                    break
+                if len(raw_line) > max_line_bytes:
                     parse_error = True
+                    while raw_line and not raw_line.endswith(b"\\n"):
+                        raw_line = stdout_file.readline(64 * 1024)
                     continue
                 if not raw_line.strip():
                     continue
