@@ -53,6 +53,8 @@ class ReportGenerator:
 
     @staticmethod
     def _read_sanitized_findings(path: Path) -> list[dict[str, Any]]:
+        if path.is_symlink():
+            raise ReportingError(f"Refusing to read a symlinked findings file: {path}")
         if not path.exists():
             return []
         try:
@@ -156,6 +158,8 @@ class ReportGenerator:
             ("results", self.results_root),
             ("reports", self.reports_root),
         ):
+            if root.is_symlink():
+                raise ReportingError(f"The {label} directory must not be a symlink.")
             root.mkdir(parents=True, exist_ok=True)
             try:
                 root.resolve(strict=True).relative_to(self.workspace)
