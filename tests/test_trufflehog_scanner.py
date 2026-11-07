@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import io
 import json
 import logging
 from pathlib import Path
@@ -20,8 +19,7 @@ HELP_TEXT = (
 
 
 class FakeProcess:
-    def __init__(self, output: bytes, return_code: int = 0):
-        self.stdout = io.BytesIO(output)
+    def __init__(self, return_code: int = 0):
         self.return_code = return_code
         self.killed = False
 
@@ -100,10 +98,7 @@ def install_fakes(monkeypatch, output, *, return_code=0, help_text=HELP_TEXT):
     import subprocess
 
     calls = []
-    process = FakeProcess(output, return_code)
-
-    class FakeTemporaryProcess:
-        pass
+    process = FakeProcess(return_code)
 
     def fake_run(command, **kwargs):
         calls.append(("help", command))
@@ -115,8 +110,11 @@ def install_fakes(monkeypatch, output, *, return_code=0, help_text=HELP_TEXT):
 
     def fake_popen(command, **kwargs):
         calls.append(("scan", command))
-        assert kwargs["stdout"] is subprocess.PIPE
+        assert kwargs["stdout"] is not None
+        assert kwargs["stdout"] is not subprocess.PIPE
         assert kwargs["stderr"] is not None
+        kwargs["stdout"].write(output)
+        kwargs["stdout"].flush()
         return process
 
     monkeypatch.setattr(subprocess, "run", fake_run)
