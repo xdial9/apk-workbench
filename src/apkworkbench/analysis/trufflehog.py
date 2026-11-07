@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import os
-import os
 import selectors
 import subprocess
 import time
@@ -20,13 +19,6 @@ from ..database.workspace import WorkspaceDatabase, utc_now
 
 class AnalysisError(RuntimeError):
     """Raised when local secret scanning cannot run safely or completely."""
-
-
-def _set_file_size_limit(max_bytes: int) -> None:
-    """Bound files written by the child process on supported Unix hosts."""
-    _soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_FSIZE)
-    limit = max_bytes if hard_limit == resource.RLIM_INFINITY else min(max_bytes, hard_limit)
-    resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
 
 
 @dataclass(frozen=True)
