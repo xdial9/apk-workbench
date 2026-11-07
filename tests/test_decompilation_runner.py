@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import logging
+import signal
 import subprocess
 from pathlib import Path
 
@@ -449,3 +450,31 @@ def test_decompiler_rejects_symlinked_package_output_directory(tmp_path):
 
     with pytest.raises(DecompilationError, match="symlinked workspace component"):
         runner.run()
+
+
+def test_process_group_termination_escalates_from_term_to_kill(monkeypatch, tmp_path):
+    runner = make_runner(tmp_path)[0]
+    signals = []
+
+    class StubbornProcess:
+        pid = 515151
+
+        def __init__(self):
+            self.wait_calls = 0
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                raise subprocess.TimeoutExpired(["example-tool"], timeout)
+            return -signal.SIGKILL
+
+    process = StubbornProcess()
+    monkeypatch.setattr(
+        "apkworkbench.decompilation.runner.os.killpg",
+        lambda _pid, received_signal: signals.append(received_signal),
+    )
+
+    runner._terminate_process_tree(process)
+
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+    assert process.wait_calls == 2
