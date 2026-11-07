@@ -24,17 +24,6 @@ class ReportSummary:
     total_findings: int
 
 
-_FINDING_FIELDS = (
-    "fingerprint",
-    "detector_name",
-    "detector_type",
-    "decoder_name",
-    "file_path",
-    "line",
-    "verification",
-)
-
-
 class ReportGenerator:
     """Generate reports while preserving complete scanner finding objects."""
 
@@ -132,10 +121,10 @@ class ReportGenerator:
             for finding in findings:
                 parts.append(
                     "<tr>"
-                    f"<td>{html.escape(str(finding.get('detector_name', '')))}</td>"
-                    f"<td><code>{html.escape(str(finding.get('file_path', '')))}</code></td>"
-                    f"<td>{html.escape(str(finding.get('line', '')))}</td>"
-                    f"<td><code>{html.escape(str(finding.get('fingerprint', '')))}</code></td>"
+                    f"<td>{html.escape(str(finding.get('DetectorName', '')))}</td>"
+                    f"<td><code>{html.escape(str(((finding.get('SourceMetadata') or {}).get('Data') or {}).get('Filesystem') or {}).get('file', '')))}</code></td>"
+                    f"<td>{html.escape(str((((finding.get('SourceMetadata') or {}).get('Data') or {}).get('Filesystem') or {}).get('line', '')))}</td>"
+                    f"<td><code>{html.escape(str(finding.get('DetectorType', '')))}</code></td>"
                     "</tr>"
                 )
             parts.append("</tbody></table>")
