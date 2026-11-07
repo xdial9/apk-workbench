@@ -12,6 +12,7 @@ Open a terminal and run:
 sudo apt update
 sudo apt install -y \
   ca-certificates \
+  git \
   curl \
   unzip \
   gnupg \
