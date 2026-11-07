@@ -170,6 +170,10 @@ def test_scanner_selects_verified_results_and_persists_complete_original_objects
     assert records[0]["Raw"] == RAW_SECRET
     assert records[0]["RawV2"] == "secret-part"
     assert records[0]["ExtraData"]["sensitive"] == "do-not-store"
+    assert json.loads((output.parent / "findings-verified.json").read_text(encoding="utf-8")) == records
+    assert RAW_SECRET in (output.parent / "stdout.jsonl").read_text(encoding="utf-8")
+    assert (output.parent / "stderr.log").is_file()
+    assert "CREDENTIAL VERIFICATION: ENABLED" in (output.parent / "trufflehog.log").read_text(encoding="utf-8")
     aggregate = (tmp_path / "reports/findings.csv").read_text(encoding="utf-8")
     assert RAW_SECRET in aggregate
     assert "finding_json" in aggregate

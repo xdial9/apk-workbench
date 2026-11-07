@@ -144,6 +144,31 @@ class TruffleHogScanner:
                 temporary.unlink()
 
     @staticmethod
+    def _atomic_bytes(path: Path, payload: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError as exc:
+            raise AnalysisError(f"Cannot publish scanner evidence {path.name}: {exc}") from exc
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
+    @staticmethod
     def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
         """Terminate TruffleHog and any descendants in its dedicated process group."""
         try:
@@ -313,6 +338,10 @@ class TruffleHogScanner:
                     parse_error = True
                     continue
                 findings.append(item)
+            stdout_file.seek(0)
+            raw_stdout = stdout_file.read()
+            stderr_file.seek(0)
+            raw_stderr = stderr_file.read()
 
         if parse_error:
             detail = f" Stderr: {stderr_tail[-2000:]}" if stderr_tail else ""
@@ -349,13 +378,20 @@ class TruffleHogScanner:
                 f"TruffleHog output path escapes or aliases the results workspace: {output_dir}"
             ) from exc
         self._atomic_json(output_dir / "findings.json", findings)
+        self._atomic_json(output_dir / "findings-verified.json", findings)
+        self._atomic_bytes(output_dir / "stdout.jsonl", raw_stdout)
+        self._atomic_bytes(output_dir / "stderr.log", raw_stderr)
         log_text = (
-            f"COMMAND: {' '.join(command)}\n"
+            f"COMMAND: {json.dumps(command)}\n"
             f"RETURN CODE: {return_code}\n"
-            f"FINDINGS: {len(findings)}\n"
-            "CREDENTIAL VERIFICATION: ENABLED\nRESULT SELECTION: --results=verified\n"
+            f"FINDINGS EMITTED: {len(findings)}\n"
+            f"VERIFIED FINDINGS: {len(findings)}\n"
+            "CREDENTIAL VERIFICATION: ENABLED\n"
+            "RESULT SELECTION: --results=verified\n"
+            "STDOUT EVIDENCE: stdout.jsonl\n"
+            "STDERR EVIDENCE: stderr.log\n"
         )
-        (output_dir / "trufflehog.log").write_text(log_text, encoding="utf-8")
+        self._atomic_bytes(output_dir / "trufflehog.log", log_text.encode("utf-8"))
         return findings
 
     def _has_usable_scan_output(
