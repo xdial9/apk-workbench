@@ -368,6 +368,9 @@ class TruffleHogScanner:
                 os.fsync(handle.fileno())
             os.chmod(temporary, 0o600)
             os.replace(temporary, destination)
+            verified_destination = report_dir / "findings-verified.csv"
+            verified_destination.write_bytes(destination.read_bytes())
+            os.chmod(verified_destination, 0o600)
         except OSError as exc:
             raise AnalysisError(f"Cannot update aggregate findings CSV: {exc}") from exc
         finally:
