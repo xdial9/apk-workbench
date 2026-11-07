@@ -1,4 +1,4 @@
-"""Tests for the TruffleHog wrapper's no-verification and redaction guarantees."""
+"""Tests for complete TruffleHog result retention and safe execution."""
 from __future__ import annotations
 
 import csv
@@ -132,7 +132,7 @@ def install_fakes(monkeypatch, output, *, return_code=0, help_text=HELP_TEXT, st
     return calls, process
 
 
-def test_scanner_disables_verification_and_persists_only_sanitized_fields(monkeypatch, tmp_path):
+def test_scanner_disables_verification_and_persists_complete_original_objects(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
     line = json.dumps(result_json()).encode() + b"\n"
     calls, _ = install_fakes(monkeypatch, line)
@@ -159,17 +159,14 @@ def test_scanner_disables_verification_and_persists_only_sanitized_fields(monkey
     assert command[-1].endswith("/apktool")
 
     output = tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings.json"
-    sanitized = output.read_text(encoding="utf-8")
-    assert RAW_SECRET not in sanitized
-    assert "secret-part" not in sanitized
-    assert "do-not-store" not in sanitized
-    records = json.loads(sanitized)
-    assert records[0]["detector_name"] == "AWS"
-    assert records[0]["file_path"].endswith("Config.java")
-    assert records[0]["line"] == 23
-    assert records[0]["verification"] == "disabled"
-    assert len(records[0]["fingerprint"]) == 64
-    assert RAW_SECRET not in (tmp_path / "reports/findings.csv").read_text(encoding="utf-8")
+    records = json.loads(output.read_text(encoding="utf-8"))
+    assert records == [result_json()]
+    assert records[0]["Raw"] == RAW_SECRET
+    assert records[0]["RawV2"] == "secret-part"
+    assert records[0]["ExtraData"]["sensitive"] == "do-not-store"
+    aggregate = (tmp_path / "reports/findings.csv").read_text(encoding="utf-8")
+    assert RAW_SECRET in aggregate
+    assert "finding_json" in aggregate
     assert database.read_processing_status()[digest]["scan_status"] == "success"
 
 
@@ -228,7 +225,7 @@ def test_existing_success_is_skipped_unless_forced(monkeypatch, tmp_path):
     assert calls == []
 
 
-def test_successful_scan_is_retried_when_sanitized_output_is_missing(monkeypatch, tmp_path):
+def test_successful_scan_is_retried_when_findings_output_is_missing(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
     database.update_processing_status(
         {
@@ -251,7 +248,7 @@ def test_successful_scan_is_retried_when_sanitized_output_is_missing(monkeypatch
     assert json.loads(output.read_text(encoding="utf-8")) == []
 
 
-def test_successful_scan_is_retried_when_sanitized_output_is_invalid(monkeypatch, tmp_path):
+def test_successful_scan_is_retried_when_findings_output_is_invalid(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
     output = tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings.json"
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -275,7 +272,7 @@ def test_successful_scan_is_retried_when_sanitized_output_is_invalid(monkeypatch
     assert json.loads(output.read_text(encoding="utf-8")) == []
 
 
-def test_aggregate_csv_is_sanitized_and_has_expected_columns(monkeypatch, tmp_path):
+def test_aggregate_csv_contains_complete_original_finding_json(monkeypatch, tmp_path):
     database, _ = make_workspace(tmp_path)
     line = json.dumps(result_json()).encode() + b"\n"
     install_fakes(monkeypatch, line)
@@ -288,7 +285,8 @@ def test_aggregate_csv_is_sanitized_and_has_expected_columns(monkeypatch, tmp_pa
     assert rows[0]["package_id"] == "org.example.app"
     assert rows[0]["detector_name"] == "AWS"
     assert rows[0]["verification"] == "disabled"
-    assert RAW_SECRET not in str(rows)
+    assert json.loads(rows[0]["finding_json"]) == result_json()
+    assert RAW_SECRET in rows[0]["finding_json"]
 
 
 
