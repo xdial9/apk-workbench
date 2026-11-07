@@ -93,7 +93,7 @@ apktool --version
 trufflehog --version
 ~~~
 
-TruffleHog must advertise the filesystem scanner and the safe-operation flags checked by the application: **--no-verification**, **--no-update**, **--json**, **--concurrency**, and **--fail-on-scan-errors**.
+TruffleHog must advertise the filesystem scanner and the safe-operation flags checked by the application: **--results**, **--no-update**, **--json**, **--concurrency**, and **--fail-on-scan-errors**.
 
 ### E. Clone and install APK WORKBENCH
 
@@ -198,7 +198,7 @@ apkworkbench analyze --run-id YOUR-RUN-ID --force
 
 Without a run ID, standalone analysis considers all eligible completed workspace decompilations. With a run ID, it scans only the matching acquisition batch.
 
-Credential verification is disabled. Findings are unverified indicators for manual review—not proof of valid credentials or exploitability.
+Credential verification is enabled. TruffleHog is invoked with `--results=verified`; only credentials confirmed by the detector's verification API are emitted. The complete emitted finding objects are retained without redaction or deduplication. Each APK receives `findings.json`, `findings-verified.json`, `stdout.jsonl`, `stderr.log`, and `trufflehog.log`. Both the JADX and Apktool trees are scanned as supplied, with no mobile-endpoint exclusions.
 
 ### Reports and status
 
