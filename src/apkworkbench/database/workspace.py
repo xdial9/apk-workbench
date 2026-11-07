@@ -4,9 +4,9 @@ from __future__ import annotations
 import csv
 import os
 import tempfile
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping
 
 
 class DatabaseError(RuntimeError):
