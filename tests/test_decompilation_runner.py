@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from apkworkbench.database.workspace import WorkspaceDatabase
-from apkworkbench.decompilation.runner import DecompilationRunner
+from apkworkbench.decompilation.runner import DecompilationError, DecompilationRunner
 
 
 APK_BYTES = b"verified local apk fixture"
@@ -185,3 +185,15 @@ def test_stale_decompiler_output_symlink_is_unlinked_not_followed(tmp_path):
 
     assert not output.exists()
     assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_decompiler_rejects_results_root_symlink_escape(tmp_path):
+    runner, _database, _digest, _apk_path = make_runner(tmp_path)
+    results = tmp_path / "results"
+    results.rmdir()
+    outside = tmp_path / "outside-results"
+    outside.mkdir()
+    results.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(DecompilationError, match="results directory resolves outside"):
+        runner.run()
