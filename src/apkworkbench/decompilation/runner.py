@@ -93,6 +93,18 @@ class DecompilationRunner:
         return apk_path
 
     @staticmethod
+    def _log_tail(log_path: Path, limit: int = 2000) -> str:
+        """Read a bounded tail of a tool log for concise failure reporting."""
+        try:
+            with log_path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                handle.seek(max(0, size - limit))
+                return handle.read(limit).decode("utf-8", errors="replace").strip()
+        except OSError:
+            return "(log unavailable)"
+
+    @staticmethod
     def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
         """Terminate the subprocess session, including descendants, after timeout."""
         try:
@@ -142,6 +154,7 @@ class DecompilationRunner:
                     returncode = process.wait(timeout=self.timeout_seconds)
                 except subprocess.TimeoutExpired:
                     self._terminate_process_tree(process)
+                    log_file.flush()
                     with log_path.open("ab") as timeout_file:
                         timeout_file.write(
                             f"\nTIMEOUT AFTER: {self.timeout_seconds} seconds\n".encode(
