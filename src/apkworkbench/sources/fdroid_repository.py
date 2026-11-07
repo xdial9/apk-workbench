@@ -172,7 +172,7 @@ class FdroidRepositoryClient:
             raise FdroidRepositoryError(f"Cannot prepare F-Droid index cache: {exc}") from exc
 
         identity = hashlib.sha256(
-            f"{self.repository_url}\n{self.signer_fingerprint}".encode("utf-8")
+            f"{self.repository_url}\n{self.signer_fingerprint}".encode()
         ).hexdigest()
         return (
             directory,
@@ -233,7 +233,7 @@ class FdroidRepositoryClient:
     def _read_verified_cache(
         self, cache_dir: str | Path, cache_ttl_seconds: int
     ) -> bytes | None:
-        directory, index_path, signature_path = self._cache_paths(cache_dir)
+        _directory, index_path, signature_path = self._cache_paths(cache_dir)
         if index_path.is_symlink() or signature_path.is_symlink():
             self._progress("Cached index contains a symlink; ignoring cached material.")
             return None
