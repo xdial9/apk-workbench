@@ -137,7 +137,7 @@ Start with three new APK binaries:
 ~~~bash
 apkworkbench run --apk-count 3
 apkworkbench status
-apkworkbench reconcile --run-id <run-id>  # account for every item in a prior run
+apkworkbench reconcile --run-id YOUR-RUN-ID  # account for every item in a prior run
 ~~~
 
 The full pipeline performs authenticated discovery, selection, immutable manifest publication, sequential downloads, SHA-256/size validation, JADX, Apktool, TruffleHog, and report generation.
@@ -206,6 +206,7 @@ Credential verification is disabled. Findings are unverified indicators for manu
 ~~~bash
 apkworkbench report
 apkworkbench status
+apkworkbench reconcile --run-id YOUR-RUN-ID
 ~~~
 
 Reports are refreshed for the workspace catalogue, not just the most recent run.
