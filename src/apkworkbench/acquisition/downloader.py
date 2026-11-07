@@ -58,11 +58,17 @@ class ArtifactDownloader:
             raise DownloadError(f"Unsafe Android package ID: {artifact.package_id!r}")
         if artifact.version_code < 0 or artifact.size < 1:
             raise DownloadError("Artifact metadata contains an invalid version code or size.")
+        digest = artifact.sha256.lower()
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise DownloadError("Artifact metadata contains an invalid SHA-256 digest.")
+        # Version codes can be shared by distinct APK binaries. Key the leaf
+        # directory by the full digest so two APKs can never overwrite each other.
         return (
             self.workspace
             / "downloads"
             / artifact.package_id
             / str(artifact.version_code)
+            / digest
             / "app.apk"
         )
 
