@@ -94,6 +94,12 @@ def test_reconcile_run_accounts_for_every_manifest_entry(tmp_path):
     # Complete artifact.
     add_history(database, selected[0])
     add_processing(database, selected[0], jadx="success", apktool="success", scan="success")
+    findings = (
+        tmp_path / "results" / selected[0]["package_id"] / "1"
+        / selected[0]["sha256"] / "trufflehog" / "findings.json"
+    )
+    findings.parent.mkdir(parents=True, exist_ok=True)
+    findings.write_text("[]", encoding="utf-8")
 
     # Failed and persistence-failed acquisitions.
     add_attempt(database, selected[1], "failed", "HTTP 503")
@@ -142,3 +148,49 @@ def test_reconcile_run_accounts_for_every_manifest_entry(tmp_path):
     }
     assert len(result["items"]) == 10
     assert {item["status"] for item in result["items"]} == set(result["counts"])
+
+
+
+def test_reconcile_marks_missing_successful_scan_output_incomplete(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+    selected = manifest_row(1)
+    database.write_manifest(RUN_ID, [selected])
+    add_history(database, selected)
+    add_processing(database, selected, jadx="success", apktool="success", scan="success")
+
+    result = database.reconcile_run(RUN_ID)
+
+    assert result["complete"] == 0
+    assert result["counts"] == {"analysis_failed": 1}
+    assert "findings file is missing" in result["items"][0]["detail"]
+
+
+def test_manifest_writer_rejects_package_path_injection(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+    selected = manifest_row(1)
+    selected["package_id"] = "../outside"
+
+    import pytest
+    from apkworkbench.database.workspace import DatabaseError
+
+    with pytest.raises(DatabaseError, match="invalid package ID"):
+        database.write_manifest(RUN_ID, [selected])
+
+
+def test_manifest_reader_rejects_package_path_injection(tmp_path):
+    import csv
+    import pytest
+    from apkworkbench.database.workspace import DatabaseError
+    from apkworkbench.database.workspace import MANIFEST_FIELDS
+
+    database = WorkspaceDatabase(tmp_path)
+    selected = manifest_row(1)
+    path = database.write_manifest(RUN_ID, [selected])
+    selected["package_id"] = "../outside"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDS)
+        writer.writeheader()
+        writer.writerow(selected)
+
+    with pytest.raises(DatabaseError, match="invalid package ID"):
+        database.read_manifest(RUN_ID)
