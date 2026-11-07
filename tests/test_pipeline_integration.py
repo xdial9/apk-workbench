@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import textwrap
 from pathlib import Path
 
@@ -109,7 +108,7 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(tmp_path
     trufflehog = write_executable(
         tmp_path / "trufflehog-fixture",
         textwrap.dedent(
-            f"""\
+            """\
             #!/usr/bin/env python3
             import json
             import sys
@@ -121,7 +120,19 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(tmp_path
                 )
                 raise SystemExit(0)
 
-            print(json.dumps({json.dumps(finding)}))
+            finding = {
+                "SourceMetadata": {
+                    "Data": {"Filesystem": {"file": "sources/Main.java", "line": 1}}
+                },
+                "DetectorType": 2,
+                "DetectorName": "SYNTHETIC_TEST",
+                "DecoderName": "PLAIN",
+                "Verified": False,
+                "Raw": "SYNTHETIC_SECRET_MUST_NOT_BE_PERSISTED",
+                "RawV2": "SYNTHETIC_SECRET_MUST_NOT_BE_PERSISTED",
+                "ExtraData": {"secret": "SYNTHETIC_SECRET_MUST_NOT_BE_PERSISTED"},
+            }
+            print(json.dumps(finding))
             """,
         ),
     )
