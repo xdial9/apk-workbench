@@ -329,9 +329,15 @@ class WorkspaceDatabase:
                                 "findings file is missing or unsafe."
                             )
                         else:
-                            outcome = "complete"
+                            outcome = (
+                                "complete_with_decompilation_warnings"
+                                if has_decompilation_warnings else "complete"
+                            )
                     else:
-                        outcome = "awaiting_analysis"
+                        outcome = (
+                            "awaiting_analysis_with_decompilation_warnings"
+                            if has_decompilation_warnings else "awaiting_analysis"
+                        )
                 else:
                     outcome = "pending_decompilation"
                 detail = detail or state.get("error", "")
