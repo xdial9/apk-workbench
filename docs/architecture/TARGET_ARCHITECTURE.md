@@ -1,7 +1,7 @@
 # Target Architecture
 
 **Status:** Accepted for implementation in the engineering map; not yet implemented unless explicitly stated in the source tree.  
-**Repository baseline:** main at commit 867f04e918197560018e38ef36d11bf67169f278 (2026-11-07).  
+**Repository baseline:** main at the documentation PR base commit 08f662632bd50ff3c69c9372eada3b3c320d32d4 (2026-11-07).  
 **Coordination source:** Airtable base appoG1faRDn2ztUOL, table Target Architecture Specification.
 
 ## Objective
