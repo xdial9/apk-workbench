@@ -164,7 +164,7 @@ class ReportGenerator:
             digest = row.get("sha256", "").lower()
             status = statuses.get(digest, {})
             findings_path = (
-                self.results_root / package_id / version_code / "trufflehog" / "findings.json"
+                self.results_root / package_id / version_code / digest / "trufflehog" / "findings.json"
             )
             try:
                 findings_path.resolve().relative_to(self.results_root.resolve())
@@ -198,7 +198,7 @@ class ReportGenerator:
                 "analysis": {"verification": "disabled", "finding_count": len(findings)},
                 "findings": findings,
             }
-            output_dir = self.reports_root / package_id / version_code
+            output_dir = self.reports_root / package_id / version_code / digest
             json_text = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
             self._atomic_write(output_dir / "report.json", json_text)
             self._atomic_write(output_dir / "report.html", self._html_report(report))
