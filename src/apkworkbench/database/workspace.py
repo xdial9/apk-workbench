@@ -8,6 +8,7 @@ import re
 import tempfile
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
+from threading import local
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -50,6 +51,9 @@ ATTEMPT_FIELDS = [
     "bytes_received",
     "error",
 ]
+_LOCK_STATE = local()
+
+
 MANIFEST_FIELDS = [
     "run_id",
     "selection_order",
@@ -85,18 +89,37 @@ class WorkspaceDatabase:
 
     @contextmanager
     def _write_lock(self):
-        """Serialize workspace mutations across threads and independent processes."""
+        """Serialize workspace reads and mutations across threads and processes."""
         self.database_dir.mkdir(parents=True, exist_ok=True)
         lock_path = self.database_dir / ".workspace.lock"
+        key = str(self.database_dir.resolve())
+        held = getattr(_LOCK_STATE, "held", None)
+        if held is None:
+            held = {}
+            _LOCK_STATE.held = held
+        if key in held:
+            held[key]["depth"] += 1
+            try:
+                yield
+            finally:
+                held[key]["depth"] -= 1
+            return
+
+        handle = None
         try:
             handle = lock_path.open("a+")
             os.chmod(lock_path, 0o600)
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         except OSError as exc:
+            if handle is not None:
+                handle.close()
             raise DatabaseError(f"Cannot acquire workspace database lock: {exc}") from exc
+
+        held[key] = {"depth": 1, "handle": handle}
         try:
             yield
         finally:
+            held.pop(key, None)
             try:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             finally:
@@ -151,39 +174,44 @@ class WorkspaceDatabase:
 
     def history_hashes(self) -> set[str]:
         self.ensure()
-        hashes: set[str] = set()
-        try:
-            with self.history_path.open("r", encoding="utf-8", newline="") as handle:
-                for row in csv.DictReader(handle):
-                    digest = (row.get("sha256") or "").strip().lower()
-                    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
-                        raise DatabaseError(
-                            f"Malformed SHA-256 value in {self.history_path}: {digest!r}"
-                        )
-                    hashes.add(digest)
-        except OSError as exc:
-            raise DatabaseError(f"Cannot read download history: {exc}") from exc
-        return hashes
+        with self._write_lock():
+            hashes: set[str] = set()
+            try:
+                with self.history_path.open("r", encoding="utf-8", newline="") as handle:
+                    for row in csv.DictReader(handle):
+                        digest = (row.get("sha256") or "").strip().lower()
+                        if len(digest) != 64 or any(
+                            char not in "0123456789abcdef" for char in digest
+                        ):
+                            raise DatabaseError(
+                                f"Malformed SHA-256 value in {self.history_path}: {digest!r}"
+                            )
+                        hashes.add(digest)
+            except OSError as exc:
+                raise DatabaseError(f"Cannot read download history: {exc}") from exc
+            return hashes
 
     def read_download_history(self) -> list[dict[str, str]]:
         self.ensure()
-        try:
-            with self.history_path.open("r", encoding="utf-8", newline="") as handle:
-                return list(csv.DictReader(handle))
-        except OSError as exc:
-            raise DatabaseError(f"Cannot read download history: {exc}") from exc
+        with self._write_lock():
+            try:
+                with self.history_path.open("r", encoding="utf-8", newline="") as handle:
+                    return list(csv.DictReader(handle))
+            except OSError as exc:
+                raise DatabaseError(f"Cannot read download history: {exc}") from exc
 
     def read_processing_status(self) -> dict[str, dict[str, str]]:
         self.ensure()
-        try:
-            with self.processing_path.open("r", encoding="utf-8", newline="") as handle:
-                return {
-                    row["sha256"]: row
-                    for row in csv.DictReader(handle)
-                    if row.get("sha256")
-                }
-        except OSError as exc:
-            raise DatabaseError(f"Cannot read processing status: {exc}") from exc
+        with self._write_lock():
+            try:
+                with self.processing_path.open("r", encoding="utf-8", newline="") as handle:
+                    return {
+                        row["sha256"]: row
+                        for row in csv.DictReader(handle)
+                        if row.get("sha256")
+                    }
+            except OSError as exc:
+                raise DatabaseError(f"Cannot read processing status: {exc}") from exc
 
     def update_processing_status(self, row: Mapping[str, object]) -> None:
         """Atomically replace mutable processing state keyed by artifact SHA-256."""
