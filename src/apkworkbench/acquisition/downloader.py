@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import signal
 import re
 import tempfile
 import time
@@ -111,27 +112,107 @@ class ArtifactDownloader:
                     pass
         return min(30.0, self.retry_backoff_seconds * (2**attempt))
 
-    def _get_response(self, url: str, **kwargs) -> requests.Response:
-        """Retry bounded transient transport and HTTP failures before returning a response."""
-        for attempt in range(self.max_retries + 1):
-            try:
-                response = self.session.get(url, **kwargs)
-            except requests.RequestException:
-                if attempt >= self.max_retries:
+    def _stream_to_temporary(
+        self, artifact: FdroidArtifact, destination: Path
+    ) -> tuple[Path, str, int]:
+        """Retry a complete bounded response stream, including mid-body interruptions."""
+        request_headers = {
+            "User-Agent": "APK-Workbench/0.1 (+https://github.com/xdial9/apk-workbench)",
+            "Accept-Encoding": "identity",
+        }
+        previous_sigterm = None
+
+        def handle_sigterm(signum, _frame):
+            raise KeyboardInterrupt(f"received signal {signum}")
+
+        try:
+            previous_sigterm = signal.signal(signal.SIGTERM, handle_sigterm)
+        except ValueError:
+            # Signal handlers can only be installed from the main thread.
+            pass
+
+        try:
+            for attempt in range(self.max_retries + 1):
+                response = None
+                temporary = None
+                received = 0
+                digest = hashlib.sha256()
+                try:
+                    response = self.session.get(
+                        artifact.download_url,
+                        stream=True,
+                        timeout=(min(15, self.timeout_seconds), self.timeout_seconds),
+                        allow_redirects=False,
+                        headers=request_headers,
+                    )
+                    status = response.status_code
+                    if status in _RETRYABLE_HTTP_STATUSES and attempt < self.max_retries:
+                        retry_after = response.headers.get("Retry-After")
+                        response.close()
+                        response = None
+                        time.sleep(self._retry_delay(attempt, retry_after))
+                        continue
+                    if status != 200:
+                        if 300 <= status < 400:
+                            raise DownloadError(
+                                f"Refusing APK download redirect (HTTP {status})."
+                            )
+                        raise DownloadError(f"Unexpected HTTP status downloading APK: {status}.")
+
+                    content_length = response.headers.get("Content-Length")
+                    if content_length is not None:
+                        try:
+                            declared = int(content_length)
+                        except ValueError as exc:
+                            raise DownloadError(
+                                "APK response has an invalid Content-Length."
+                            ) from exc
+                        if declared != artifact.size:
+                            raise DownloadError(
+                                f"APK Content-Length mismatch: expected {artifact.size}, "
+                                f"received {declared}."
+                            )
+
+                    fd, temp_name = tempfile.mkstemp(
+                        prefix=".app.apk.", suffix=".part", dir=destination.parent
+                    )
+                    temporary = Path(temp_name)
+                    with os.fdopen(fd, "wb") as output:
+                        for chunk in response.iter_content(chunk_size=self.chunk_size):
+                            if not chunk:
+                                continue
+                            received += len(chunk)
+                            if received > artifact.size:
+                                raise DownloadError(
+                                    f"APK exceeded advertised size ({artifact.size} bytes)."
+                                )
+                            digest.update(chunk)
+                            output.write(chunk)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    return temporary, digest.hexdigest(), received
+                except requests.RequestException:
+                    if temporary is not None and temporary.exists():
+                        temporary.unlink()
+                        temporary = None
+                    if attempt >= self.max_retries:
+                        raise
+                    retry_after = (
+                        response.headers.get("Retry-After") if response is not None else None
+                    )
+                    time.sleep(self._retry_delay(attempt, retry_after))
+                except KeyboardInterrupt:
+                    if temporary is not None and temporary.exists():
+                        temporary.unlink()
                     raise
-                time.sleep(self._retry_delay(attempt, None))
-                continue
+                finally:
+                    if response is not None:
+                        response.close()
+        finally:
+            if previous_sigterm is not None:
+                signal.signal(signal.SIGTERM, previous_sigterm)
 
-            if response.status_code not in _RETRYABLE_HTTP_STATUSES:
-                return response
-            if attempt >= self.max_retries:
-                return response
-
-            retry_after = response.headers.get("Retry-After")
-            response.close()
-            time.sleep(self._retry_delay(attempt, retry_after))
-
-        raise DownloadError("APK download retry loop ended without a response.")
+        raise DownloadError("APK download retry loop ended without a verified stream.")
 
     def download(
         self,
@@ -189,58 +270,11 @@ class ArtifactDownloader:
                     artifact, destination, existing_hash, existing_size, reused_existing=True
                 )
 
-            response = self._get_response(
-                artifact.download_url,
-                stream=True,
-                timeout=(min(15, self.timeout_seconds), self.timeout_seconds),
-                allow_redirects=False,
-                headers={
-                    "User-Agent": "APK-Workbench/0.1 (+https://github.com/xdial9/apk-workbench)",
-                    "Accept-Encoding": "identity",
-                },
+            temporary, actual_hash, received = self._stream_to_temporary(
+                artifact, destination
             )
-            try:
-                if response.status_code != 200:
-                    if 300 <= response.status_code < 400:
-                        raise DownloadError(
-                            f"Refusing APK download redirect (HTTP {response.status_code})."
-                        )
-                    raise DownloadError(
-                        f"Unexpected HTTP status downloading APK: {response.status_code}."
-                    )
-                content_length = response.headers.get("Content-Length")
-                if content_length is not None:
-                    try:
-                        declared = int(content_length)
-                    except ValueError as exc:
-                        raise DownloadError("APK response has an invalid Content-Length.") from exc
-                    if declared != artifact.size:
-                        raise DownloadError(
-                            f"APK Content-Length mismatch: expected {artifact.size}, received {declared}."
-                        )
 
-                digest = hashlib.sha256()
-                fd, temp_name = tempfile.mkstemp(
-                    prefix=".app.apk.", suffix=".part", dir=destination.parent
-                )
-                temporary = Path(temp_name)
-                with os.fdopen(fd, "wb") as output:
-                    for chunk in response.iter_content(chunk_size=self.chunk_size):
-                        if not chunk:
-                            continue
-                        received += len(chunk)
-                        if received > artifact.size:
-                            raise DownloadError(
-                                f"APK exceeded advertised size ({artifact.size} bytes)."
-                            )
-                        digest.update(chunk)
-                        output.write(chunk)
-                    output.flush()
-                    os.fsync(output.fileno())
-            finally:
-                response.close()
 
-            actual_hash = digest.hexdigest()
             if received != artifact.size:
                 raise DownloadError(
                     f"APK size mismatch: expected {artifact.size}, received {received}."
@@ -280,6 +314,25 @@ class ArtifactDownloader:
                 _LOGGER.warning("APK is verified and in history, but success attempt logging failed: %s", log_error)
             return DownloadResult(artifact, destination, actual_hash, received)
 
+        except KeyboardInterrupt:
+            if temporary is not None and temporary.exists():
+                temporary.unlink()
+            try:
+                self.database.append_attempt(
+                    {
+                        "timestamp": started,
+                        "run_id": run_id,
+                        "sha256": artifact.sha256,
+                        "package_id": artifact.package_id,
+                        "download_url": artifact.download_url,
+                        "status": "interrupted",
+                        "bytes_received": received,
+                        "error": "Download interrupted; temporary file removed.",
+                    }
+                )
+            except DatabaseError as log_error:
+                _LOGGER.error("Could not append interrupted-attempt record: %s", log_error)
+            raise
         except Exception as exc:
             if temporary is not None and temporary.exists():
                 temporary.unlink()
