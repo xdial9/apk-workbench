@@ -149,7 +149,7 @@ class TruffleHogScanner:
             if temporary.exists():
                 temporary.unlink()
 
-    def _run_one(self, package_id: str, version_code: str, directories: list[Path]) -> list[dict[str, Any]]:
+    def _run_one(\n        self, package_id: str, version_code: str, digest: str, directories: list[Path]\n    ) -> list[dict[str, Any]]:
         self._check_cli_support()
         for directory in directories:
             try:
@@ -230,7 +230,7 @@ class TruffleHogScanner:
                 f"TruffleHog exited with status {return_code}; results were not published."
             )
 
-        output_dir = self.results_root / package_id / version_code / "trufflehog"
+        output_dir = self.results_root / package_id / version_code / digest / "trufflehog"
         self._atomic_json(output_dir / "findings.json", findings)
         log_text = (
             f"COMMAND: {' '.join(command)}\n"
@@ -270,16 +270,17 @@ class TruffleHogScanner:
         ]
         rows: list[dict[str, object]] = []
         processing = self.database.read_processing_status()
-        eligible = {
-            (row.get("package_id", ""), str(row.get("version_code", "")))
-            for row in processing.values()
+        eligible_hashes = {
+            digest
+            for digest, row in processing.items()
             if row.get("scan_status") == "success"
         }
-        for path in sorted(self.results_root.glob("*/*/trufflehog/findings.json")):
+        for path in sorted(self.results_root.glob("*/*/*/trufflehog/findings.json")):
             try:
-                package_id = path.parents[2].name
-                version_code = path.parents[1].name
-                if (package_id, version_code) not in eligible:
+                digest = path.parents[1].name
+                package_id = path.parents[3].name
+                version_code = path.parents[2].name
+                if digest not in eligible_hashes:
                     continue
                 loaded = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -339,11 +340,11 @@ class TruffleHogScanner:
 
             package_id = row.get("package_id", "")
             version_code = row.get("version_code", "")
-            base_dir = self.results_root / package_id / version_code
+            base_dir = self.results_root / package_id / version_code / digest
             directories = [base_dir / "jadx", base_dir / "apktool"]
             self._update_status(row, "running")
             try:
-                findings = self._run_one(package_id, version_code, directories)
+                findings = self._run_one(package_id, version_code, digest, directories)
             except AnalysisError as exc:
                 failed += 1
                 self._update_status(row, "failed", str(exc))
