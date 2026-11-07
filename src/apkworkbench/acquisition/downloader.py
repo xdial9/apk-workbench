@@ -291,7 +291,11 @@ class ArtifactDownloader:
                         "sha256": artifact.sha256,
                         "package_id": artifact.package_id,
                         "download_url": artifact.download_url,
-                        "status": "failed",
+                        "status": (
+                            "persistence_failed"
+                            if isinstance(exc, DatabaseError)
+                            else "failed"
+                        ),
                         "bytes_received": received,
                         "error": str(exc)[:1000],
                     }
