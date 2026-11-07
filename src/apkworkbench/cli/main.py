@@ -115,7 +115,6 @@ def doctor() -> None:
     is_flag=True,
     help="Ignore the local index cache and retrieve a fresh signed index.",
 )
-@_workspace_locked
 def discover(package_id: str | None, limit: int, refresh_index: bool) -> None:
     """Fetch, authenticate, and summarize the official F-Droid index-v2."""
     config = Config()
