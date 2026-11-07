@@ -15,14 +15,27 @@ class ConfigError(Exception):
 class Config:
     """Load defaults and optional YAML overrides without global singleton state."""
 
-    def __init__(self, config_file: str | Path | None = None, *, environ: dict[str, str] | None = None):
+    def __init__(
+        self,
+        config_file: str | Path | None = None,
+        *,
+        environ: dict[str, str] | None = None,
+    ):
         env = os.environ if environ is None else environ
         home = Path(env.get("HOME", str(Path.home()))).expanduser()
-        config_dir = Path(env.get("APKWORKBENCH_CONFIG_DIR", home / ".config/apkworkbench")).expanduser()
-        state_dir = Path(env.get("APKWORKBENCH_STATE_DIR", home / ".local/state/apkworkbench")).expanduser()
-        workspace = Path(env.get("APKWORKBENCH_WORKSPACE", home / "APK-Workbench")).expanduser()
+        config_dir = Path(
+            env.get("APKWORKBENCH_CONFIG_DIR", home / ".config/apkworkbench")
+        ).expanduser()
+        state_dir = Path(
+            env.get("APKWORKBENCH_STATE_DIR", home / ".local/state/apkworkbench")
+        ).expanduser()
+        workspace = Path(
+            env.get("APKWORKBENCH_WORKSPACE", home / "APK-Workbench")
+        ).expanduser()
 
-        self.config_file = Path(config_file).expanduser() if config_file else config_dir / "config.yaml"
+        self.config_file = (
+            Path(config_file).expanduser() if config_file else config_dir / "config.yaml"
+        )
         self._defaults: dict[str, Any] = {
             "workspace": str(workspace),
             "config_dir": str(config_dir),
@@ -30,10 +43,27 @@ class Config:
             "gpg": {
                 "executable": "gpg",
                 "homedir": str(state_dir / "gpg"),
-                # F-Droid publishes this primary fingerprint for admin@f-droid.org.\n                "trusted_fingerprints": [\n                    "37D2C98789D8311948394E3E41E7044E1DBA2E89",\n                ],
+                # Published by F-Droid for the admin@f-droid.org OpenPGP key.
+                "trusted_fingerprints": [
+                    "37D2C98789D8311948394E3E41E7044E1DBA2E89",
+                ],
                 "timeout_seconds": 30,
             },
-            "sources": {\n                "fdroid": {\n                    "repository_url": "https://f-droid.org/repo",\n                    "key_url": (\n                        "https://keyserver.ubuntu.com/pks/lookup?op=get&search="\n                        "0x37D2C98789D8311948394E3E41E7044E1DBA2E89"\n                    ),\n                    "signer_fingerprint": "37D2C98789D8311948394E3E41E7044E1DBA2E89",\n                    "timeout_seconds": 30,\n                    "max_index_bytes": 134217728,\n                    "max_signature_bytes": 1048576,\n                    "max_key_bytes": 2097152,\n                },\n            },\n            "tools": {
+            "sources": {
+                "fdroid": {
+                    "repository_url": "https://f-droid.org/repo",
+                    "key_url": (
+                        "https://keyserver.ubuntu.com/pks/lookup?op=get&search="
+                        "0x37D2C98789D8311948394E3E41E7044E1DBA2E89"
+                    ),
+                    "signer_fingerprint": "37D2C98789D8311948394E3E41E7044E1DBA2E89",
+                    "timeout_seconds": 30,
+                    "max_index_bytes": 134217728,
+                    "max_signature_bytes": 1048576,
+                    "max_key_bytes": 2097152,
+                },
+            },
+            "tools": {
                 "gpg": "gpg",
                 "java": "java",
                 "jadx": "jadx",
@@ -62,7 +92,9 @@ class Config:
             except (OSError, yaml.YAMLError) as exc:
                 raise ConfigError(f"Cannot load {self.config_file}: {exc}") from exc
             if not isinstance(loaded, dict):
-                raise ConfigError(f"Configuration root in {self.config_file} must be a mapping.")
+                raise ConfigError(
+                    f"Configuration root in {self.config_file} must be a mapping."
+                )
             overrides = loaded
         self._data = self._merge(self._defaults, overrides)
         return self._data
@@ -78,7 +110,13 @@ class Config:
     def ensure_workspace(self) -> None:
         """Create application-owned workspace directories, not the user's GPG home."""
         root = Path(self.get("workspace")).expanduser()
-        for name in ("database/run_manifests", "downloads", "results", "reports", "logs"):
+        for name in (
+            "database/run_manifests",
+            "downloads",
+            "results",
+            "reports",
+            "logs",
+        ):
             (root / name).mkdir(parents=True, exist_ok=True)
         Path(self.get("config_dir")).expanduser().mkdir(parents=True, exist_ok=True)
         Path(self.get("state_dir")).expanduser().mkdir(parents=True, exist_ok=True)
