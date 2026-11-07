@@ -172,3 +172,16 @@ def test_report_generator_rejects_symlinked_findings_file(tmp_path):
 
     with pytest.raises(ReportingError, match="symlinked findings file"):
         ReportGenerator(database, workspace=tmp_path).run()
+
+
+def test_report_generator_rejects_symlinked_package_output_parent(tmp_path):
+    database = setup_workspace(tmp_path)
+    reports = tmp_path / "reports"
+    package_root = reports / "org.example.app"
+    real_package = reports / "real-package"
+    package_root.mkdir(parents=True)
+    package_root.rename(real_package)
+    package_root.symlink_to(real_package, target_is_directory=True)
+
+    with pytest.raises(ReportingError, match="symlinked report output component"):
+        ReportGenerator(database, workspace=tmp_path).run()
