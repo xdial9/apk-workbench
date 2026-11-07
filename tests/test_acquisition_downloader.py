@@ -225,3 +225,30 @@ def test_history_commit_failure_leaves_verified_file_for_retry(tmp_path):
     destination = downloader.destination_for(artifact)
     assert destination.read_bytes() == PAYLOAD
     assert database.history_hashes() == set()
+
+
+
+def test_same_package_version_with_different_hashes_gets_distinct_paths(tmp_path):
+    first = make_artifact(payload=b"first apk")
+    second = make_artifact(payload=b"second apk")
+    downloader, _database, _session = make_downloader(
+        tmp_path, FakeResponse(PAYLOAD)
+    )
+
+    first_path = downloader.destination_for(first)
+    second_path = downloader.destination_for(second)
+
+    assert first.version_code == second.version_code
+    assert first_path != second_path
+    assert first.sha256 in str(first_path.parent)
+    assert second.sha256 in str(second_path.parent)
+
+
+def test_destination_rejects_malformed_artifact_hash(tmp_path):
+    downloader, _database, _session = make_downloader(
+        tmp_path, FakeResponse(PAYLOAD)
+    )
+    artifact = make_artifact(digest="not-a-digest")
+
+    with pytest.raises(DownloadError, match="invalid SHA-256"):
+        downloader.destination_for(artifact)
