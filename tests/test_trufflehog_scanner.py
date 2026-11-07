@@ -178,6 +178,9 @@ def test_scanner_refuses_to_run_when_no_verification_flag_is_unavailable(monkeyp
 
 def test_malformed_json_prevents_results_from_being_published(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
+    prior = tmp_path / "results/org.example.app/7/trufflehog/findings.json"
+    prior.parent.mkdir(parents=True, exist_ok=True)
+    prior.write_text(json.dumps([{"detector_name": "STALE"}]), encoding="utf-8")
     _calls, _ = install_fakes(monkeypatch, b"{not-json}\n")
     scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
 
@@ -187,6 +190,9 @@ def test_malformed_json_prevents_results_from_being_published(monkeypatch, tmp_p
     assert summary.scanned == 0
     assert not (tmp_path / "results/org.example.app/7/trufflehog/findings.json").exists()
     assert database.read_processing_status()[digest]["scan_status"] == "failed"
+    with (tmp_path / "reports/findings.csv").open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows == []
 
 
 def test_existing_success_is_skipped_unless_forced(monkeypatch, tmp_path):
