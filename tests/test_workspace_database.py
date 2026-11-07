@@ -119,3 +119,51 @@ def test_manifest_reader_returns_selection_order_and_rejects_path_injection(tmp_
 
     with pytest.raises(DatabaseError, match="Run ID"):
         database.read_manifest("../outside")
+
+
+def test_concurrent_processing_updates_do_not_overwrite_each_other(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    database = WorkspaceDatabase(tmp_path)
+    database.ensure()
+
+    def update(index: int):
+        digest = f"{index:064x}"
+        database.update_processing_status(
+            {
+                "sha256": digest,
+                "package_id": f"org.example.app{index}",
+                "version_code": str(index),
+                "jadx_status": "success",
+            }
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(update, range(32)))
+
+    statuses = database.read_processing_status()
+    assert len(statuses) == 32
+    assert all(row["jadx_status"] == "success" for row in statuses.values())
+    assert (database.database_dir / ".workspace.lock").stat().st_mode & 0o777 == 0o600
+
+
+def test_concurrent_duplicate_history_writes_commit_exactly_once(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    database = WorkspaceDatabase(tmp_path)
+    database.ensure()
+    row = history_row("a" * 64)
+
+    def append(_index: int):
+        try:
+            database.append_history(row)
+            return "committed"
+        except DatabaseError:
+            return "duplicate"
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        outcomes = list(executor.map(append, range(16)))
+
+    assert outcomes.count("committed") == 1
+    assert outcomes.count("duplicate") == 15
+    assert database.history_hashes() == {"a" * 64}
