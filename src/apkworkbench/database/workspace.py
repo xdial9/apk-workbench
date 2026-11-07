@@ -457,7 +457,7 @@ class WorkspaceDatabase:
                     "Google Play manifest references must use google-play:// identifiers."
                 )
             package_id = str(row.get("package_id", ""))
-            if not re.fullmatch(r"[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+", package_id):
+            if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id):
                 raise DatabaseError(f"Run manifest contains an invalid package ID: {package_id!r}.")
             if not str(row.get("version_code", "")).isdigit():
                 raise DatabaseError("Run manifest contains an invalid version code.")
@@ -545,7 +545,7 @@ class WorkspaceDatabase:
                         if row.get("source") != "google_play" or not row.get("download_url", "").startswith("google-play://"):
                             raise DatabaseError(f"Run manifest contains a non-Google Play source reference: {path}")
                         package_id = row.get("package_id", "")
-                        if not re.fullmatch(r"[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+", package_id):
+                        if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id):
                             raise DatabaseError(f"Run manifest contains an invalid package ID: {package_id!r}.")
                         if not (row.get("version_code") or "").isdigit():
                             raise DatabaseError("Run manifest contains an invalid version code.")
