@@ -256,192 +256,6 @@ def download(apk_count: int, package_id: str | None) -> None:
             catalog = [app for app in catalog if app.package_id == package_id]
             if not catalog:
                 catalog = [PlayApp(package_id, package_id, "", "", 0)]
-        history = [row for row in database.read_download_history() if row.get("source") == "google_play"]
-        acquired_packages = {row.get("package_id", "") for row in history}
-        candidates = [app for app in catalog if app.package_id not in acquired_packages]
-        selected = candidates[:apk_count]
-        shortfall = max(0, apk_count - len(selected))
-        if not selected:
-            click.echo("No new Google Play applications selected.")
-            raise click.exceptions.Exit(2 if shortfall else 0)
-
-        click.echo(f"Previously acquired Google Play packages: {len(acquired_packages):,}")
-        click.echo(f"New packages selected: {len(selected):,}")
-        if shortfall:
-            click.echo(f"SHORTFALL: requested {apk_count}, found {len(selected)}; short by {shortfall}.")
-
-        # Resolve delivery metadata and Play-provided hashes for the whole batch before
-        # publishing the immutable manifest or downloading the first file.
-        plans = []
-        for index, app in enumerate(selected, start=1):
-            click.echo(f"[metadata {index}/{len(selected)}] {app.package_id}")
-            plans.append(source.inspect(app.package_id))
-
-        run_id = str(uuid.uuid4())
-        selected_at = utc_now()
-        workspace = Path(config.get("workspace")).expanduser()
-        manifest_rows = []
-        manifest_hashes: set[str] = set()
-        plan_digests: dict[str, str] = {}
-        for plan in plans:
-            plan_digest = _plan_digest(plan)
-            plan_digests[plan.app.package_id] = plan_digest
-            for item in plan.files:
-                if item.kind != "apk" or not item.sha256 or item.sha256 in manifest_hashes:
-                    continue
-                manifest_hashes.add(item.sha256)
-                manifest_rows.append({
-                    "run_id": run_id,
-                    "selection_order": len(manifest_rows) + 1,
-                    "selected_at": selected_at,
-                    "package_id": plan.app.package_id,
-                    "app_name": plan.app.title,
-                    "version_code": plan.app.version_code,
-                    "version_name": plan.app.version_name,
-                    "source": "google_play",
-                    "download_url": (
-                        f"google-play://{plan.app.package_id}/{plan.app.version_code}/{item.name}"
-                    ),
-                    "sha256": item.sha256,
-                    "size": item.size,
-                    "signer_sha256": ";".join(plan.signer_sha256),
-                    "local_path": str(
-                        workspace / "downloads" /
-                        f"{plan.app.package_id}-{plan.app.version_code}" / item.name
-                    ),
-                    "index_sha256": plan_digest,
-                })
-        if not manifest_rows:
-            raise GooglePlayError("Google Play returned no APK components with SHA-256 hashes.")
-        manifest_path = database.write_manifest(run_id, manifest_rows)
-        context.meta["apkworkbench_run_id"] = run_id
-    except click.exceptions.Exit:
-        raise
-    except (DatabaseError, GooglePlayError, OSError, ValueError, TypeError) as exc:
-        logger.error("Google Play acquisition setup failed: %s", exc)
-        click.echo(f"Download setup failed: {exc}", err=True)
-        raise click.exceptions.Exit(1) from exc
-
-    click.echo("Source: GOOGLE PLAY STORE")
-    click.echo(f"Run ID: {run_id}")
-    click.echo(f"Frozen manifest: {manifest_path}")
-    click.echo("Play delivery metadata and expected hashes captured before downloads.")
-
-    successes = 0
-    failures = 0
-    recorded_hashes = {row.get("sha256", "").lower() for row in database.read_download_history() if row.get("source") == "google_play"}
-    for index, plan in enumerate(plans, start=1):
-        click.echo(f"[{index}/{len(plans)}] {plan.app.package_id} versionCode={plan.app.version_code}")
-        try:
-            bundle = source.download(plan, workspace=workspace, run_id=run_id)
-            for apk_path in bundle.apk_files:
-                digest = _file_sha256(apk_path)
-                file_info = next(item for item in plan.files if item.name == apk_path.name)
-                if digest != file_info.sha256:
-                    raise GooglePlayError(f"Local SHA-256 mismatch after Play verification: {apk_path.name}")
-                if digest not in recorded_hashes:
-                    database.append_history({
-                        "sha256": digest,
-                        "package_id": plan.app.package_id,
-                        "app_name": plan.app.title,
-                        "version_code": plan.app.version_code,
-                        "version_name": plan.app.version_name,
-                        "source": "google_play",
-                        "download_url": f"google-play://{plan.app.package_id}/{plan.app.version_code}/{apk_path.name}",
-                        "local_path": str(apk_path),
-                        "size": apk_path.stat().st_size,
-                        "run_id": run_id,
-                        "downloaded_at": utc_now(),
-                        "index_sha256": plan_digests[plan.app.package_id],
-                    })
-                    recorded_hashes.add(digest)
-                    database.append_attempt({
-                        "timestamp": utc_now(),
-                        "run_id": run_id,
-                        "sha256": digest,
-                        "package_id": plan.app.package_id,
-                        "download_url": f"google-play://{plan.app.package_id}/{plan.app.version_code}/{apk_path.name}",
-                        "status": "success",
-                        "bytes_received": apk_path.stat().st_size,
-                        "error": "",
-                    })
-                    successes += 1
-            click.echo(f"  Verified APK components: {len(bundle.apk_files)}")
-            click.echo(f"  Preserved OBB components: {len(bundle.obb_files)}")
-            click.echo(f"  Bundle metadata: {bundle.manifest_path}")
-        except DatabaseError as exc:
-            logger.critical("Workspace persistence failed for %s: %s", plan.app.package_id, exc)
-            click.echo(f"  FATAL WORKSPACE DATABASE ERROR: {exc}", err=True)
-            raise click.exceptions.Exit(1) from exc
-        except (GooglePlayError, OSError, StopIteration, ValueError) as exc:
-            failures += 1
-            logger.error("Google Play download failed for %s: %s", plan.app.package_id, exc)
-            click.echo(f"  FAILED: {exc}", err=True)
-            for item in plan.files:
-                if item.kind == "apk":
-                    try:
-                        database.append_attempt({
-                            "timestamp": utc_now(),
-                            "run_id": run_id,
-                            "sha256": item.sha256,
-                            "package_id": plan.app.package_id,
-                            "download_url": f"google-play://{plan.app.package_id}/{plan.app.version_code}/{item.name}",
-                            "status": "failed",
-                            "bytes_received": 0,
-                            "error": str(exc)[:1000],
-                        })
-                    except DatabaseError:
-                        logger.exception("Could not persist failed acquisition attempt")
-
-    click.echo("")
-    click.echo("GOOGLE PLAY ACQUISITION SUMMARY")
-    click.echo(f"  Applications requested: {apk_count}")
-    click.echo(f"  Applications selected: {len(plans)}")
-    click.echo(f"  APK components downloaded and recorded: {successes}")
-    click.echo(f"  Applications failed: {failures}")
-    click.echo(f"  Manifest: {manifest_path}")
-    if failures:
-        raise click.exceptions.Exit(1)
-    if shortfall:
-        raise click.exceptions.Exit(2)
-
-
-@main.command()
-@click.option(
-    "--apk-count",
-    type=click.IntRange(min=1),
-    default=10,
-    show_default=True,
-    help="Number of new Google Play applications to acquire (each may contain multiple APK splits).",
-)
-@click.option(
-    "--package",
-    "package_id",
-    type=str,
-    default=None,
-    help="Acquire this exact Google Play Android application ID.",
-)
-@_workspace_locked
-def download(apk_count: int, package_id: str | None) -> None:
-    """Freeze Play delivery hashes, then acquire and verify complete app bundles."""
-    config = Config()
-    logger = setup_logging(config)
-    context = click.get_current_context()
-    context.meta["apkworkbench_run_id"] = ""
-    database = WorkspaceDatabase(config.get("workspace"))
-    source = GooglePlaySource(
-        retry_backoff_seconds=float(config.get("sources.google_play.retry_backoff_seconds", 1)),
-    )
-    click.echo(BANNER)
-    click.echo("Preparing Google Play Store acquisition...")
-
-    try:
-        database.ensure()
-        catalog = _read_catalog(_catalog_path(config))
-        if package_id:
-            catalog = [app for app in catalog if app.package_id == package_id]
-            if not catalog:
-                catalog = [PlayApp(package_id, package_id, "", "", 0)]
         history = [
             row for row in database.read_download_history()
             if row.get("source") == "google_play"
@@ -551,36 +365,20 @@ def download(apk_count: int, package_id: str | None) -> None:
                     raise GooglePlayError(f"Local SHA-256 mismatch after Play verification: {apk_path.name}")
                 if digest not in selected_hashes or digest in recorded_hashes:
                     continue
-                try:
-                    database.append_history({
-                        "sha256": digest,
-                        "package_id": plan.app.package_id,
-                        "app_name": plan.app.title,
-                        "version_code": plan.app.version_code,
-                        "version_name": plan.app.version_name,
-                        "source": "google_play",
-                        "download_url": f"google-play://{plan.app.package_id}/{plan.app.version_code}/{apk_path.name}",
-                        "local_path": str(apk_path),
-                        "size": apk_path.stat().st_size,
-                        "run_id": run_id,
-                        "downloaded_at": utc_now(),
-                        "index_sha256": plan_digests[plan.app.package_id],
-                    })
-                except DatabaseError as persistence_error:
-                    try:
-                        database.append_attempt({
-                            "timestamp": utc_now(),
-                            "run_id": run_id,
-                            "sha256": digest,
-                            "package_id": plan.app.package_id,
-                            "download_url": f"google-play://{plan.app.package_id}/{plan.app.version_code}/{apk_path.name}",
-                            "status": "persistence_failed",
-                            "bytes_received": apk_path.stat().st_size,
-                            "error": str(persistence_error)[:1000],
-                        })
-                    except DatabaseError:
-                        logger.exception("Could not persist the acquisition-history failure record")
-                    raise
+                database.append_history({
+                    "sha256": digest,
+                    "package_id": plan.app.package_id,
+                    "app_name": plan.app.title,
+                    "version_code": plan.app.version_code,
+                    "version_name": plan.app.version_name,
+                    "source": "google_play",
+                    "download_url": f"google-play://{plan.app.package_id}/{plan.app.version_code}/{apk_path.name}",
+                    "local_path": str(apk_path),
+                    "size": apk_path.stat().st_size,
+                    "run_id": run_id,
+                    "downloaded_at": utc_now(),
+                    "index_sha256": plan_digests[plan.app.package_id],
+                })
                 recorded_hashes.add(digest)
                 database.append_attempt({
                     "timestamp": utc_now(),
@@ -631,6 +429,59 @@ def download(apk_count: int, package_id: str | None) -> None:
         raise click.exceptions.Exit(1)
     if shortfall:
         raise click.exceptions.Exit(2)
+
+
+@main.command()
+@click.option(
+    "--limit",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Maximum number of APKs to process; 0 processes all eligible downloads.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Re-run decompilation even when both tools previously succeeded.",
+)
+@click.option(
+    "--run-id",
+    type=str,
+    default=None,
+    help="Restrict processing to artifacts in this frozen download manifest.",
+)
+@_workspace_locked
+def decompile(limit: int, force: bool, run_id: str | None) -> None:
+    """Run JADX and Apktool sequentially against verified acquired APKs."""
+    config = Config()
+    logger = setup_logging(config)
+    database = WorkspaceDatabase(config.get("workspace"))
+    runner = DecompilationRunner(
+        database,
+        workspace=config.get("workspace"),
+        jadx_executable=str(config.get("tools.jadx", "jadx")),
+        apktool_executable=str(config.get("tools.apktool", "apktool")),
+        timeout_seconds=int(config.get("decompilation.timeout_seconds", 3600)),
+        logger=logger,
+    )
+    click.echo(BANNER)
+    click.echo("Starting sequential decompilation; each APK is SHA-256 checked first.")
+    try:
+        summary = runner.run(limit=limit or None, force=force, run_id=run_id)
+    except (DatabaseError, OSError, ValueError) as exc:
+        logger.error("Decompilation run failed: %s", exc)
+        click.echo(f"Decompilation failed: {exc}", err=True)
+        raise click.exceptions.Exit(1) from exc
+
+    click.echo("DECOMPILATION SUMMARY")
+    if run_id:
+        click.echo(f"  Run ID: {run_id}")
+    click.echo(f"  Examined: {summary.examined}")
+    click.echo(f"  Completed: {summary.completed}")
+    click.echo(f"  Failed: {summary.failed}")
+    click.echo(f"  Already complete / skipped: {summary.skipped}")
+    if summary.failed:
+        raise click.exceptions.Exit(1)
 
 
 @main.command()

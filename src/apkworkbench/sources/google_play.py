@@ -228,7 +228,7 @@ class GooglePlaySource:
             name = str(item.name)
             if Path(name).name != name or name in {"", ".", ".."}:
                 raise GooglePlayError(f"Google Play returned an unsafe bundle filename: {name!r}")
-            if not (name.endswith(".apk") or name.endswith(".obb")):
+            if not (name.endswith((".apk", ".obb"))):
                 raise GooglePlayError(f"Google Play returned an unsupported bundle component: {name!r}")
             algorithm, expected = item.expected_digest()
             if name.endswith(".apk") and algorithm != "sha256":
