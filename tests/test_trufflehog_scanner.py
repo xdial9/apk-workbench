@@ -5,6 +5,7 @@ import csv
 import hashlib
 import json
 import logging
+import subprocess
 from pathlib import Path
 
 from apkworkbench.analysis.trufflehog import TruffleHogScanner
@@ -222,3 +223,47 @@ def test_aggregate_csv_is_sanitized_and_has_expected_columns(monkeypatch, tmp_pa
     assert rows[0]["detector_name"] == "AWS"
     assert rows[0]["verification"] == "disabled"
     assert RAW_SECRET not in str(rows)
+
+
+
+def test_scanner_kills_process_when_timeout_expires(monkeypatch, tmp_path):
+    database, digest = make_workspace(tmp_path)
+    calls, process = install_fakes(monkeypatch, b"")
+    scanner = TruffleHogScanner(
+        database,
+        workspace=tmp_path,
+        executable="trufflehog",
+        timeout_seconds=1,
+    )
+
+    def wait_with_timeout(timeout=None):
+        if not process.killed:
+            raise subprocess.TimeoutExpired("trufflehog", timeout)
+        return -9
+
+    process.wait = wait_with_timeout
+    summary = scanner.run()
+
+    assert summary.failed == 1
+    assert process.killed
+    assert database.read_processing_status()[digest]["scan_status"] == "failed"
+    assert [entry[0] for entry in calls] == ["help", "scan"]
+
+
+def test_scanner_rejects_aggregate_json_output_over_configured_limit(monkeypatch, tmp_path):
+    database, digest = make_workspace(tmp_path)
+    output = json.dumps(result_json()).encode() + b"\\n"
+    install_fakes(monkeypatch, output)
+    scanner = TruffleHogScanner(
+        database,
+        workspace=tmp_path,
+        executable="trufflehog",
+        max_output_bytes=10,
+    )
+
+    summary = scanner.run()
+
+    assert summary.failed == 1
+    assert summary.scanned == 0
+    assert database.read_processing_status()[digest]["scan_status"] == "failed"
+    assert not (tmp_path / "results/org.example.app/7/trufflehog/findings.json").exists()
