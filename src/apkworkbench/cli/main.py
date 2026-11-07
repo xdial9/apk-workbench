@@ -579,10 +579,10 @@ def status() -> None:
     config = Config()
     database = WorkspaceDatabase(config.get("workspace"))
     try:
-        history = [row for row in database.read_download_history() if row.get("source") == "google_play"]
+        history = database.read_download_history()
+        acquired_hashes = {row.get("sha256", "").lower() for row in history}
         processing = database.read_processing_status()
-        play_hashes = {row.get("sha256", "").lower() for row in history}
-        processing = {digest: row for digest, row in processing.items() if digest in play_hashes}
+        processing = {digest: row for digest, row in processing.items() if digest in acquired_hashes}
     except DatabaseError as exc:
         click.echo(f"Status unavailable: {exc}", err=True)
         raise click.exceptions.Exit(1) from exc
