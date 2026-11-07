@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import selectors
 import subprocess
 import time
@@ -275,6 +276,20 @@ class TruffleHogScanner:
             )
 
         output_dir = self.results_root / package_id / version_code / digest / "trufflehog"
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_dir.resolve(strict=True).relative_to(self.results_root.resolve())
+            if any(part.is_symlink() for part in (
+                self.results_root / package_id,
+                self.results_root / package_id / version_code,
+                self.results_root / package_id / version_code / digest,
+                output_dir,
+            )):
+                raise ValueError("symlinked output component")
+        except (OSError, ValueError) as exc:
+            raise AnalysisError(
+                f"TruffleHog output path escapes or aliases the results workspace: {output_dir}"
+            ) from exc
         self._atomic_json(output_dir / "findings.json", findings)
         log_text = (
             f"COMMAND: {' '.join(command)}\n"
@@ -363,9 +378,20 @@ class TruffleHogScanner:
             if temporary.exists():
                 temporary.unlink()
 
+    def _validate_results_root(self) -> None:
+        self.results_root.mkdir(parents=True, exist_ok=True)
+        try:
+            self.results_root.resolve(strict=True).relative_to(self.workspace)
+        except (OSError, ValueError) as exc:
+            raise AnalysisError(
+                "Results directory resolves outside the configured workspace."
+            ) from exc
+        self.results_root = self.results_root.resolve(strict=True)
+
     def run(self, *, limit: int | None = None, force: bool = False) -> AnalysisSummary:
         if limit is not None and limit < 1:
             raise ValueError("limit must be at least 1 when supplied")
+        self._validate_results_root()
         self.database.ensure()
         history = self.database.read_download_history()
         statuses = self.database.read_processing_status()
@@ -387,6 +413,16 @@ class TruffleHogScanner:
 
             package_id = row.get("package_id", "")
             version_code = row.get("version_code", "")
+            if not re.fullmatch(r"[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+", package_id):
+                failed += 1
+                self._update_status(row, "failed", f"Unsafe package ID: {package_id!r}")
+                continue
+            if not version_code.isdigit() or len(digest) != 64 or any(
+                char not in "0123456789abcdef" for char in digest
+            ):
+                failed += 1
+                self._update_status(row, "failed", "Malformed version code or SHA-256 in history.")
+                continue
             base_dir = self.results_root / package_id / version_code / digest
             directories = [base_dir / "jadx", base_dir / "apktool"]
             self._update_status(row, "running")
