@@ -535,14 +535,21 @@ def analyze(limit: int, force: bool, run_id: str | None) -> None:
         click.echo(f"Analysis failed: {exc}", err=True)
         raise click.exceptions.Exit(1) from exc
 
-    click.echo("ANALYSIS SUMMARY")
+    click.echo("COMPLETE ORIGINAL TRUFFLEHOG FINDINGS")
+    if not summary.finding_records:
+        click.echo("  No findings were emitted by the scans performed in this run.")
+    for record in summary.finding_records:
+        click.echo(f"\nAPK: {record['package_id']}  VERSION: {record['version_code']}  SHA256: {record['sha256']}")
+        click.echo(json.dumps(record["finding"], ensure_ascii=False, indent=2))
+
+    click.echo("\nANALYSIS SUMMARY")
     if run_id:
         click.echo(f"  Run ID: {run_id}")
     click.echo(f"  APKs scanned: {summary.scanned}")
     click.echo(f"  Candidate findings: {summary.findings}")
     click.echo(f"  Failed scans: {summary.failed}")
     click.echo(f"  Skipped / not decompiled: {summary.skipped}")
-    click.echo(f"  Sanitized aggregate: {Path(config.get('workspace')) / 'reports/findings.csv'}")
+    click.echo(f"  Complete-finding aggregate: {Path(config.get('workspace')) / 'reports/findings.csv'}")
     if summary.failed:
         raise click.exceptions.Exit(1)
 
@@ -550,7 +557,7 @@ def analyze(limit: int, force: bool, run_id: str | None) -> None:
 @main.command()
 @_workspace_locked
 def report() -> None:
-    """Generate sanitized per-APK JSON and HTML reports."""
+    """Generate per-APK JSON and HTML reports with complete finding objects."""
     config = Config()
     logger = setup_logging(config)
     generator = ReportGenerator(
