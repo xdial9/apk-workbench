@@ -354,6 +354,7 @@ This repository preserves the decisions, corrections and pivots that shaped the 
 - [Target Architecture](docs/architecture/TARGET_ARCHITECTURE.md)
 - [Evidence Data Model](docs/architecture/EVIDENCE_SCHEMA.md)
 - [Airtable Engineering Map](docs/engineering/AIRTABLE_ENGINEERING_MAP.md)
+- [Complete Airtable Snapshot (JSON)](docs/engineering/airtable-snapshot.json)
 
 The live Airtable base is the shared engineering coordination mirror; it is not a runtime dependency. See the engineering-map document for its base ID, table inventory and system-of-record boundaries.
 
