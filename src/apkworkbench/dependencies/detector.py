@@ -4,6 +4,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from dataclasses import dataclass
+from typing import ClassVar
 
 from ..core.config import Config
 
@@ -29,7 +30,7 @@ class DependencyInfo:
 
 
 class DependencyDetector:
-    CHECKS = {
+    CHECKS: ClassVar[dict[str, tuple[bool, list[str]]]] = {
         "gpg": (True, ["--version"]),
         "java": (True, ["-version"]),
         "jadx": (True, ["--version"]),
