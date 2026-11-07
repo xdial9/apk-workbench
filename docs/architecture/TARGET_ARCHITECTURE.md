@@ -170,7 +170,7 @@ Extend src/apkworkbench/cli/main.py and src/apkworkbench/reporting/generator.py.
 
 **Constraints**
 
-Do not imply a clean report means safe APK. Never expose unsanitized secrets. Treat all strings from APK as untrusted HTML. Report static-only scope and unsupported surfaces.
+Do not imply a clean report means safe APK. Treat complete source values as sensitive local evidence; restrict workspace permissions and escape all APK-derived strings before HTML rendering. Review before external publication. Report static-only scope and unsupported surfaces.
 
 **Acceptance tests**
 
