@@ -504,7 +504,7 @@ class DecompilationRunner:
             )
             for label, executable, destination, tool_name, arguments in stages:
                 current_status = jadx_status if tool_name == "jadx" else apktool_status
-                if not force and current_status == "success":
+                if not force and current_status in {"success", "partial"}:
                     continue
 
                 staged_output = destination.with_name(
