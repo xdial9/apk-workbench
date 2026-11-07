@@ -205,9 +205,18 @@ class ArtifactDownloader:
                     if temporary is not None and temporary.exists():
                         temporary.unlink()
                     raise
+                except BaseException:
+                    if temporary is not None and temporary.exists():
+                        temporary.unlink()
+                    raise
                 finally:
                     if response is not None:
-                        response.close()
+                        try:
+                            response.close()
+                        except BaseException:
+                            if temporary is not None and temporary.exists():
+                                temporary.unlink()
+                            raise
         finally:
             if previous_sigterm is not None:
                 signal.signal(signal.SIGTERM, previous_sigterm)
