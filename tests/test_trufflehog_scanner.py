@@ -180,7 +180,7 @@ def test_scanner_disables_verification_and_persists_complete_original_objects(mo
 def test_scanner_preserves_repeated_original_objects_without_deduplication(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
     original = result_json()
-    line = (json.dumps(original) + "\\n" + json.dumps(original) + "\\n").encode()
+    line = (json.dumps(original) + "\n" + json.dumps(original) + "\n").encode()
     install_fakes(monkeypatch, line)
     scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
 
