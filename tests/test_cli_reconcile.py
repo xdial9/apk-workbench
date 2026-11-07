@@ -1,9 +1,10 @@
 """CLI tests for inspecting incomplete and completed acquisition runs."""
 from __future__ import annotations
 
+import importlib
 from click.testing import CliRunner
 
-from apkworkbench.cli import main as cli
+cli = importlib.import_module("apkworkbench.cli.main")
 from apkworkbench.database.workspace import WorkspaceDatabase
 
 
