@@ -148,6 +148,12 @@ def test_scanner_disables_verification_and_persists_complete_original_objects(mo
     assert summary.scanned == 1
     assert summary.findings == 1
     assert summary.failed == 0
+    assert summary.finding_records == ({
+        "package_id": "org.example.app",
+        "version_code": "7",
+        "sha256": digest,
+        "finding": result_json(),
+    },)
     command = next(entry[1] for entry in calls if entry[0] == "scan")
     assert command[0:2] == ["trufflehog", "filesystem"]
     assert "--no-verification" in command
@@ -168,6 +174,23 @@ def test_scanner_disables_verification_and_persists_complete_original_objects(mo
     assert RAW_SECRET in aggregate
     assert "finding_json" in aggregate
     assert database.read_processing_status()[digest]["scan_status"] == "success"
+
+
+
+def test_scanner_preserves_repeated_original_objects_without_deduplication(monkeypatch, tmp_path):
+    database, digest = make_workspace(tmp_path)
+    original = result_json()
+    line = (json.dumps(original) + "\\n" + json.dumps(original) + "\\n").encode()
+    install_fakes(monkeypatch, line)
+    scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
+
+    summary = scanner.run()
+
+    output = tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings.json"
+    assert json.loads(output.read_text(encoding="utf-8")) == [original, original]
+    assert summary.findings == 2
+    assert len(summary.finding_records) == 2
+
 
 
 def test_scanner_refuses_to_run_when_no_verification_flag_is_unavailable(monkeypatch, tmp_path):
