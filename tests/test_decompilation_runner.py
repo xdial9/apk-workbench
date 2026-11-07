@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import logging
+import pytest
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -190,6 +191,7 @@ def test_stale_decompiler_output_symlink_is_unlinked_not_followed(tmp_path):
 def test_decompiler_rejects_results_root_symlink_escape(tmp_path):
     runner, _database, _digest, _apk_path = make_runner(tmp_path)
     results = tmp_path / "results"
+    results.mkdir()
     results.rmdir()
     outside = tmp_path / "outside-results"
     outside.mkdir()
