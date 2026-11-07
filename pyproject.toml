@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Sequential Android APK discovery, acquisition, decompilation, and static analysis for Linux."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "See README disclaimer" }
+license = "MIT"
 authors = [{ name = "dial9 + ChatGPT" }]
 dependencies = [
   "click>=8.1,<9",
