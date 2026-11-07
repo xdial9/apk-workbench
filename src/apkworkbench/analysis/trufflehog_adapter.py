@@ -83,10 +83,10 @@ class TruffleHogAnalyzer:
         )
         findings = []
         for item in original_findings:
-            fingerprint = self.scanner._finding_fingerprint(item)
+            fingerprint = TruffleHogScanner._finding_fingerprint(item)
             detector_name = item.get("DetectorName") or "TruffleHog finding"
             detector_type = item.get("DetectorType") or detector_name
-            file_path, line_value = self.scanner._filesystem_metadata(item)
+            file_path, line_value = TruffleHogScanner._filesystem_metadata(item)
             source_path = self._relative_source_path(file_path)
             line_number = (
                 line_value
