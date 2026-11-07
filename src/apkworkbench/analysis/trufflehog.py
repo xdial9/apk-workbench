@@ -84,8 +84,6 @@ class TruffleHogScanner:
             if flag in help_text:
                 return True
             # Kong renders Boolean options as --[no-]<full-option-name>.
-            # Preserve an option's own "no-" prefix: e.g. --results
-            # is advertised as --[no-]no-verification, not --[no-]verification.
             return flag.startswith("--") and f"--[no-]{flag[2:]}" in help_text
 
         missing = [flag for flag in self.REQUIRED_HELP_FLAGS if not supported(flag)]

@@ -83,6 +83,8 @@ class TruffleHogAnalyzer:
         )
         findings = []
         for item in original_findings:
+            if item.get("Verified") is not True:
+                raise AnalysisError("TruffleHog adapter received a finding that is not explicitly verified.")
             fingerprint = TruffleHogScanner._finding_fingerprint(item)
             detector_name = item.get("DetectorName") or "TruffleHog finding"
             detector_type = item.get("DetectorType") or detector_name
