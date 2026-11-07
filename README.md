@@ -1,127 +1,240 @@
-# APK WORKBENCH
+![APK WORKBENCH](docs/assets/apk-workbench-banner.svg)
 
-[![Tests](https://github.com/xdial9/apk-workbench/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/xdial9/apk-workbench/actions/workflows/tests.yml) [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Tests](https://github.com/xdial9/apk-workbench/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/xdial9/apk-workbench/actions/workflows/tests.yml)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Linux](https://img.shields.io/badge/Platform-Linux-333333?logo=linux&logoColor=white)](https://www.debian.org/)
+[![License](https://img.shields.io/badge/License-MIT-2E8B57.svg)](LICENSE)
+
+# APK WORKBENCH
 
 **DISCOVER · DOWNLOAD · DECOMPILE · ANALYZE · CATALOGUE**
 
-A Linux-native Python command-line workbench for acquiring Android APKs from F-Droid, verifying artifact integrity, decompiling with JADX and Apktool, scanning local decompilation output with TruffleHog, and producing sanitized reports.
+A Python-only, Linux-native command-line workbench for authenticated F-Droid discovery, verified APK acquisition, sequential decompilation, local static analysis, and sanitized reporting.
 
-**Design principle:** one artifact at a time, one subprocess at a time, explicit verification, persistent records.
+> **Operating model:** one artifact at a time · one external process at a time · verified inputs · persistent records.
 
-## Start here
+**CO-DEVELOPED BY dial9 + ChatGPT**  
+*SLOW. SIMPLE. SEQUENTIAL. VERIFIED.*
 
-**New installation? Follow the complete [Installation and First Run Guide](docs/installation.md).** It contains the exact Debian/Ubuntu commands to install the system dependencies, clone the repository, create the Python environment, verify the tools, perform a first authenticated discovery, and process a small test batch.
+---
 
-For an experienced user, the short path is:
+## 01 · Install the complete toolchain
 
-```bash
+Supported installation path: 64-bit Debian 13 and Ubuntu 22.04/24.04. APK WORKBENCH itself is Python; Java, GnuPG, JADX, Apktool, and TruffleHog are separate system dependencies.
+
+### A. System packages
+
+~~~bash
+sudo apt update
+sudo apt install -y \
+  ca-certificates git curl unzip gnupg \
+  python3 python3-venv python3-pip default-jre-headless
+
+python3 --version
+java -version
+gpg --version
+~~~
+
+Python 3.10 or newer is required. JADX 1.5.6 requires a 64-bit Java 11-or-newer runtime.
+
+### B. JADX 1.5.6
+
+~~~bash
+mkdir -p "$HOME/.local/opt" "$HOME/.local/bin"
+cd /tmp
+
+curl -fL --retry 3 \
+  -o jadx-1.5.6.zip \
+  https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip
+
+unzip -q -o jadx-1.5.6.zip -d "$HOME/.local/opt/jadx-1.5.6"
+
+cat > "$HOME/.local/bin/jadx" <<'EOF'
+#!/bin/sh
+exec "$HOME/.local/opt/jadx-1.5.6/bin/jadx" "$@"
+EOF
+chmod 0755 "$HOME/.local/bin/jadx"
+~~~
+
+### C. Apktool 3.0.3
+
+~~~bash
+mkdir -p "$HOME/.local/opt/apktool-3.0.3" "$HOME/.local/bin"
+
+curl -fL --retry 3 \
+  -o "$HOME/.local/opt/apktool-3.0.3/apktool.jar" \
+  https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar
+
+printf '%s  %s\n' \
+  'dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423' \
+  "$HOME/.local/opt/apktool-3.0.3/apktool.jar" | sha256sum -c -
+
+cat > "$HOME/.local/bin/apktool" <<'EOF'
+#!/bin/sh
+exec java -jar "$HOME/.local/opt/apktool-3.0.3/apktool.jar" "$@"
+EOF
+chmod 0755 "$HOME/.local/bin/apktool"
+~~~
+
+The checksum must report **OK**. Stop if it does not.
+
+### D. User-local PATH and TruffleHog
+
+~~~bash
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.profile" || \
+  printf '\n# APK WORKBENCH user-local tools\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.profile"
+export PATH="$HOME/.local/bin:$PATH"
+
+curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | \
+  sudo sh -s -- -b /usr/local/bin
+
+jadx --version
+apktool --version
+trufflehog --version
+~~~
+
+TruffleHog must advertise the filesystem scanner and the safe-operation flags checked by the application: **--no-verification**, **--no-update**, **--json**, **--concurrency**, and **--fail-on-scan-errors**.
+
+### E. Clone and install APK WORKBENCH
+
+~~~bash
+cd "$HOME"
 git clone https://github.com/xdial9/apk-workbench.git
 cd apk-workbench
-
-sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip gnupg default-jre-headless curl unzip
 
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 
+apkworkbench version
 apkworkbench doctor
+~~~
+
+All five required executables—GnuPG, Java, JADX, Apktool, and TruffleHog—must show **[OK]** in the environment check.
+
+---
+
+## 02 · Authenticate F-Droid discovery
+
+~~~bash
 apkworkbench discover --limit 20
-```
+~~~
 
-The short path assumes JADX, Apktool, and TruffleHog have already been installed. Their exact installation steps are in the guide.
+The client retrieves the F-Droid signing key, signed index, and detached signature over HTTPS. It checks the imported OpenPGP primary fingerprint and verifies the detached signature **before parsing any index metadata**.
 
-## What it does
+A successful discovery reports **Index signature: VERIFIED**. Progress messages show the active retrieval phase and index byte counts. Discovery does not download APKs.
 
-| Command | Purpose |
-|---|---|
-| `apkworkbench doctor` | Check all required external executables |
-| `apkworkbench discover` | Authenticate and parse the F-Droid repository index |
-| `apkworkbench download` | Freeze a run manifest, acquire new unique APKs, and verify SHA-256 |
-| `apkworkbench decompile` | Re-verify APKs, then run JADX and Apktool sequentially |
-| `apkworkbench analyze` | Scan completed decompilations locally with TruffleHog |
-| `apkworkbench report` | Generate per-APK JSON/HTML reports and aggregate sanitized findings |
-| `apkworkbench status` | Summarize acquisition and processing state |
-| `apkworkbench run` | Execute the pipeline in order |
-| `apkworkbench version` | Print the installed version |
+---
 
-## Requirements
+## 03 · Run the first complete batch
 
-- Debian 13 or Ubuntu 22.04/24.04 (primary documented targets)
-- Python 3.10+
-- GnuPG
-- Java 21 runtime (JADX requires 64-bit Java 11 or newer)
-- JADX
-- Apktool
-- TruffleHog
+Start with three new APK binaries:
 
-The external tools are separate system dependencies and are not installed by `pip`. See [Installation and First Run](docs/installation.md).
+~~~bash
+apkworkbench run --apk-count 3
+apkworkbench status
+~~~
 
-TruffleHog must support the filesystem scanner and `--no-verification`, `--no-update`, `--json`, `--concurrency`, and `--fail-on-scan-errors`. The application checks the installed CLI before scanning and fails closed if the required behavior cannot be confirmed.
+The full pipeline performs authenticated discovery, selection, immutable manifest publication, sequential downloads, SHA-256/size validation, JADX, Apktool, TruffleHog, and report generation.
 
-## First-run workflow
+**Batch boundary:** the run passes its exact frozen manifest into decompilation and analysis. It does not silently sweep older downloads into the new batch. Failed downloads are skipped, not substituted with unrelated workspace artifacts.
 
-After completing the installation guide:
+---
 
-```bash
-# Confirm all five external tools are installed and healthy.
+## 04 · Command reference
+
+### Environment and help
+
+~~~bash
+apkworkbench --help
 apkworkbench doctor
+apkworkbench version
+~~~
 
-# Authenticate the F-Droid index and inspect the latest package records.
-apkworkbench discover --limit 20
+### Discover packages
 
-# Start small: acquire three new unique APK binaries.
+~~~bash
+apkworkbench discover
+apkworkbench discover --limit 50
+apkworkbench discover --package org.example.app
+~~~
+
+The limit controls display count only. Package filtering is an exact Android application ID match.
+
+### Download unique APKs
+
+~~~bash
+apkworkbench download
 apkworkbench download --apk-count 3
+apkworkbench download --apk-count 10 --package org.example.app
+~~~
 
-# Process the acquired artifacts.
-apkworkbench decompile --limit 3
-apkworkbench analyze --limit 3
+The command prints a UUID **Run ID** and the frozen manifest path. Save the ID when processing stages separately.
+
+### Decompile
+
+~~~bash
+apkworkbench decompile
+apkworkbench decompile --limit 5
+apkworkbench decompile --run-id YOUR-RUN-ID
+apkworkbench decompile --run-id YOUR-RUN-ID --force
+~~~
+
+Without a run ID, standalone decompilation considers all eligible workspace downloads. With a run ID, it processes only successfully acquired artifacts in that manifest.
+
+### Analyze
+
+~~~bash
+apkworkbench analyze
+apkworkbench analyze --limit 5
+apkworkbench analyze --run-id YOUR-RUN-ID
+apkworkbench analyze --run-id YOUR-RUN-ID --force
+~~~
+
+Without a run ID, standalone analysis considers all eligible completed workspace decompilations. With a run ID, it scans only the matching acquisition batch.
+
+Credential verification is disabled. Findings are unverified indicators for manual review—not proof of valid credentials or exploitability.
+
+### Reports and status
+
+~~~bash
 apkworkbench report
 apkworkbench status
-```
+~~~
 
-Once the first batch has been inspected, the full pipeline can be run with:
+Reports are refreshed for the workspace catalogue, not just the most recent run.
 
-```bash
-apkworkbench run --apk-count 10
-```
+### Full pipeline
 
-See [Command Reference](docs/commands.md) for options and [Configuration](docs/configuration.md) for workspace, timeouts, and tool overrides.
+~~~bash
+apkworkbench run
+apkworkbench run --apk-count 3
+apkworkbench run --apk-count 25
+apkworkbench run --apk-count 10 --package org.example.app
+apkworkbench run --apk-count 10 --force-decompile --force-analyze
+~~~
 
-## F-Droid trust and integrity model
+| Option | Purpose |
+|---|---|
+| **--apk-count INTEGER** | New unique APKs to select; default 10 |
+| **--package TEXT** | Exact package ID filter |
+| **--force-decompile** | Repeat successful decompilation for this batch |
+| **--force-analyze** | Repeat successful scans for this batch |
 
-The application retrieves `index-v2.json` and its detached `.asc` signature over HTTPS. It imports the OpenPGP public key into an application-specific GnuPG home, checks its full primary fingerprint against the configured pin, and verifies the detached signature before parsing index bytes.
+See the [CLI Command Reference](docs/commands.md) for every option and exit status.
 
-Default repository-index signer primary fingerprint:
+---
 
-```text
-37D2 C987 89D8 3119 4839 4E3E 41E7 044E 1DBA 2E89
-```
+## 05 · Runtime workspace
 
-This OpenPGP identity is distinct from Android APK signing-certificate fingerprints carried in the repository index. APK certificate fingerprints are metadata; they are not substituted for the repository-index signing key.
+The source checkout and runtime data are separate. Default workspace:
 
-The client rejects HTTP redirects, bounds response sizes and request times, and fails closed on a bad signature or unexpected signer. The index-v2 `packages` object maps package IDs to version records. Each `versions` map is keyed by APK SHA-256 (which must equal `file.sha256`); numeric `manifest.versionCode` is a separate value.
+~~~text
+~/APK-Workbench/
+~~~
 
-## Acquisition and processing guarantees
-
-- SHA-256 is the unique binary identity.
-- Previously acquired hashes and duplicates in the current index selection are excluded.
-- A UUID run manifest is atomically published before the first download.
-- Downloads are sequential and streamed into temporary `.part` files.
-- Both expected byte count and SHA-256 must match before atomic publication.
-- Download history is append-only; attempts are recorded separately.
-- Every APK is re-hashed before decompilation.
-- JADX runs with one worker; Apktool runs afterward with one job.
-- TruffleHog scans completed JADX and Apktool outputs sequentially.
-- Credential verification is disabled. Findings are unverified indicators for manual review, not proof that a credential is valid or exploitable.
-- Reports persist allowlisted metadata and one-way finding fingerprints, not raw or decoded secret values.
-
-## Workspace
-
-Runtime data is separate from the source checkout. Default location: `~/APK-Workbench/`.
-
-```text
+~~~text
 APK-Workbench/
 ├── database/
 │   ├── download_history.csv
@@ -131,7 +244,9 @@ APK-Workbench/
 ├── downloads/<package>/<versionCode>/<sha256>/app.apk
 ├── results/<package>/<versionCode>/<sha256>/
 │   ├── jadx/
+│   ├── jadx.log
 │   ├── apktool/
+│   ├── apktool.log
 │   └── trufflehog/
 ├── reports/
 │   ├── <package>/<versionCode>/<sha256>/
@@ -139,35 +254,102 @@ APK-Workbench/
 │   │   └── report.html
 │   └── findings.csv
 └── logs/apkworkbench.log
-```
+~~~
 
-Configuration, isolated GPG state, and workspace overrides are documented in [Configuration](docs/configuration.md). Keep the runtime workspace out of Git; generated APKs and scan results are not source files.
+Do not commit the runtime workspace to Git. It contains original APKs, generated source, logs, and analysis output.
 
-## Tests and quality checks
+For another storage location:
 
-```bash
+~~~bash
+export APKWORKBENCH_WORKSPACE="/path/to/APK-Workbench"
+~~~
+
+Persistent settings belong in **~/.config/apkworkbench/config.yaml**.
+
+---
+
+## 06 · Troubleshooting
+
+### Inspect workspace state
+
+~~~bash
+apkworkbench status
+tail -n 120 "$HOME/APK-Workbench/logs/apkworkbench.log"
+~~~
+
+### Locate per-artifact decompiler logs
+
+~~~bash
+find "$HOME/APK-Workbench/results" \
+  -type f \( -name 'jadx.log' -o -name 'apktool.log' \) \
+  -print
+~~~
+
+Each APK has separate JADX and Apktool logs. One decompiler's failure does not prevent the other from being attempted; the processing database records both statuses.
+
+### Check external executables
+
+~~~bash
+command -v gpg
+command -v java
+command -v jadx
+command -v apktool
+command -v trufflehog
+
+jadx --version
+apktool --version
+trufflehog --version
+~~~
+
+### Update the source checkout
+
+~~~bash
+cd "$HOME/apk-workbench"
+git pull --ff-only
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+~~~
+
+Do not delete the runtime workspace as a routine troubleshooting step. It contains verified APKs, immutable manifests, and processing records.
+
+---
+
+## 07 · Security and integrity
+
+- The signed F-Droid index is authenticated against a pinned OpenPGP primary fingerprint before parsing.
+- APK downloads are checked against the index's expected size and SHA-256.
+- SHA-256 is the unique binary identity.
+- A frozen UUID manifest records every batch before its first download.
+- Each APK is re-hashed before decompilation.
+- JADX and Apktool run sequentially, with one worker/job.
+- TruffleHog runs locally with credential verification disabled.
+- Persisted findings contain allowlisted metadata and one-way fingerprints, not raw secret values.
+- Reports are generated from sanitized findings.
+
+These controls establish provenance and processing integrity; they do not prove that an APK is benign. APKs and generated output remain untrusted data. APK WORKBENCH performs static analysis and does not install or execute acquired APKs.
+
+---
+
+## 08 · Development checks
+
+~~~bash
+cd "$HOME/apk-workbench"
+source .venv/bin/activate
 python -m pytest
 ruff check .
-```
+~~~
 
-GitHub Actions runs the test suite on Python 3.10, 3.11, and 3.12. Tests use generated local GPG keys and mocked network/subprocess behavior. Passing CI does **not** mean a live F-Droid download or real local decompilation/scan has been performed; the installation guide includes the first live smoke-test sequence.
+GitHub Actions tests Python 3.10, 3.11, and 3.12. Automated tests use generated local GPG keys and mocked network/subprocess boundaries. A green CI run is not a claim that a live F-Droid download or real local decompilation has been performed.
 
 ## Project documentation
 
 - [Installation and First Run](docs/installation.md)
 - [CLI Command Reference](docs/commands.md)
 - [Configuration Reference](docs/configuration.md)
-- [F-Droid Source Verification Notes](docs/F-DROID-SOURCE-VERIFICATION.md)
+- [F-Droid Source Verification](docs/F-DROID-SOURCE-VERIFICATION.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security Policy](SECURITY.md)
 - [MIT License](LICENSE)
 
-## Intended use
-
-For authorized research, defensive security review, software inventory, and interoperability analysis. Only acquire or analyze applications you are legally entitled to review. Static scanner output must be manually validated and must not be represented as proof of exploitability.
-
-## Project identity
-
-**CO-DEVELOPED BY dial9 + ChatGPT**
-
+**APK WORKBENCH — CO-DEVELOPED BY dial9 + ChatGPT**  
 **SLOW. SIMPLE. SEQUENTIAL. VERIFIED.**

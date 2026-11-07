@@ -1,144 +1,220 @@
-# Command Reference
+![APK WORKBENCH](assets/apk-workbench-banner.svg)
 
-Run commands from a terminal with the APK WORKBENCH virtual environment activated.
+# CLI Command Reference
 
-## Global help and version
+**DISCOVER · DOWNLOAD · DECOMPILE · ANALYZE · CATALOGUE**
 
-```bash
+Run commands with the project virtual environment active:
+
+~~~bash
+source .venv/bin/activate
 apkworkbench --help
-apkworkbench version
-```
+~~~
 
-## doctor
+## Command map
 
-Check that all required external programs can be found and that their version commands succeed:
+| Command | Function |
+|---|---|
+| **doctor** | Validate required external tools |
+| **discover** | Authenticate and inspect F-Droid index records |
+| **download** | Select, manifest, download, and verify new APKs |
+| **decompile** | Run JADX and Apktool sequentially |
+| **analyze** | Scan completed decompilations with TruffleHog |
+| **report** | Generate sanitized JSON, HTML, and aggregate CSV reports |
+| **status** | Summarize workspace processing state |
+| **run** | Execute a new acquisition batch through reporting |
+| **version** | Print the installed version |
 
-```bash
+---
+
+## 01 · doctor
+
+~~~bash
 apkworkbench doctor
-```
+~~~
 
-Required: `gpg`, `java`, `jadx`, `apktool`, and `trufflehog`. The command exits non-zero if a required dependency is missing or unhealthy.
+Checks that all required executables can be found and their version commands succeed. Required: **gpg**, **java**, **jadx**, **apktool**, and **trufflehog**. A missing or unhealthy required dependency produces a non-zero exit.
 
-## discover
+## 02 · discover
 
-Authenticate the F-Droid repository index and display the latest indexed version for each package:
+Authenticate the configured F-Droid index and display the latest indexed version for each package.
 
-```bash
+~~~bash
 apkworkbench discover
 apkworkbench discover --limit 50
 apkworkbench discover --package org.example.app
-```
+apkworkbench discover --package org.example.app --limit 5
+~~~
 
-Options:
+| Option | Default | Meaning |
+|---|---:|---|
+| **--limit INTEGER** | 20 | Maximum package records displayed; 0 displays none |
+| **--package TEXT** | — | Exact Android application ID filter |
 
-- `--limit INTEGER`: maximum number of package records to display (default: 20; zero displays none).
-- `--package TEXT`: exact Android application ID filter.
+Discovery does not download APK files. Success reports the signer fingerprint, index digest, record counts, and **Index signature: VERIFIED**.
 
-This command does not download APK files.
+## 03 · download
 
-## download
-
-Select and acquire new, unique APK binaries:
-
-```bash
+~~~bash
 apkworkbench download
 apkworkbench download --apk-count 3
 apkworkbench download --apk-count 5 --package org.example.app
-```
+~~~
 
-Options:
+| Option | Default | Meaning |
+|---|---:|---|
+| **--apk-count INTEGER** | 10 | Number of new unique APK binaries to select; minimum 1 |
+| **--package TEXT** | — | Restrict selection to one exact package ID |
 
-- `--apk-count INTEGER`: requested number of new unique binaries (default: 10; minimum: 1).
-- `--package TEXT`: restrict selection to one exact Android application ID.
+Previously acquired SHA-256 hashes and duplicates in the current selection are excluded. A frozen manifest is atomically published before downloads begin. It records selection order, package/version identity, expected size and digest, source URL, and authenticated index digest.
 
-Previously acquired SHA-256 hashes are excluded. A run manifest is frozen before downloads begin. A shortfall is reported when fewer new unique artifacts are available than requested.
+The command prints its **Run ID** and **Frozen manifest** path. Save the UUID if you will run processing stages separately.
 
-## decompile
+A shortfall is reported when fewer new unique binaries are available than requested. Any available selected artifacts are still processed.
 
-Run JADX and then Apktool sequentially for acquired APKs whose recorded SHA-256 and size still match:
+## 04 · decompile
 
-```bash
+JADX runs first; Apktool runs second. Each APK is re-hashed and size-checked before either tool receives it.
+
+~~~bash
 apkworkbench decompile
-apkworkbench decompile --limit 3
-apkworkbench decompile --force
-```
+apkworkbench decompile --limit 5
+apkworkbench decompile --run-id YOUR-RUN-ID
+apkworkbench decompile --run-id YOUR-RUN-ID --force
+~~~
 
-Options:
+| Option | Default | Meaning |
+|---|---:|---|
+| **--limit INTEGER** | 0 | Maximum eligible APKs processed; 0 means all in scope |
+| **--force** | off | Repeat even if both decompilers previously succeeded |
+| **--run-id TEXT** | — | Restrict processing to the frozen manifest and downloads from that run |
 
-- `--limit INTEGER`: maximum number of APKs to process (default: 0, meaning all eligible APKs).
-- `--force`: repeat work even if both decompilers previously succeeded.
+**Processing scope**
 
-Use `--force` only when intentionally repeating completed work.
+- Without **--run-id**, standalone decompilation considers eligible downloads across the workspace.
+- With **--run-id**, only successfully acquired artifacts in that manifest are considered.
+- The **run** command automatically passes its manifest ID to this stage.
+- Failed or absent downloads are skipped; they are not replaced by older workspace APKs.
 
-## analyze
+JADX and Apktool have separate output directories and logs. Apktool is attempted even when JADX fails, so both results are recorded independently. An artifact is fully decompiled only when both tools succeed.
 
-Run local TruffleHog filesystem scans on successfully decompiled artifacts:
+## 05 · analyze
 
-```bash
+Run a local TruffleHog filesystem scan over JADX and Apktool output for successfully decompiled APKs.
+
+~~~bash
 apkworkbench analyze
-apkworkbench analyze --limit 3
-apkworkbench analyze --force
-```
+apkworkbench analyze --limit 5
+apkworkbench analyze --run-id YOUR-RUN-ID
+apkworkbench analyze --run-id YOUR-RUN-ID --force
+~~~
 
-Options:
+| Option | Default | Meaning |
+|---|---:|---|
+| **--limit INTEGER** | 0 | Maximum eligible APKs scanned; 0 means all in scope |
+| **--force** | off | Repeat scans that previously succeeded |
+| **--run-id TEXT** | — | Restrict analysis to the matching acquisition manifest |
 
-- `--limit INTEGER`: maximum number of eligible APKs to scan (default: 0, meaning all).
-- `--force`: repeat scans that previously succeeded.
+Credential verification is disabled. The application checks that the installed TruffleHog filesystem command advertises the required safe-operation flags and fails closed if compatibility cannot be established.
 
-Credential verification is disabled. The application validates the installed TruffleHog CLI options before scanning and fails closed if it cannot establish the required no-verification behavior.
+Findings are unverified candidate indicators for manual review. They do not prove that a credential is active, valid, or exploitable. Raw/decoded secret values are not persisted in reports.
 
-## report
+## 06 · report
 
-Generate per-artifact JSON and HTML reports plus the aggregate sanitized findings CSV:
-
-```bash
+~~~bash
 apkworkbench report
-```
+~~~
 
-No options.
+Generates per-artifact sanitized JSON and HTML reports plus the aggregate **findings.csv**. This is a workspace catalogue operation and refreshes reports across the workspace.
 
-## status
+## 07 · status
 
-Display acquisition, decompilation, and scan totals:
-
-```bash
+~~~bash
 apkworkbench status
-```
+~~~
 
-No options.
+Displays workspace-wide totals for acquired binaries, successful JADX outputs, successful Apktool outputs, complete decompilations, successful scans, and failures.
 
-## run
+## 08 · run
 
-Execute download, decompilation, analysis, and reporting in sequence:
+Execute a new acquisition batch and automatically scope decompilation and analysis to the manifest created by that batch.
 
-```bash
+~~~bash
 apkworkbench run
 apkworkbench run --apk-count 3
 apkworkbench run --apk-count 10 --package org.example.app
-apkworkbench run --force-decompile --force-analyze
-```
+apkworkbench run --apk-count 25
+apkworkbench run --apk-count 10 --force-decompile --force-analyze
+~~~
 
-Options:
+| Option | Default | Meaning |
+|---|---:|---|
+| **--apk-count INTEGER** | 10 | New unique APK binaries to select; minimum 1 |
+| **--package TEXT** | — | Exact package ID filter for acquisition |
+| **--force-decompile** | off | Repeat successful decompilation for this batch |
+| **--force-analyze** | off | Repeat successful scans for this batch |
 
-- `--apk-count INTEGER`: requested number of new unique APK binaries (default: 10; minimum: 1).
-- `--package TEXT`: restrict acquisition to one exact package ID.
-- `--force-decompile`: repeat completed decompilation work.
-- `--force-analyze`: repeat successful TruffleHog scans.
+Pipeline stages:
 
-The pipeline continues to later stages when a stage reports a non-zero exit, then returns a non-zero final status if any stage needed attention. Review the stage output, `apkworkbench status`, and per-artifact logs.
+1. Authenticated F-Droid index retrieval.
+2. Selection and immutable run-manifest publication.
+3. Sequential downloads and integrity verification.
+4. Manifest-scoped JADX and Apktool decompilation.
+5. Manifest-scoped TruffleHog analysis.
+6. Workspace report generation.
 
-## Exit status
+If no manifest is published, decompilation and analysis are skipped rather than falling back to workspace-wide processing. When a stage reports a non-zero exit, later stages continue for eligible artifacts; the overall command exits non-zero if attention is required.
 
-- `0`: command completed without a reported error.
-- `1`: command failed or one or more pipeline stages need attention.
-- `2`: acquisition completed its selection logic but could not meet the requested APK count because of a shortfall.
+## Exit statuses
 
-## Typical daily workflow
+| Code | Meaning |
+|---:|---|
+| **0** | Command completed without a reported error |
+| **1** | Command failed or one or more pipeline stages need attention |
+| **2** | Fewer new unique artifacts were available than requested |
 
-```bash
-source .venv/bin/activate
+## Common workflows
+
+### End-to-end new batch
+
+~~~bash
 apkworkbench doctor
 apkworkbench discover --limit 20
 apkworkbench run --apk-count 10
 apkworkbench status
-```
+~~~
+
+### Separate acquisition and processing
+
+~~~bash
+apkworkbench download --apk-count 5
+# Copy the Run ID printed by download.
+
+apkworkbench decompile --run-id YOUR-RUN-ID
+apkworkbench analyze --run-id YOUR-RUN-ID
+apkworkbench report
+apkworkbench status
+~~~
+
+### Intentional workspace-wide backlog processing
+
+~~~bash
+apkworkbench decompile
+apkworkbench analyze
+apkworkbench report
+~~~
+
+Use this workflow only when processing the entire eligible workspace is intentional.
+
+### Troubleshooting
+
+~~~bash
+apkworkbench status
+tail -n 120 "$HOME/APK-Workbench/logs/apkworkbench.log"
+
+find "$HOME/APK-Workbench/results" \
+  -type f \( -name 'jadx.log' -o -name 'apktool.log' \) \
+  -print
+~~~
+
+See [Configuration](configuration.md) for workspace paths and timeouts.

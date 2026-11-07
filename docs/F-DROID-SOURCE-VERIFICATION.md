@@ -1,100 +1,141 @@
-# F-Droid Source Verification Notes
+![APK WORKBENCH](assets/apk-workbench-banner.svg)
 
-**Status:** Verified against F-Droid's official documentation and live repository entry point on 2026-11-07.
-**Scope:** Initial F-Droid discovery and APK acquisition adapter.
+# F-Droid Source Verification
 
-## Decisions
+**Scope:** authenticated F-Droid discovery and APK acquisition  
+**Repository:** https://f-droid.org/repo  
+**Index format:** index-v2.json with detached OpenPGP signature
 
-1. Use the signed repository index for acquisition decisions. Do not use the per-app API v1 as the source of truth for downloads or verification; F-Droid explicitly says that API is intended for display and recommends signed index files for security-sensitive use.
-2. Start with the full `index-v2.json` plus its detached `.asc` signature. Do not implement index diffs in the first adapter. Diff support can be added later as a performance optimization after full-index parsing and persistence are tested.
-3. Verify the detached signature before parsing or trusting any index fields. Use an isolated GnuPG home and explicitly pin the expected primary key fingerprint. Parse GnuPG machine-readable `VALIDSIG` status; do not use `--local-user` (that selects a signing identity) and do not bypass key trust with `--trust-model always`.
-4. Treat the index's APK SHA-256 as the expected artifact digest. Compute the digest after download and accept the APK only on an exact match.
-5. Treat the Android APK signer certificate as a separate identity from the OpenPGP key that signs the repository index. Record signer certificate SHA-256 values from `manifest.signer.sha256` when present. A separate APK signature verification step may be implemented with Android build-tools (`apksigner`) after confirming the installed CLI interface.
-6. Do not expect a base64 GPG signature embedded for each APK. The normal index data includes a file SHA-256 and APK manifest/signing-certificate metadata. F-Droid documents optional PGP package signing separately (`fdroid gpgsign`).
+This document records the source-selection and trust decisions implemented by APK WORKBENCH.
 
-## Official endpoints
+## 01 · Acquisition source
 
-Main repository:
+APK WORKBENCH uses the signed repository index as the source of truth for acquisition decisions. The per-app API is not used as the download or verification authority.
 
-- `https://f-droid.org/repo/index-v2.json`
-- `https://f-droid.org/repo/index-v2.json.asc`
-- `https://f-droid.org/repo/entry.json`
-- `https://f-droid.org/repo/entry.json.asc`
-- `https://f-droid.org/repo/entry.jar`
-- `https://f-droid.org/repo/signer-index.json`
+The current adapter retrieves the full index and detached signature:
 
-Archive repository (separate source):
+~~~text
+https://f-droid.org/repo/index-v2.json
+https://f-droid.org/repo/index-v2.json.asc
+~~~
 
-- `https://f-droid.org/archive/index-v2.json`
-- `https://f-droid.org/archive/index-v2.json.asc`
+The F-Droid entry point and archive endpoints are documented below for future incremental-index or archive-source support. They are not silently substituted for the configured main repository.
 
-The official documentation describes `entry.json` as the entry point that identifies the current full index and available diff files. It is signed by both a JAR and a GPG signature. The same documentation publishes direct GPG signatures for the index JSON files. For the first implementation, direct full-index retrieval avoids introducing diff-application logic before the basic adapter is reliable.
+## 02 · OpenPGP trust anchor
 
-A live read of `https://f-droid.org/repo/entry.json` on 2026-11-07 reported:
+The configured primary fingerprint for F-Droid <admin@f-droid.org> is:
 
-- Entry format version: `30000`
-- Full index path: `/index-v2.json`
-- Full index SHA-256: `af3c06103d267a945b348cdc5668a0acab572566873ade5d1bb58c5dfa6c0eb4`
-- Full index size: `72,025,232` bytes
-- Package count: `4,968`
-- Diff files are also advertised with timestamp, path, SHA-256, byte size, and package count.
+~~~text
+37D2 C987 89D8 3119 4839 4E3E 41E7 044E 1DBA 2E89
+~~~
 
-This is useful for progress and integrity checks if the adapter later adopts `entry.json` and incremental diffs. The 72 MB full index is manageable for an initial implementation, but should be downloaded with a size limit and timeout and parsed with bounded error handling.
+The documented signing subkey fingerprint is:
 
-## Correct OpenPGP pin
+~~~text
+802A 9799 0161 1234 6E1F EFF4 7A02 9E54 DD5D CE7A
+~~~
 
-F-Droid's official **Release Channels and Signing Keys** page currently documents:
+The primary fingerprint is the trust anchor. When GnuPG reports a signing subkey in its machine-readable **[GNUPG:] VALIDSIG** status record, it also identifies the primary key. The verifier accepts the signature only when the associated primary fingerprint equals the configured pin.
 
-- Primary OpenPGP fingerprint for `F-Droid <admin@f-droid.org>`:  
-  `37D2C98789D8311948394E3E41E7044E1DBA2E89`
-- Signing subkey fingerprint:  
-  `802A9799016112346E1FEFF47A029E54DD5DCE7A`
+The application uses an isolated GnuPG home and checks the imported key's primary fingerprint. The public-key retrieval URL is a transport endpoint, not the trust anchor.
 
-The earlier project value `6BCA F632 5B11 0B08 113B 10F4 2176 52CC 92DB CD94` does **not** match the primary fingerprint or documented signing subkey above. Do not use that earlier value as the F-Droid repository-index OpenPGP pin.
+Do not replace the pin with a fingerprint copied from an error message. Independently verify any proposed change against F-Droid's official signing-key documentation.
 
-When GnuPG reports a signing subkey in `[GNUPG:] VALIDSIG`, its status record also identifies the primary key fingerprint. The verifier should accept the documented signing subkey only when the associated primary fingerprint equals the configured pin. Avoid relying on human-readable `Good signature` text.
+## 03 · Retrieval and verification sequence
 
-The APK signing certificate fingerprint shown for the official F-Droid client APK is yet another identity; it is not the OpenPGP index-signing fingerprint. Do not substitute one for another.
+The repository client:
 
-## index-v2 JSON shape
+1. Requires HTTPS URLs and rejects redirects.
+2. Applies explicit request timeouts and response-size limits.
+3. Retrieves the published public-key material.
+4. Imports the key into the isolated GnuPG home.
+5. Confirms the expected primary fingerprint is present.
+6. Retrieves index-v2.json and its detached .asc signature.
+7. Verifies the detached signature against the pinned primary identity.
+8. Returns index bytes only after successful verification.
+9. Parses package/version records only after authentication.
 
-The root contains a `packages` mapping keyed by package ID. A package record contains `metadata` and a `versions` mapping. Iterate the version records using `versions.values()`; do not assume that the mapping key is the version code.
+The CLI reports the active retrieval phase and transfer byte counts while the index is streaming. A retrieval or signature error is fatal; unverified index bytes are never used for acquisition.
 
-Relevant version fields include:
+Relevant configured defaults:
 
-- `file.name`: repository-relative APK path (typically begins with `/`)
-- `file.sha256`: expected APK SHA-256
-- `file.size`: expected byte size
-- `manifest.versionName`
-- `manifest.versionCode`
-- `manifest.signer.sha256`: APK signer certificate fingerprint(s), when present
+| Setting | Default |
+|---|---:|
+| Index maximum | 128 MiB |
+| Signature maximum | 1 MiB |
+| Public-key maximum | 2 MiB |
+| HTTP timeout | 30 seconds |
 
-The package metadata may also contain `preferredSigner`. Preserve raw signer metadata and do not assume every package has identical signer fields.
+## 04 · Index data model
 
-Do not hardcode a flat `packages` list or assume every version has a separate GPG signature object.
+The root JSON object contains a **packages** mapping keyed by Android package ID. A package record contains metadata and a **versions** mapping.
 
-## Recommended first-pass adapter sequence
+Relevant version fields:
 
-1. Download `index-v2.json` and `index-v2.json.asc` from the same configured repository origin using HTTPS, explicit timeout, bounded response size, and temporary files.
-2. Verify the detached signature using the configured isolated GPG home and pinned primary fingerprint.
-3. Only after successful signature verification, parse JSON and validate the root and package/version structures.
-4. For each version record, normalize the repository path safely; reject absolute-path traversal, URL scheme changes, and paths escaping the repository origin.
-5. Persist package ID, app name, version name/code, APK path/URL, expected SHA-256, expected size, signer certificate data, repository identity, and the raw metadata needed for audit.
-6. Download selected APKs sequentially to a `.part` file. Enforce expected size, calculate SHA-256 while streaming, compare digest exactly, and only then atomically rename and append the immutable download ledger.
-7. Record missing optional metadata as unknown, not as an inferred value. Fail closed on missing or malformed mandatory URL/hash fields.
+| JSON path | Meaning |
+|---|---|
+| **file.name** | Repository-relative APK path |
+| **file.sha256** | Expected APK SHA-256 |
+| **file.size** | Expected APK byte count |
+| **manifest.versionName** | Human-readable version |
+| **manifest.versionCode** | Numeric Android version code |
+| **manifest.signer.sha256** | APK signing-certificate fingerprint(s), when present |
 
-## Security boundaries
+Version mapping keys are not assumed to be version codes. The parser operates on version records and reads **manifest.versionCode** separately.
 
-- HTTPS protects transport; the pinned OpenPGP signature authenticates the index contents.
-- SHA-256 comparison binds the acquired APK bytes to the authenticated index entry.
-- APK signing-certificate identity is distinct from repository index signing and should be recorded/validated as a separate check.
-- A matching checksum or valid signature proves integrity/provenance relative to the trusted publisher, not that an application is benign.
-- F-Droid's signer index is documented as the source of truth for the SHA-256 fingerprints of signers used by `f-droid.org` to sign packages. It is signed through the entry point or direct JAR/GPG signatures; do not consume it as unauthenticated input.
+The APK signing certificate and repository-index OpenPGP key are different identities. The former is package-signing metadata; the latter authenticates the repository index.
 
-## References
+## 05 · Artifact verification
+
+The index's expected SHA-256 and file size are carried into the frozen run manifest. The downloader:
+
+- Streams one APK at a time into a temporary .part file.
+- Enforces the expected byte count.
+- Computes SHA-256 over downloaded bytes.
+- Rejects mismatches.
+- Atomically publishes the completed file only after validation.
+- Appends successful acquisition to the immutable download history.
+
+Every artifact is re-hashed before decompilation. An APK that changes after acquisition is rejected before it is passed to JADX or Apktool.
+
+## 06 · Batch identity and processing scope
+
+Each acquisition invocation publishes an immutable UUID run manifest before the first download. It records selected package/version identities, download URLs, expected size and SHA-256, selection order, and the digest of the authenticated index.
+
+The **run** command passes this manifest ID to decompilation and analysis. Only artifacts that both appear in the manifest and were successfully acquired under that run ID are eligible. Failed downloads are skipped; they are not replaced by unrelated older workspace artifacts.
+
+Standalone **decompile** and **analyze** commands without **--run-id** remain available for intentional workspace-wide processing.
+
+## 07 · Security boundaries and limitations
+
+- HTTPS protects transport.
+- The pinned OpenPGP signature authenticates the repository index.
+- SHA-256 comparison binds acquired bytes to the authenticated index entry.
+- APK signer metadata is recorded as a separate identity.
+- Correct provenance does not prove that an application is benign.
+- Static analysis does not establish runtime behavior or exploitability.
+- Scanner findings are unverified indicators because credential verification is disabled.
+
+APK WORKBENCH does not install or execute acquired APKs. Treat APKs and all generated decompiler output as untrusted input.
+
+## 08 · Official references
 
 - F-Droid, All our APIs: https://f-droid.org/en/docs/All_our_APIs/
 - F-Droid, Release Channels and Signing Keys: https://f-droid.org/en/docs/Release_Channels_and_Signing_Keys/
 - F-Droid, Signing Process: https://f-droid.org/en/docs/Signing_Process/
-- Live main repository entry point: https://f-droid.org/repo/entry.json
+- Main repository entry point: https://f-droid.org/repo/entry.json
 - F-Droid server implementation: https://gitlab.com/fdroid/fdroidserver/
+
+Additional endpoints published by F-Droid include:
+
+~~~text
+https://f-droid.org/repo/entry.json
+https://f-droid.org/repo/entry.json.asc
+https://f-droid.org/repo/entry.jar
+https://f-droid.org/repo/signer-index.json
+
+https://f-droid.org/archive/index-v2.json
+https://f-droid.org/archive/index-v2.json.asc
+~~~
+
+Archive and incremental-index support are separate source capabilities; the current adapter uses the configured main repository's full index.

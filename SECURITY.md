@@ -1,36 +1,50 @@
+![APK WORKBENCH](docs/assets/apk-workbench-banner.svg)
+
 # Security Policy
 
-## Supported scope
+APK WORKBENCH processes third-party Android packages and generated decompiler output. Treat both as untrusted input.
 
-Security reports are welcome for the current default branch of APK WORKBENCH.
+## Supported versions
+
+Security reports are accepted for the current default branch, **main**.
 
 ## Reporting a vulnerability
 
-Please do not publish an unpatched vulnerability, exploit details, credentials, or sensitive APK contents in a public issue.
+Do not publish an unpatched vulnerability, exploit details, credentials, private APK contents, or personal data in a public issue.
 
-Use GitHub's **Report a vulnerability** flow on the repository's Security tab if private vulnerability reporting is enabled. If that option is unavailable, contact the repository owner through their GitHub profile and request a private channel for responsible disclosure.
+Use GitHub's **Report a vulnerability** flow from the repository Security tab when private vulnerability reporting is available. If it is unavailable, contact the repository owner through the GitHub profile and request a private reporting channel.
 
 Include:
 
-- affected commit or release;
-- affected component and configuration;
-- concise reproduction steps;
-- impact and realistic attack prerequisites;
-- suggested mitigation, if known.
+- Affected commit or release.
+- Affected component and relevant configuration.
+- Concise reproduction steps.
+- Impact and realistic prerequisites.
+- Suggested mitigation, if known.
 
-Do not include live secrets or personal data in a report. Redact values and use synthetic examples.
+Use synthetic data and redact secrets. Do not include active credentials or sensitive APK contents.
 
-## Security design notes
+## Security design
 
-APK WORKBENCH is designed to:
+The application is designed to:
 
-- authenticate the F-Droid repository index before parsing it;
-- pin the expected OpenPGP primary fingerprint;
-- verify downloaded APK size and SHA-256 before publication;
-- re-check artifact integrity before decompilation;
-- keep subprocess execution sequential;
-- disable TruffleHog credential verification;
-- persist sanitized findings rather than raw secret values;
-- reject filesystem paths that escape managed workspace boundaries.
+- Retrieve the F-Droid repository index over HTTPS.
+- Verify the detached OpenPGP signature against a pinned primary fingerprint before parsing index content.
+- Enforce response-size and request-time limits.
+- Verify downloaded APK byte count and SHA-256 before publishing an artifact.
+- Record acquisition in append-only history and immutable run manifests.
+- Re-check APK integrity before decompilation.
+- Use sequential external subprocess execution with timeouts.
+- Run TruffleHog with credential verification disabled.
+- Persist sanitized finding metadata and one-way fingerprints rather than raw secret values.
+- Reject paths that escape managed workspace boundaries.
 
-These controls reduce specific risks; they do not make untrusted APKs safe to execute. APK WORKBENCH performs static analysis and does not install or run acquired APKs. Treat APKs and decompiler output as untrusted input, keep the host patched, and run analysis with least privilege.
+These controls reduce defined risks; they do not prove that an APK is safe or benign.
+
+## Safe handling
+
+APK WORKBENCH performs static analysis. It does not install or execute acquired APKs. Do not manually install or launch untrusted APKs as part of a static-analysis workflow.
+
+Run the application with least privilege, keep the operating system and external tools patched, and treat APKs, decompiler output, and scanner output as untrusted data.
+
+Scanner findings are unverified candidate indicators. They are not proof that a credential is active, valid, or exploitable.

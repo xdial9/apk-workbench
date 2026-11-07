@@ -1,59 +1,81 @@
-# Contributing
+![APK WORKBENCH](docs/assets/apk-workbench-banner.svg)
 
-Thanks for taking an interest in APK WORKBENCH.
+# Contributing to APK WORKBENCH
 
-## Project scope
+**Python-only · Linux-native · Sequential · Verifiable**
 
-APK WORKBENCH is a Python-only, Linux-native CLI. Keep the runtime implementation in Python. Do not introduce a JavaScript/TypeScript backend, web service, database server, or cloud dependency unless the project owner explicitly changes the architecture.
+Changes should strengthen reliability, clarity, reproducibility, or the integrity of the processing record.
 
-The core execution model is deliberately sequential and auditable:
+## Project boundaries
 
-- one artifact at a time;
-- one external process at a time;
-- explicit integrity checks at trust boundaries;
-- persistent, reviewable state;
-- fail-closed behavior when a security guarantee cannot be established.
+APK WORKBENCH is a Python CLI. Keep runtime implementation in Python. Do not introduce a JavaScript/TypeScript backend, web service, database server, or cloud dependency unless the project owner explicitly changes the architecture.
+
+The execution model is deliberately simple and auditable:
+
+- One APK at a time.
+- One external subprocess at a time.
+- Verify data at trust boundaries.
+- Preserve immutable acquisition records.
+- Fail closed when a security guarantee cannot be established.
 
 ## Development setup
 
-Use Python 3.10 or newer:
-
-```bash
+~~~bash
 git clone https://github.com/xdial9/apk-workbench.git
 cd apk-workbench
+
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
-```
+~~~
 
-## Before submitting a change
+Python 3.10 or newer is required.
 
-Run the full test suite and linter:
+## Required checks
 
-```bash
+~~~bash
 python -m pytest
 ruff check .
-```
+~~~
 
-Add or update tests for behavior changes. Tests must not require live F-Droid access, real APK downloads, or external decompiler/scanner installations; mock network and subprocess boundaries and use temporary workspaces.
+Tests should use temporary workspaces and mocked HTTP/subprocess boundaries. They must not depend on live F-Droid access, external APK downloads, or local installations of JADX, Apktool, or TruffleHog.
 
-## Security-sensitive changes
+## Regression-test expectations
 
-Changes to signature verification, fingerprint pinning, artifact hashing, download publication, filesystem paths, subprocess invocation, secret redaction, and report generation require explicit regression tests.
+Add or update tests for changed behavior. Security-sensitive changes require explicit regression coverage, especially changes to:
 
-Never weaken a verification check simply to make a failing test or live operation pass. Document the threat-model impact and the evidence supporting any trust configuration change.
+- OpenPGP fingerprint pinning and detached-signature verification.
+- URL validation, download bounds, and artifact SHA-256 checks.
+- Atomic file publication and immutable run manifests.
+- Manifest-scoped processing and cross-run isolation.
+- Filesystem path validation and symlink handling.
+- Subprocess timeouts and sequential execution.
+- TruffleHog no-verification behavior and output limits.
+- Secret sanitization and report generation.
 
-Do not add real APKs, API keys, credentials, scan outputs, user data, or runtime workspace files to Git.
+A run-scoped operation must use its immutable manifest. It must not silently broaden a batch by falling back to unrelated workspace records.
 
-## Pull requests
+## Data hygiene
 
-Keep changes focused. Describe:
+Never commit:
 
-1. the behavior being changed;
-2. why the change is needed;
-3. security and data-integrity implications;
-4. tests run and their results;
-5. any known limitations or manual verification still required.
+- Downloaded APKs or decompiler output.
+- Runtime workspace databases or manifests.
+- Scanner outputs or raw findings.
+- Credentials, access tokens, API keys, or personal data.
+- Local virtual environments or tool binaries.
 
-Do not claim a live integration test when only mocks or unit tests were run.
+Use synthetic fixtures in tests.
+
+## Pull-request description
+
+Keep changes focused and include:
+
+1. What behavior changed.
+2. Why the change was needed.
+3. Security and data-integrity implications.
+4. Tests and lint checks performed.
+5. Remaining limitations or manual validation still required.
+
+Do not describe mocked tests as live integration tests. If real tool execution was not performed, state that explicitly.

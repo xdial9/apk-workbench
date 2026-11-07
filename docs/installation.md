@@ -1,300 +1,289 @@
-# Installation and first run
+![APK WORKBENCH](assets/apk-workbench-banner.svg)
 
-This guide is the supported, copy-and-paste installation path for Debian 13 and Ubuntu 22.04/24.04 on 64-bit Linux. Other distributions may work, but their package names and system paths are not covered here.
+# Installation & First Run
 
-APK WORKBENCH itself is Python. JADX, Apktool, TruffleHog, Java, and GnuPG are separate system tools; installing the Python package does not install those tools.
+**Supported target:** 64-bit Debian 13 and Ubuntu 22.04/24.04  
+**Application runtime:** Python 3.10+  
+**Execution model:** local CLI · sequential tools · verified APK inputs
 
-## 1. Install system prerequisites
+This guide installs the external tools, creates an isolated Python virtual environment, verifies the toolchain, and runs a first authenticated batch.
 
-Open a terminal and run:
+> APK WORKBENCH is a Python application. Java, GnuPG, JADX, Apktool, and TruffleHog are separate system dependencies; pip does not install them.
 
-```bash
+---
+
+## 01 · System prerequisites
+
+~~~bash
 sudo apt update
 sudo apt install -y \
-  ca-certificates \
-  git \
-  curl \
-  unzip \
-  gnupg \
-  python3 \
-  python3-venv \
-  python3-pip \
-  default-jre-headless
-```
+  ca-certificates git curl unzip gnupg \
+  python3 python3-venv python3-pip default-jre-headless
 
-Confirm Python and Java:
-
-```bash
 python3 --version
 java -version
 gpg --version
-```
+~~~
 
-Python must be 3.10 or newer. JADX 1.5.6 requires 64-bit Java 11 or newer. The distribution's default Java runtime is used; confirm its version with `java -version`.
+Python must be 3.10 or newer. JADX 1.5.6 requires a 64-bit Java 11-or-newer runtime.
 
-## 2. Install JADX
+## 02 · Install JADX 1.5.6
 
-Download and install the published JADX 1.5.6 command-line distribution:
-
-```bash
+~~~bash
 mkdir -p "$HOME/.local/opt" "$HOME/.local/bin"
 cd /tmp
+
 curl -fL --retry 3 \
   -o jadx-1.5.6.zip \
   https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip
+
 unzip -q -o jadx-1.5.6.zip -d "$HOME/.local/opt/jadx-1.5.6"
+
 cat > "$HOME/.local/bin/jadx" <<'EOF'
 #!/bin/sh
 exec "$HOME/.local/opt/jadx-1.5.6/bin/jadx" "$@"
 EOF
 chmod 0755 "$HOME/.local/bin/jadx"
-```
+~~~
 
-Add the user-local binary directory to PATH for future terminal sessions:
+Official release page: https://github.com/skylot/jadx/releases
 
-```bash
-grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.profile" || \
-  printf '\n# User-installed command-line tools\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.profile"
-export PATH="$HOME/.local/bin:$PATH"
-```
+## 03 · Install Apktool 3.0.3
 
-Check:
-
-```bash
-jadx --version
-```
-
-If the release URL or asset name changes in a future JADX release, use the official release page and update the version and filename in these commands: https://github.com/skylot/jadx/releases
-
-## 3. Install Apktool
-
-Download the official Apktool 3.0.3 JAR into the user-local tools directory:
-
-```bash
+~~~bash
 mkdir -p "$HOME/.local/opt/apktool-3.0.3" "$HOME/.local/bin"
+
 curl -fL --retry 3 \
   -o "$HOME/.local/opt/apktool-3.0.3/apktool.jar" \
   https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar
+
 printf '%s  %s\n' \
   'dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423' \
   "$HOME/.local/opt/apktool-3.0.3/apktool.jar" | sha256sum -c -
-```
+~~~
 
-The SHA-256 value above is published in the Apktool 3.0.3 release notes. Stop if the checksum does not match.
+The expected checksum is pinned in this installation procedure. The result must end with **OK**. Stop if verification fails.
 
-Create a small PATH wrapper that invokes the JAR explicitly:
-
-```bash
+~~~bash
 cat > "$HOME/.local/bin/apktool" <<'EOF'
 #!/bin/sh
 exec java -jar "$HOME/.local/opt/apktool-3.0.3/apktool.jar" "$@"
 EOF
 chmod 0755 "$HOME/.local/bin/apktool"
-```
+~~~
 
-Check:
-
-```bash
-apktool --version
-```
-
-Official installation and release references:
+Official references:
 - https://apktool.org/docs/
 - https://github.com/iBotPeaches/Apktool/releases
 
-## 4. Install TruffleHog
+## 04 · Add user-local tools to PATH
 
-Install the official Truffle Security release installer into `/usr/local/bin`:
+~~~bash
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.profile" || \
+  printf '\n# APK WORKBENCH user-local tools\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.profile"
 
-```bash
+export PATH="$HOME/.local/bin:$PATH"
+~~~
+
+The final export updates the current shell. The profile entry applies to future login sessions.
+
+## 05 · Install TruffleHog
+
+~~~bash
 curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | \
   sudo sh -s -- -b /usr/local/bin
-```
 
-Check:
-
-```bash
 trufflehog --version
-```
+~~~
 
-The project checks the installed TruffleHog help output before scanning. The installed build must support the filesystem scanner and the flags `--no-verification`, `--no-update`, `--json`, `--concurrency`, and `--fail-on-scan-errors`. If it does not, APK WORKBENCH will stop the scan rather than silently run with different security behavior.
+APK WORKBENCH requires the TruffleHog filesystem command to advertise:
 
-TruffleHog's installer supports signature verification with its `-v` option when Cosign is installed. See the official installation and verification instructions: https://github.com/trufflesecurity/trufflehog
+- **--no-verification**
+- **--no-update**
+- **--json**
+- **--concurrency**
+- **--fail-on-scan-errors**
 
-## 5. Clone APK WORKBENCH
+The application checks these capabilities before scanning and refuses to continue if the required behavior cannot be confirmed. Do not bypass the compatibility check.
 
-Use the ordinary clone command:
+Official installation and verification: https://github.com/trufflesecurity/trufflehog
 
-```bash
+## 06 · Clone the repository
+
+~~~bash
 cd "$HOME"
 git clone https://github.com/xdial9/apk-workbench.git
 cd apk-workbench
-```
+~~~
 
-The repository's default branch is `main` and contains the complete supported project. A normal clone is the correct command; no branch override is needed.
+The default branch is **main**. A standard clone is sufficient.
 
-## 6. Install the Python application
+## 07 · Create the Python environment
 
-Run these commands from the repository root:
+Run from the repository root:
 
-```bash
+~~~bash
 python3 -m venv .venv
 source .venv/bin/activate
+
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
-```
 
-This installs APK WORKBENCH and its Python dependencies into the project virtual environment. It does not modify the operating system's Python packages.
-
-Confirm the CLI is installed:
-
-```bash
 apkworkbench version
-```
+~~~
 
-## 7. Run the environment check
+Keep the virtual environment active when running the application and development checks. Using **python -m pip** with the environment activated installs Python packages inside that environment rather than the operating system's Python installation.
 
-Keep the virtual environment active and run:
+## 08 · Verify external dependencies
 
-```bash
+~~~bash
 apkworkbench doctor
-```
+~~~
 
-All five required executables must show `[OK]`:
+These five executables must report **[OK]**:
 
-- `gpg`
-- `java`
-- `jadx`
-- `apktool`
-- `trufflehog`
+- gpg
+- java
+- jadx
+- apktool
+- trufflehog
 
-If any item is `[MISSING]`, install that executable or correct its PATH. If it is `[UNHEALTHY]`, run its version command directly and resolve that error before proceeding.
+A **[MISSING]** result means the executable is not on PATH. An **[UNHEALTHY]** result means its version command did not complete successfully. Resolve those issues before continuing.
 
-## 8. Verify F-Droid discovery without downloading APKs
+## 09 · Authenticate F-Droid discovery
 
-Run:
-
-```bash
+~~~bash
 apkworkbench discover --limit 20
-```
+~~~
 
-This retrieves the F-Droid repository index and detached signature, checks the pinned OpenPGP primary fingerprint, verifies the signature, and only then parses the index. A successful result must explicitly report:
+Successful output includes:
 
-```text
+~~~text
 Index signature: VERIFIED
-```
+~~~
 
-If signature verification fails, stop. Do not remove or weaken the fingerprint pin to get past the error.
+The repository client retrieves the pinned signing key, signed index, and detached signature. It checks the imported primary fingerprint and verifies the detached signature before parsing JSON.
 
-## 9. Acquire and process a small batch
+The CLI reports the retrieval phase and index byte counts. Signature failures are fatal. Do not remove or weaken the fingerprint pin.
 
-The first acquisition writes the workspace database and a frozen run manifest before downloading. It downloads only new unique APK SHA-256 artifacts and validates both the expected size and digest before publishing each APK.
+## 10 · Run the first end-to-end batch
 
-Start with three APKs:
+Start with three newly selected APK binaries:
 
-```bash
+~~~bash
+apkworkbench run --apk-count 3
+apkworkbench status
+~~~
+
+The run command handles the complete pipeline. It freezes a manifest before the first download and passes that manifest's run ID to decompilation and analysis. Older workspace downloads are not mixed into the new batch.
+
+### Separate stage workflow
+
+The download command also works on its own:
+
+~~~bash
 apkworkbench download --apk-count 3
-```
+~~~
 
-Then run the processing stages:
+Copy the UUID printed as **Run ID**, then scope the processing stages explicitly:
 
-```bash
-apkworkbench decompile --limit 3
-apkworkbench analyze --limit 3
+~~~bash
+apkworkbench decompile --run-id YOUR-RUN-ID
+apkworkbench analyze --run-id YOUR-RUN-ID
 apkworkbench report
 apkworkbench status
-```
+~~~
 
-After inspecting the results, you can run the complete pipeline for ten new APKs:
+Without **--run-id**, standalone decompile and analyze commands intentionally consider eligible artifacts throughout the workspace.
 
-```bash
-apkworkbench run --apk-count 10
-```
+## 11 · Runtime workspace and storage
 
-The pipeline runs sequentially. It does not run multiple APK downloads, decompilers, or scanner jobs concurrently.
+Default location:
 
-## 10. Where the data goes
-
-The source checkout and runtime data are separate. By default, runtime data is stored in:
-
-```text
+~~~text
 ~/APK-Workbench/
-```
+~~~
 
-The workspace contains the original APKs, append-only acquisition records, frozen manifests, decompilation outputs, scan output, sanitized reports, and logs. Do not commit this workspace to Git.
+The workspace stores original APKs, immutable run manifests, append-only acquisition records, processing status, decompiler output, scan output, sanitized reports, and logs.
 
-For a different disk or mount point, set `workspace` in `~/.config/apkworkbench/config.yaml`, or export:
+The source checkout can be updated or recloned without deleting runtime data. Do not commit the runtime workspace to Git.
 
-```bash
+For a different storage location:
+
+~~~bash
 export APKWORKBENCH_WORKSPACE="/path/to/APK-Workbench"
-```
+~~~
 
-See [configuration.md](configuration.md) for all supported configuration keys and environment overrides.
+For a persistent setting, configure **workspace** in **~/.config/apkworkbench/config.yaml**. See [Configuration](configuration.md).
 
-## 11. Tests and development checks
+## 12 · Development checks
 
-From the repository root, with the virtual environment active:
+~~~bash
+cd "$HOME/apk-workbench"
+source .venv/bin/activate
 
-```bash
 python -m pytest
 ruff check .
-```
+~~~
 
-CI runs the test suite on Python 3.10, 3.11, and 3.12. The tests use generated local GPG keys and mocked network and subprocess behavior; CI does not claim to perform a live F-Droid acquisition or a real TruffleHog scan.
+GitHub Actions tests Python 3.10, 3.11, and 3.12. Automated tests use generated local GPG keys and mocked network/subprocess behavior. A passing CI run does not claim live F-Droid retrieval or real external APK tool execution.
+
+---
 
 ## Troubleshooting
 
-### `python3 -m venv .venv` fails
+### The virtual environment cannot be created
 
-Install the matching distro venv package:
-
-```bash
+~~~bash
 sudo apt install -y python3-venv
-```
-
-Then remove the incomplete environment and retry:
-
-```bash
-rm -rf .venv
 python3 -m venv .venv
-```
+~~~
 
-### `apkworkbench: command not found`
+If an incomplete environment prevents recreation, remove only that **.venv** directory from the repository root and try again.
 
-Activate the environment from the repository root:
+### The CLI is not found
 
-```bash
+~~~bash
+cd "$HOME/apk-workbench"
 source .venv/bin/activate
-```
+python -m pip install -e ".[dev]"
+~~~
 
-If the environment was not created, repeat Step 6.
+### An external tool is missing from PATH
 
-### `jadx`, `apktool`, or `trufflehog` is missing
-
-Check the command and PATH:
-
-```bash
+~~~bash
 printf '%s\n' "$PATH"
+command -v gpg
+command -v java
 command -v jadx
 command -v apktool
 command -v trufflehog
-```
+~~~
 
-For JADX and Apktool, confirm `$HOME/.local/bin` is in PATH. For TruffleHog, confirm `/usr/local/bin` is in PATH.
+For JADX and Apktool, confirm **$HOME/.local/bin** is on PATH. For TruffleHog, confirm **/usr/local/bin** is on PATH.
 
-### TruffleHog refuses to scan because a required option is unavailable
+### F-Droid retrieval appears idle
 
-Do not bypass the compatibility check. Update TruffleHog from its official release installer, then run:
+The client reports its current phase and index byte counts. Inspect the most recent application log:
 
-```bash
-trufflehog filesystem --help
-apkworkbench doctor
-```
+~~~bash
+tail -n 120 "$HOME/APK-Workbench/logs/apkworkbench.log"
+~~~
 
-### F-Droid signature verification fails
+The index must authenticate successfully before index metadata is trusted.
 
-Check system time and network access, then retry discovery. Do not replace the configured signer fingerprint based on an error message. The configured fingerprint is a trust anchor and must only be changed after independent confirmation from F-Droid's official signing-key documentation.
+### Inspect decompilation errors
 
-### A download fails its size or SHA-256 check
+~~~bash
+apkworkbench status
 
-The artifact is not published as a completed APK and is not added to successful download history. Review the attempt record and application log, then retry discovery/acquisition after checking connectivity and available disk space.
+find "$HOME/APK-Workbench/results" \
+  -type f \( -name 'jadx.log' -o -name 'apktool.log' \) \
+  -print
+~~~
+
+Each APK has separate JADX and Apktool logs. Review tool exit codes and captured output before deciding whether a retry is appropriate.
+
+### A download fails integrity verification
+
+A failed size or SHA-256 check prevents the temporary download from being published as a verified APK. Review **database/download_attempts.csv** and **logs/apkworkbench.log**. Never manually add an unverified APK to the download history.
