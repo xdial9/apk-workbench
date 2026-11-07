@@ -151,7 +151,23 @@ class ReportGenerator:
         parts.extend(["</body></html>", ""])
         return "\n".join(parts)
 
+    def _validate_workspace_roots(self) -> None:
+        for label, root in (
+            ("results", self.results_root),
+            ("reports", self.reports_root),
+        ):
+            root.mkdir(parents=True, exist_ok=True)
+            try:
+                root.resolve(strict=True).relative_to(self.workspace)
+            except (OSError, ValueError) as exc:
+                raise ReportingError(
+                    f"The {label} directory resolves outside the configured workspace."
+                ) from exc
+        self.results_root = self.results_root.resolve(strict=True)
+        self.reports_root = self.reports_root.resolve(strict=True)
+
     def run(self) -> ReportSummary:
+        self._validate_workspace_roots()
         self.database.ensure()
         history = self.database.read_download_history()
         statuses = self.database.read_processing_status()
@@ -162,6 +178,8 @@ class ReportGenerator:
             version_code = row.get("version_code", "")
             self._safe_path_parts(package_id, version_code)
             digest = row.get("sha256", "").lower()
+            if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+                raise ReportingError(f"Malformed SHA-256 in download history: {digest!r}")
             status = statuses.get(digest, {})
             findings_path = (
                 self.results_root / package_id / version_code / digest / "trufflehog" / "findings.json"
@@ -199,6 +217,19 @@ class ReportGenerator:
                 "findings": findings,
             }
             output_dir = self.reports_root / package_id / version_code / digest
+            try:
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_dir.resolve(strict=True).relative_to(self.reports_root)
+                if any(part.is_symlink() for part in (
+                    self.reports_root / package_id,
+                    self.reports_root / package_id / version_code,
+                    output_dir,
+                )):
+                    raise ValueError("symlinked report output component")
+            except (OSError, ValueError) as exc:
+                raise ReportingError(
+                    f"Report output path escapes or aliases the reports workspace: {output_dir}"
+                ) from exc
             json_text = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
             self._atomic_write(output_dir / "report.json", json_text)
             self._atomic_write(output_dir / "report.html", self._html_report(report))
