@@ -150,6 +150,16 @@ ruff check .
 
 GitHub Actions runs the test suite on Python 3.10, 3.11, and 3.12. Tests use generated local GPG keys and mocked network/subprocess behavior. Passing CI does **not** mean a live F-Droid download or real local decompilation/scan has been performed; the installation guide includes the first live smoke-test sequence.
 
+## Project documentation
+
+- [Installation and First Run](docs/installation.md)
+- [CLI Command Reference](docs/commands.md)
+- [Configuration Reference](docs/configuration.md)
+- [F-Droid Source Verification Notes](docs/F-DROID-SOURCE-VERIFICATION.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security Policy](SECURITY.md)
+- [MIT License](LICENSE)
+
 ## Intended use
 
 For authorized research, defensive security review, software inventory, and interoperability analysis. Only acquire or analyze applications you are legally entitled to review. Static scanner output must be manually validated and must not be represented as proof of exploitability.
