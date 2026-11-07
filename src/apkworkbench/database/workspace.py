@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import csv
+import fcntl
 import os
 import re
 import tempfile
 from collections.abc import Iterable, Mapping
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -80,6 +82,25 @@ class WorkspaceDatabase:
         self.history_path = self.database_dir / "download_history.csv"
         self.attempts_path = self.database_dir / "download_attempts.csv"
         self.processing_path = self.database_dir / "processing_status.csv"
+
+    @contextmanager
+    def _write_lock(self):
+        """Serialize workspace mutations across threads and independent processes."""
+        self.database_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = self.database_dir / ".workspace.lock"
+        try:
+            handle = lock_path.open("a+")
+            os.chmod(lock_path, 0o600)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        except OSError as exc:
+            raise DatabaseError(f"Cannot acquire workspace database lock: {exc}") from exc
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                handle.close()
 
     def ensure(self) -> None:
         self.manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -170,48 +191,65 @@ class WorkspaceDatabase:
         if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
             raise DatabaseError("Refusing to update processing status with malformed SHA-256.")
         self.ensure()
-        existing = self.read_processing_status()
-        current = existing.get(digest, {field: "" for field in PROCESSING_FIELDS})
-        current.update({field: str(row.get(field, current.get(field, ""))) for field in PROCESSING_FIELDS})
-        current["sha256"] = digest
-        current["updated_at"] = str(row.get("updated_at") or utc_now())
-        existing[digest] = current
+        with self._write_lock():
+            existing = self.read_processing_status()
+            current = existing.get(digest, {field: "" for field in PROCESSING_FIELDS})
+            current.update({
+                field: str(row.get(field, current.get(field, "")))
+                for field in PROCESSING_FIELDS
+            })
+            current["sha256"] = digest
+            current["updated_at"] = str(row.get("updated_at") or utc_now())
+            existing[digest] = current
 
-        fd, temporary_name = tempfile.mkstemp(
-            prefix=".processing_status.", suffix=".tmp", dir=self.database_dir
-        )
-        temporary = Path(temporary_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=PROCESSING_FIELDS, extrasaction="raise")
-                writer.writeheader()
-                for key in sorted(existing):
-                    writer.writerow({field: existing[key].get(field, "") for field in PROCESSING_FIELDS})
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.chmod(temporary, 0o600)
-            os.replace(temporary, self.processing_path)
-            directory_fd = os.open(self.database_dir, os.O_RDONLY)
+            fd, temporary_name = tempfile.mkstemp(
+                prefix=".processing_status.", suffix=".tmp", dir=self.database_dir
+            )
+            temporary = Path(temporary_name)
             try:
-                os.fsync(directory_fd)
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                    writer = csv.DictWriter(
+                        handle, fieldnames=PROCESSING_FIELDS, extrasaction="raise"
+                    )
+                    writer.writeheader()
+                    for key in sorted(existing):
+                        writer.writerow({
+                            field: existing[key].get(field, "")
+                            for field in PROCESSING_FIELDS
+                        })
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.chmod(temporary, 0o600)
+                os.replace(temporary, self.processing_path)
+                directory_fd = os.open(self.database_dir, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            except OSError as exc:
+                raise DatabaseError(
+                    f"Cannot atomically update processing status: {exc}"
+                ) from exc
             finally:
-                os.close(directory_fd)
-        except OSError as exc:
-            raise DatabaseError(f"Cannot atomically update processing status: {exc}") from exc
-        finally:
-            if temporary.exists():
-                temporary.unlink()
+                if temporary.exists():
+                    temporary.unlink()
 
     def append_attempt(self, row: Mapping[str, object]) -> None:
-        self._append_row(self.attempts_path, ATTEMPT_FIELDS, row)
+        self.ensure()
+        with self._write_lock():
+            self._append_row(self.attempts_path, ATTEMPT_FIELDS, row)
 
     def append_history(self, row: Mapping[str, object]) -> None:
         digest = str(row.get("sha256", "")).lower()
         if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
             raise DatabaseError("Refusing to append a malformed SHA-256 digest.")
-        if digest in self.history_hashes():
-            raise DatabaseError(f"SHA-256 {digest} is already present in immutable download history.")
-        self._append_row(self.history_path, HISTORY_FIELDS, row)
+        self.ensure()
+        with self._write_lock():
+            if digest in self.history_hashes():
+                raise DatabaseError(
+                    f"SHA-256 {digest} is already present in immutable download history."
+                )
+            self._append_row(self.history_path, HISTORY_FIELDS, row)
 
     def write_manifest(
         self,
@@ -220,40 +258,43 @@ class WorkspaceDatabase:
     ) -> Path:
         """Atomically publish a new manifest; an existing run manifest is never replaced."""
         self.ensure()
-        destination = self.manifest_dir / f"run_{run_id}.csv"
-        if destination.exists():
-            raise DatabaseError(f"Run manifest already exists and will not be overwritten: {destination}")
-
-        fd, temporary_name = tempfile.mkstemp(
-            prefix=f".run_{run_id}.", suffix=".tmp", dir=self.manifest_dir
-        )
-        temporary = Path(temporary_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDS, extrasaction="raise")
-                writer.writeheader()
-                for row in rows:
-                    writer.writerow({field: row.get(field, "") for field in MANIFEST_FIELDS})
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.chmod(temporary, 0o600)
-            # A hard link publishes the completed file atomically and refuses overwrite.
-            os.link(temporary, destination)
-            temporary.unlink()
-            directory_fd = os.open(self.manifest_dir, os.O_RDONLY)
+        with self._write_lock():
+            self.ensure()
+            destination = self.manifest_dir / f"run_{run_id}.csv"
+            if destination.exists():
+                raise DatabaseError(f"Run manifest already exists and will not be overwritten: {destination}")
+    
+            fd, temporary_name = tempfile.mkstemp(
+                prefix=f".run_{run_id}.", suffix=".tmp", dir=self.manifest_dir
+            )
+            temporary = Path(temporary_name)
             try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        except FileExistsError as exc:
-            raise DatabaseError(f"Run manifest already exists: {destination}") from exc
-        except OSError as exc:
-            raise DatabaseError(f"Cannot publish run manifest {destination}: {exc}") from exc
-        finally:
-            if temporary.exists():
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDS, extrasaction="raise")
+                    writer.writeheader()
+                    for row in rows:
+                        writer.writerow({field: row.get(field, "") for field in MANIFEST_FIELDS})
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.chmod(temporary, 0o600)
+                # A hard link publishes the completed file atomically and refuses overwrite.
+                os.link(temporary, destination)
                 temporary.unlink()
-        return destination
-
+                directory_fd = os.open(self.manifest_dir, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            except FileExistsError as exc:
+                raise DatabaseError(f"Run manifest already exists: {destination}") from exc
+            except OSError as exc:
+                raise DatabaseError(f"Cannot publish run manifest {destination}: {exc}") from exc
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
+            return destination
+    
+    
 
     def read_manifest(self, run_id: str) -> list[dict[str, str]]:
         """Read one immutable run manifest in selection order."""
