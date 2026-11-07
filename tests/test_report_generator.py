@@ -157,3 +157,18 @@ def test_report_generator_rejects_reports_root_symlink_escape(tmp_path):
 
     with pytest.raises(ReportingError, match="reports directory resolves outside"):
         ReportGenerator(database, workspace=tmp_path).run()
+
+
+def test_report_generator_rejects_symlinked_findings_file(tmp_path):
+    database = setup_workspace(tmp_path)
+    finding_path = (
+        tmp_path / "results/org.example.app/12" / ("a" * 64)
+        / "trufflehog/findings.json"
+    )
+    target = finding_path.with_name("other-findings.json")
+    target.write_text("[]", encoding="utf-8")
+    finding_path.unlink()
+    finding_path.symlink_to(target)
+
+    with pytest.raises(ReportingError, match="symlinked findings file"):
+        ReportGenerator(database, workspace=tmp_path).run()
