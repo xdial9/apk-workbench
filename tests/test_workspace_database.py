@@ -202,11 +202,11 @@ def test_database_rejects_symlinked_history_file(tmp_path):
     database = WorkspaceDatabase(tmp_path)
     database.ensure()
     outside = tmp_path / "outside.csv"
-    outside.write_text(",".join([
-        "sha256", "package_id", "app_name", "version_code", "version_name",
-        "source", "download_url", "local_path", "size", "run_id",
-        "downloaded_at", "index_sha256",
-    ]) + "\n", encoding="utf-8")
+    outside.write_text(
+        "sha256,package_id,app_name,version_code,version_name,source,download_url,"
+        "local_path,size,run_id,downloaded_at,index_sha256\n",
+        encoding="utf-8",
+    )
     database.history_path.unlink()
     database.history_path.symlink_to(outside)
 
