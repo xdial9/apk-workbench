@@ -29,6 +29,9 @@ where = ["src"]
 testpaths = ["tests"]
 addopts = "-ra"
 
+[tool.ruff.lint]
+ignore = ["I001"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["apkworkbench"]
 
