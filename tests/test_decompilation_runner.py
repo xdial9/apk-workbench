@@ -182,7 +182,7 @@ def test_apktool_runs_even_when_jadx_fails(monkeypatch, tmp_path):
 
 
 def test_retry_only_reexecutes_the_failed_tool(monkeypatch, tmp_path):
-    runner, database, digest, _ = make_runner(tmp_path)
+    runner, _database, digest, _ = make_runner(tmp_path)
     first_calls = []
 
     def first(command, kwargs):
