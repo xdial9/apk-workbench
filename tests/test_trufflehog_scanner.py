@@ -9,7 +9,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from apkworkbench.analysis.trufflehog import TruffleHogScanner
+from apkworkbench.analysis.trufflehog import AnalysisError, TruffleHogScanner
 from apkworkbench.database.workspace import WorkspaceDatabase
 
 
@@ -278,3 +278,22 @@ def test_scanner_rejects_aggregate_json_output_over_configured_limit(monkeypatch
     assert summary.scanned == 0
     assert database.read_processing_status()[digest]["scan_status"] == "failed"
     assert not (tmp_path / "results/org.example.app/7/trufflehog/findings.json").exists()
+
+
+def test_scanner_rejects_results_root_symlink_escape(tmp_path):
+    database, _digest = make_workspace(tmp_path)
+    results = tmp_path / "results"
+    for child in results.iterdir():
+        if child.is_dir():
+            import shutil
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    results.rmdir()
+    outside = tmp_path / "outside-results"
+    outside.mkdir()
+    results.symlink_to(outside, target_is_directory=True)
+
+    scanner = TruffleHogScanner(database, workspace=tmp_path)
+    with pytest.raises(AnalysisError, match="Results directory resolves outside"):
+        scanner.run()
