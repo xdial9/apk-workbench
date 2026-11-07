@@ -379,6 +379,34 @@ class TruffleHogScanner:
         (output_dir / "trufflehog.log").write_text(log_text, encoding="utf-8")
         return findings
 
+    def _has_usable_scan_output(
+        self, package_id: str, version_code: str, digest: str
+    ) -> bool:
+        """Reuse a successful scan only while its sanitized result file remains valid."""
+        output_dir = (
+            self.results_root / package_id / version_code / digest / "trufflehog"
+        )
+        findings_path = output_dir / "findings.json"
+        components = (
+            self.results_root / package_id,
+            self.results_root / package_id / version_code,
+            self.results_root / package_id / version_code / digest,
+            output_dir,
+            findings_path,
+        )
+        if any(path.is_symlink() for path in components):
+            return False
+        try:
+            findings_path.resolve(strict=True).relative_to(self.results_root.resolve(strict=True))
+            if not findings_path.is_file():
+                return False
+            findings = json.loads(findings_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return False
+        return isinstance(findings, list) and all(
+            isinstance(item, dict) for item in findings
+        )
+
     def _update_status(self, row: dict[str, str], status: str, error: str = "") -> None:
         self.database.update_processing_status(
             {
@@ -524,7 +552,15 @@ class TruffleHogScanner:
             if previous.get("jadx_status") != "success" or previous.get("apktool_status") != "success":
                 skipped += 1
                 continue
-            if not force and previous.get("scan_status") == "success":
+            if (
+                not force
+                and previous.get("scan_status") == "success"
+                and self._has_usable_scan_output(
+                    row.get("package_id", ""),
+                    row.get("version_code", ""),
+                    digest,
+                )
+            ):
                 skipped += 1
                 continue
             if limit is not None and scanned + failed >= limit:
