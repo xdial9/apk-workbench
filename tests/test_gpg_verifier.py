@@ -90,3 +90,19 @@ def test_missing_input_is_an_error(signed_fixture, tmp_path):
     verifier, fingerprint, _, signature, _ = signed_fixture
     with pytest.raises(GpgVerificationError, match="does not exist"):
         verifier.verify_detached_signature(tmp_path / "missing", signature, fingerprint)
+
+
+def test_signature_from_non_pinned_key_is_rejected(signed_fixture):
+    verifier, _, data, signature, _ = signed_fixture
+    non_signer_fingerprint = "A" * 40
+    verifier.trusted_fingerprints = {non_signer_fingerprint}
+    assert verifier.verify_detached_signature(
+        data, signature, non_signer_fingerprint
+    ) is False
+
+
+def test_empty_trust_allowlist_fails_closed(signed_fixture):
+    verifier, fingerprint, data, signature, _ = signed_fixture
+    verifier.trusted_fingerprints = set()
+    with pytest.raises(GpgVerificationError, match="No trusted"):
+        verifier.verify_detached_signature(data, signature, fingerprint)
