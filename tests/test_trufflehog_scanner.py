@@ -5,6 +5,7 @@ import csv
 import hashlib
 import json
 import logging
+import os
 import subprocess
 from pathlib import Path
 
@@ -20,7 +21,8 @@ HELP_TEXT = (
 
 
 class FakeProcess:
-    def __init__(self, return_code: int = 0):
+    def __init__(self, stdout, return_code: int = 0):
+        self.stdout = stdout
         self.return_code = return_code
         self.killed = False
 
@@ -99,7 +101,11 @@ def install_fakes(monkeypatch, output, *, return_code=0, help_text=HELP_TEXT):
     import subprocess
 
     calls = []
-    process = FakeProcess(return_code)
+    read_fd, write_fd = os.pipe()
+    if output:
+        os.write(write_fd, output)
+    os.close(write_fd)
+    process = FakeProcess(os.fdopen(read_fd, "rb", buffering=0), return_code)
 
     def fake_run(command, **kwargs):
         calls.append(("help", command))
@@ -111,11 +117,9 @@ def install_fakes(monkeypatch, output, *, return_code=0, help_text=HELP_TEXT):
 
     def fake_popen(command, **kwargs):
         calls.append(("scan", command))
-        assert kwargs["stdout"] is not None
-        assert kwargs["stdout"] is not subprocess.PIPE
-        assert kwargs["stderr"] is not None
-        kwargs["stdout"].write(output)
-        kwargs["stdout"].flush()
+        assert kwargs["stdout"] is subprocess.PIPE
+        assert kwargs["stderr"] is subprocess.DEVNULL
+        assert kwargs["bufsize"] == 0
         return process
 
     monkeypatch.setattr(subprocess, "run", fake_run)
