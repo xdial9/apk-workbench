@@ -18,7 +18,7 @@ sudo apt install -y \
   python3 \
   python3-venv \
   python3-pip \
-  openjdk-21-jre-headless
+  default-jre-headless
 ```
 
 Confirm Python and Java:
@@ -29,7 +29,7 @@ java -version
 gpg --version
 ```
 
-Python must be 3.10 or newer. JADX 1.5.6 requires 64-bit Java 11 or newer; Java 21 is used in this guide.
+Python must be 3.10 or newer. JADX 1.5.6 requires 64-bit Java 11 or newer. The distribution's default Java runtime is used; confirm its version with `java -version`.
 
 ## 2. Install JADX
 
@@ -70,13 +70,9 @@ mkdir -p "$HOME/.local/opt/apktool-3.0.3" "$HOME/.local/bin"
 curl -fL --retry 3 \
   -o "$HOME/.local/opt/apktool-3.0.3/apktool.jar" \
   https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar
-curl -fL --retry 3 \
-  -o "$HOME/.local/bin/apktool" \
-  https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool
-chmod 0755 "$HOME/.local/bin/apktool"
 ```
 
-The official wrapper locates `apktool.jar` beside itself. Because this guide stores the JAR under `~/.local/opt`, create a small wrapper that calls it explicitly instead:
+Create a small PATH wrapper that invokes the JAR explicitly:
 
 ```bash
 cat > "$HOME/.local/bin/apktool" <<'EOF'
