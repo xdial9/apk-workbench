@@ -338,6 +338,9 @@ class AnalyzerExecutor:
             if process.is_alive():
                 process.terminate()
                 process.join(self.terminate_grace_seconds)
+            if process.is_alive():
+                process.kill()
+                process.join(self.terminate_grace_seconds)
             process.close()
 
     def execute_plan(
