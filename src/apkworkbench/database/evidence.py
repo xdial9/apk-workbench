@@ -512,13 +512,31 @@ class EvidenceDatabase:
             if app["package_id"] != package_id:
                 raise EvidenceDatabaseError("Artifact package_id does not match its app identity.")
             existing = connection.execute(
-                "SELECT artifact_id, app_id FROM artifact_version WHERE apk_sha256 = ?",
+                """
+                SELECT artifact_id, app_id, version_code, version_name,
+                       signer_cert_sha256_json
+                FROM artifact_version WHERE apk_sha256 = ?
+                """,
                 (digest,),
             ).fetchone()
             if existing:
                 if existing["app_id"] != app_id:
                     raise EvidenceDatabaseError(
                         "This APK digest is already registered to a different app identity."
+                    )
+                conflicts = (
+                    existing["version_code"] is not None and version_code is not None
+                    and existing["version_code"] != version_code
+                ) or (
+                    existing["version_name"] is not None and version_name is not None
+                    and existing["version_name"] != version_name
+                ) or (
+                    json.loads(existing["signer_cert_sha256_json"]) != signers
+                    and bool(signers)
+                )
+                if conflicts:
+                    raise EvidenceDatabaseError(
+                        "The same APK digest was supplied with conflicting immutable metadata."
                     )
                 return str(existing["artifact_id"])
             artifact_id = str(uuid.uuid4())
@@ -633,6 +651,15 @@ class EvidenceDatabase:
         observation_id = str(uuid.uuid4())
         self.ensure()
         with self._connection() as connection:
+            if component_id:
+                component = connection.execute(
+                    "SELECT acquisition_run_id FROM bundle_component WHERE component_id = ?",
+                    (component_id,),
+                ).fetchone()
+                if component is None or component["acquisition_run_id"] != acquisition_run_id:
+                    raise EvidenceDatabaseError(
+                        "Acquisition observation component does not belong to the specified run."
+                    )
             connection.execute(
                 """
                 INSERT INTO acquisition_observation(
@@ -668,6 +695,25 @@ class EvidenceDatabase:
         version = _required_text(version, "version")
         self.ensure()
         with self._connection() as connection:
+            definition = (
+                _json(list(categories)), _json(list(input_kinds)),
+                _json(list(required_capabilities)), config_schema_version,
+                _json(dict(resource_profile or {})), int(bool(default_enabled)),
+            )
+            existing = connection.execute(
+                """
+                SELECT categories_json, input_kinds_json, required_capabilities_json,
+                       config_schema_version, resource_profile_json, default_enabled
+                FROM analyzer_definition WHERE analyzer_id = ? AND version = ?
+                """,
+                (analyzer_id, version),
+            ).fetchone()
+            if existing:
+                if tuple(existing) != definition:
+                    raise EvidenceDatabaseError(
+                        "Analyzer ID/version is already registered with a different definition."
+                    )
+                return
             connection.execute(
                 """
                 INSERT INTO analyzer_definition(
@@ -797,6 +843,19 @@ class EvidenceDatabase:
         now = utc_now()
         self.ensure()
         with self._connection() as connection:
+            execution_artifact = connection.execute(
+                """
+                SELECT ar.artifact_id
+                FROM analyzer_execution AS ae
+                JOIN analysis_run AS ar ON ar.analysis_run_id = ae.analysis_run_id
+                WHERE ae.execution_id = ?
+                """,
+                (execution_id,),
+            ).fetchone()
+            if execution_artifact and execution_artifact["artifact_id"] != artifact_id:
+                raise EvidenceDatabaseError(
+                    "Finding artifact_id must match the artifact analyzed by its execution."
+                )
             connection.execute(
                 """
                 INSERT INTO finding(
@@ -846,6 +905,13 @@ class EvidenceDatabase:
         evidence_id = str(uuid.uuid4())
         self.ensure()
         with self._connection() as connection:
+            finding = connection.execute(
+                "SELECT artifact_id FROM finding WHERE finding_id = ?", (finding_id,)
+            ).fetchone()
+            if finding and finding["artifact_id"] != artifact_id:
+                raise EvidenceDatabaseError(
+                    "Evidence location artifact_id must match its finding."
+                )
             connection.execute(
                 """
                 INSERT INTO evidence_location(
@@ -923,6 +989,14 @@ class EvidenceDatabase:
         parser_result_id = str(uuid.uuid4())
         self.ensure()
         with self._connection() as connection:
+            analysis = connection.execute(
+                "SELECT artifact_id FROM analysis_run WHERE analysis_run_id = ?",
+                (analysis_run_id,),
+            ).fetchone()
+            if analysis and analysis["artifact_id"] != artifact_id:
+                raise EvidenceDatabaseError(
+                    "Parser result artifact_id must match its analysis run."
+                )
             connection.execute(
                 """
                 INSERT INTO parser_result(
