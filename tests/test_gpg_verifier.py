@@ -31,7 +31,7 @@ def signed_fixture(tmp_path: Path):
     )
     generated = subprocess.run(
         ["gpg", "--homedir", str(signer_home), "--batch", "--generate-key", str(params)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, check=False,
     )
     if generated.returncode:
         pytest.skip(f"GnuPG test key generation unavailable: {generated.stderr}")
