@@ -30,10 +30,10 @@ class Config:
             "gpg": {
                 "executable": "gpg",
                 "homedir": str(state_dir / "gpg"),
-                "trusted_fingerprints": [],
+                # F-Droid publishes this primary fingerprint for admin@f-droid.org.\n                "trusted_fingerprints": [\n                    "37D2C98789D8311948394E3E41E7044E1DBA2E89",\n                ],
                 "timeout_seconds": 30,
             },
-            "tools": {
+            "sources": {\n                "fdroid": {\n                    "repository_url": "https://f-droid.org/repo",\n                    "key_url": (\n                        "https://keyserver.ubuntu.com/pks/lookup?op=get&search="\n                        "0x37D2C98789D8311948394E3E41E7044E1DBA2E89"\n                    ),\n                    "signer_fingerprint": "37D2C98789D8311948394E3E41E7044E1DBA2E89",\n                    "timeout_seconds": 30,\n                    "max_index_bytes": 134217728,\n                    "max_signature_bytes": 1048576,\n                    "max_key_bytes": 2097152,\n                },\n            },\n            "tools": {
                 "gpg": "gpg",
                 "java": "java",
                 "jadx": "jadx",
