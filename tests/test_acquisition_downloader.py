@@ -5,6 +5,7 @@ import csv
 import hashlib
 
 import pytest
+import requests
 
 from apkworkbench.acquisition.downloader import ArtifactDownloader, DownloadError
 from apkworkbench.database.workspace import DatabaseError, WorkspaceDatabase
@@ -352,7 +353,7 @@ def test_download_retries_transient_network_errors(tmp_path, monkeypatch):
     success = FakeResponse(PAYLOAD)
     downloader, database, session = make_retry_downloader(
         tmp_path,
-        [pytest.Exception if False else __import__("requests").ConnectionError("reset"), success],
+        [requests.ConnectionError("reset"), success],
     )
     monkeypatch.setattr("apkworkbench.acquisition.downloader.time.sleep", lambda _delay: None)
 
