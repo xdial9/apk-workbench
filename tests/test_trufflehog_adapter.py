@@ -82,7 +82,6 @@ def test_adapter_rejects_source_path_outside_results_workspace(tmp_path):
         results_root,
         [{
             "Verified": True,
-            "Verified": True,
             "DetectorName": "ExampleToken",
             "SourceMetadata": {"Data": {"Filesystem": {"file": str(tmp_path / "outside" / "secret.txt"), "line": 1}}},
         }],
