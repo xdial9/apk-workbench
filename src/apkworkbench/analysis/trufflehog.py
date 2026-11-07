@@ -413,7 +413,7 @@ class TruffleHogScanner:
 
             package_id = row.get("package_id", "")
             version_code = row.get("version_code", "")
-            if not re.fullmatch(r"[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+", package_id):
+            if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id):
                 failed += 1
                 self._update_status(row, "failed", f"Unsafe package ID: {package_id!r}")
                 continue
