@@ -252,3 +252,44 @@ def test_destination_rejects_malformed_artifact_hash(tmp_path):
 
     with pytest.raises(DownloadError, match="invalid SHA-256"):
         downloader.destination_for(artifact)
+
+
+
+def test_download_rejects_downloads_root_symlink_escape(tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "downloads").symlink_to(outside, target_is_directory=True)
+    database = WorkspaceDatabase(workspace)
+    database.ensure()
+    downloader = ArtifactDownloader(database, workspace=workspace)
+    artifact = make_artifact()
+    session = FakeSession(FakeResponse(PAYLOAD))
+    downloader.session = session
+
+    with pytest.raises(DownloadError, match="outside the configured workspace"):
+        downloader.download(artifact, run_id="run", index_sha256="d" * 64)
+
+    assert session.calls == []
+
+
+def test_download_rejects_artifact_parent_symlink_escape(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    database = WorkspaceDatabase(tmp_path)
+    database.ensure()
+    downloader = ArtifactDownloader(
+        database,
+        workspace=tmp_path,
+        session=FakeSession(FakeResponse(PAYLOAD)),
+    )
+    artifact = make_artifact()
+    destination = downloader.destination_for(artifact)
+    destination.parent.parent.mkdir(parents=True, exist_ok=True)
+    destination.parent.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(DownloadError, match="outside the downloads workspace"):
+        downloader.download(artifact, run_id="run", index_sha256="d" * 64)
+
+    assert list(outside.iterdir()) == []
