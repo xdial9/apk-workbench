@@ -233,6 +233,9 @@ class WorkspaceDatabase:
             if acquired is None:
                 if attempt and attempt.get("status") == "persistence_failed":
                     outcome = "history_commit_failed"
+                elif attempt and attempt.get("status") == "interrupted":
+                    outcome = "interrupted_or_running"
+                    detail = attempt.get("error", "")
                 elif attempt and attempt.get("status") == "failed":
                     outcome = "download_failed"
                 elif attempt and attempt.get("status") in {"success", "success_existing"}:
