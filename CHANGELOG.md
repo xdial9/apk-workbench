@@ -4,21 +4,33 @@ Notable project changes are documented here. Entries under **Unreleased** descri
 
 ## Unreleased
 
+### Added
+
+- Stream combined JADX and Apktool output directly to per-artifact logs, avoiding unbounded in-memory subprocess capture.
+- Terminate decompiler and TruffleHog process groups on timeout, SIGTERM, or interruption.
+- Add bounded acquisition retries for transient connection failures and retryable HTTP statuses, honoring `Retry-After`.
+- Serialize workspace reads, mutations, and complete CLI jobs with a re-entrant interprocess lock.
+- Reconcile every frozen acquisition-manifest entry into an explicit terminal or unresolved outcome at pipeline completion.
+- Add `apkworkbench reconcile --run-id <run-id>` to inspect an interrupted or incomplete run.
+- Add a real-subprocess integration test using synthetic JADX, Apktool, and TruffleHog executables.
+
 ### Fixed
 
-- Make JADX and Apktool independently resumable. A successful tool stage is skipped on ordinary retries when its published output remains present and non-empty.
-- Stage each tool's output in a unique temporary sibling directory and publish it only after a zero exit code and basic output validation.
-- Preserve the last published output when a tool fails, produces no files, or a forced refresh fails.
-- Treat recorded tool success with a missing or empty output directory as incomplete and retry that stage.
+- Preserve the last published output when a decompiler fails, produces no files, or a forced refresh fails.
+- Treat verified APKs whose acquisition-history record cannot be committed as fatal workspace persistence errors.
+- Account for malformed acquisition-history records rather than silently skipping them.
+- Reject symlinked APK inputs, decompilation paths, scan inputs, report inputs, and report output components.
+- Reject empty decompilation directories as TruffleHog scan inputs.
+- Preserve bounded TruffleHog stderr diagnostics rather than discarding them.
+- Correct the streaming subprocess tests so they mock the actual `subprocess.Popen` implementation.
 
 ### Documentation and tests
 
-- Document retry semantics, staged publication, forced-refresh behavior, and current output-validation limits.
-- Add regression tests for both partial-success retry paths, failed forced refreshes, and zero-exit/no-output behavior.
+- Document retry semantics, staged publication, workspace locking, per-run reconciliation, and recovery commands.
+- Add regression coverage for timeout cleanup, output rollback, retry behavior, concurrent database writers, malformed records, and path-symlink defenses.
+- Validate the test suite on Python 3.10, 3.11, and 3.12, with Ruff on Python 3.11.
 
-### Not included
+### Remaining limitations
 
-- Streaming subprocess output to disk instead of buffering it in memory.
-- Process-group termination and descendant cleanup on timeout.
-- Memory/CPU limits or resource scheduling.
-- Semantic validation of decompiled APK contents.
+- A representative real APK batch and sustained overnight soak test have not yet been run.
+- Resource scheduling/quotas and semantic validation of decompiled APK contents remain outside this reliability patch.
