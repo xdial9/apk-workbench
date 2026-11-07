@@ -252,10 +252,7 @@ class WorkspaceDatabase:
     def reconcile_run(self, run_id: str) -> dict[str, object]:
         """Account for every manifest entry using acquisition attempts and stage state."""
         manifest = self.read_manifest(run_id)
-        history = [
-            row for row in self.read_download_history()
-            if row.get("source") == "google_play"
-        ]
+        history = self.read_download_history()
         attempts = self.read_download_attempts()
         processing = self.read_processing_status()
 
@@ -290,8 +287,8 @@ class WorkspaceDatabase:
                 if attempt:
                     detail = detail or attempt.get("error", "")
             elif (
-                selected.get("source") != "google_play"
-                or acquired.get("source") != "google_play"
+                selected.get("source") not in {"google_play", "fdroid"}
+                or acquired.get("source") != selected.get("source")
                 or acquired.get("run_id") != run_id
                 or acquired.get("package_id") != selected.get("package_id")
                 or str(acquired.get("version_code", "")) != str(selected.get("version_code", ""))
@@ -561,8 +558,15 @@ class WorkspaceDatabase:
                     for row in reader:
                         if row.get("run_id") != run_id:
                             raise DatabaseError(f"Run manifest contains a mismatched run ID: {path}")
-                        if row.get("source") != "google_play" or not row.get("download_url", "").startswith("google-play://"):
-                            raise DatabaseError(f"Run manifest contains a non-Google Play source reference: {path}")
+                        source = row.get("source", "")
+                        download_url = row.get("download_url", "")
+                        valid_reference = (
+                            source == "google_play" and download_url.startswith("google-play://")
+                        ) or (
+                            source == "fdroid" and download_url.startswith("https://")
+                        )
+                        if not valid_reference:
+                            raise DatabaseError(f"Run manifest contains an unsupported source reference: {path}")
                         package_id = row.get("package_id", "")
                         if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id):
                             raise DatabaseError(f"Run manifest contains an invalid package ID: {package_id!r}.")
