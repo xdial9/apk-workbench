@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -91,51 +92,70 @@ class DecompilationRunner:
             )
         return apk_path
 
-    def _run_tool(self, command: list[str], log_path: Path, label: str) -> None:
+    @staticmethod
+    def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+        """Terminate the subprocess session, including descendants, after timeout."""
         try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-            stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text(
-                f"COMMAND: {' '.join(command)}\n"
-                f"TIMEOUT AFTER: {self.timeout_seconds} seconds\n"
-                f"STDOUT: {stdout}\nSTDERR: {stderr}",
-                encoding="utf-8",
-                errors="replace",
-            )
-            raise DecompilationError(
-                f"{label} exceeded the {self.timeout_seconds}-second timeout."
-            ) from exc
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def _run_tool(self, command: list[str], log_path: Path, label: str) -> None:
+        """Stream combined tool output to disk and bound execution time."""
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with log_path.open("wb") as log_file:
+                log_file.write(
+                    f"COMMAND: {' '.join(command)}\\nSTDOUT AND STDERR (combined):\\n".encode(
+                        "utf-8", errors="replace"
+                    )
+                )
+                log_file.flush()
+                process = subprocess.Popen(
+                    command,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                try:
+                    returncode = process.wait(timeout=self.timeout_seconds)
+                except subprocess.TimeoutExpired:
+                    self._terminate_process_tree(process)
+                    with log_path.open("ab") as timeout_file:
+                        timeout_file.write(
+                            f"\\nTIMEOUT AFTER: {self.timeout_seconds} seconds\\n".encode(
+                                "utf-8", errors="replace"
+                            )
+                        )
+                    raise DecompilationError(
+                        f"{label} exceeded the {self.timeout_seconds}-second timeout. "
+                        f"See log: {log_path}"
+                    ) from None
+                log_file.write(
+                    f"\\nRETURN CODE: {returncode}\\n".encode("utf-8", errors="replace")
+                )
         except FileNotFoundError as exc:
-            raise DecompilationError(f"Required executable was not found: {command[0]}") from exc
+            raise DecompilationError(
+                f"Required executable was not found: {command[0]}"
+            ) from exc
         except OSError as exc:
             raise DecompilationError(f"Could not execute {label}: {exc}") from exc
 
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(
-            f"COMMAND: {' '.join(command)}\n"
-            f"RETURN CODE: {result.returncode}\n"
-            "\n--- STDOUT ---\n"
-            f"{stdout}\n"
-            "\n--- STDERR ---\n"
-            f"{stderr}",
-            encoding="utf-8",
-            errors="replace",
-        )
-        if result.returncode != 0:
-            detail = (stderr or stdout).strip()[-2000:]
+        if returncode != 0:
+            detail = self._log_tail(log_path)
             raise DecompilationError(
-                f"{label} exited with status {result.returncode}. {detail}"
+                f"{label} exited with status {returncode}. {detail}"
             )
 
     @staticmethod
