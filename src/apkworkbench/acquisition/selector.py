@@ -25,7 +25,7 @@ def select_new_artifacts(
     *,
     package_filter: str | None = None,
 ) -> SelectionResult:
-    """Select up to N distinct binaries, newest version first within each package."""
+    """Select up to N distinct binaries, preferring latest versions across packages."""
     if apk_count < 1:
         raise ValueError("apk_count must be at least 1")
 
@@ -35,14 +35,22 @@ def select_new_artifacts(
             continue
         by_package.setdefault(artifact.package_id, []).append(artifact)
 
+    for versions in by_package.values():
+        versions.sort(key=lambda item: (-item.version_code, item.sha256))
+
+    package_ids = sorted(by_package)
     ordered: list[FdroidArtifact] = []
-    for package_id in sorted(by_package):
-        ordered.extend(
-            sorted(
-                by_package[package_id],
-                key=lambda item: (-item.version_code, item.sha256),
-            )
-        )
+    depth = 0
+    while True:
+        added_at_depth = False
+        for package_id in package_ids:
+            versions = by_package[package_id]
+            if depth < len(versions):
+                ordered.append(versions[depth])
+                added_at_depth = True
+        if not added_at_depth:
+            break
+        depth += 1
 
     seen_hashes = {item.lower() for item in previously_downloaded_hashes}
     selected: list[FdroidArtifact] = []
