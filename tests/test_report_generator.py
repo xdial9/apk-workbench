@@ -74,10 +74,11 @@ def test_generates_json_and_html_with_complete_original_findings(tmp_path):
     report_html = (report_dir / "report.html").read_text(encoding="utf-8")
 
     assert "MUST_NOT_APPEAR_IN_REPORTS" in report_json
-    assert "MUST_NOT_APPEAR_IN_REPORTS" not in report_html
+    assert "MUST_NOT_APPEAR_IN_REPORTS" in report_html
     assert "<script>alert(1)</script>" not in report_html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in report_html
     assert "Credential verification was disabled" in report_html
+    assert "Complete original JSON" in report_html
 
     parsed = json.loads(report_json)
     assert parsed["artifact"]["app_name"] == "Example <App>"
