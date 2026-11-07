@@ -183,5 +183,5 @@ def test_report_generator_rejects_symlinked_package_output_parent(tmp_path):
     package_root.rename(real_package)
     package_root.symlink_to(real_package, target_is_directory=True)
 
-    with pytest.raises(ReportingError, match="symlinked report output component"):
+    with pytest.raises(ReportingError, match="Report output path escapes or aliases"):
         ReportGenerator(database, workspace=tmp_path).run()
