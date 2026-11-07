@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import logging
 import os
@@ -135,7 +134,7 @@ class TruffleHogScanner:
             finally:
                 os.close(directory_fd)
         except OSError as exc:
-            raise AnalysisError(f"Cannot publish sanitized scan results: {exc}") from exc
+            raise AnalysisError(f"Cannot publish scanner evidence: {exc}") from exc
         finally:
             if temporary.exists():
                 temporary.unlink()
@@ -236,7 +235,7 @@ class TruffleHogScanner:
                     break
                 if len(raw_line) > max_line_bytes:
                     parse_error = True
-                    while raw_line and not raw_line.endswith(b"\\n"):
+                    while raw_line and not raw_line.endswith(b"\n"):
                         raw_line = stdout_file.readline(64 * 1024)
                     continue
                 if not raw_line.strip():
@@ -250,6 +249,10 @@ class TruffleHogScanner:
                     parse_error = True
                     continue
                 findings.append(self._preserve_finding(item))
+            stdout_file.seek(0)
+            raw_stdout = stdout_file.read()
+            stderr_file.seek(0)
+            raw_stderr = stderr_file.read()
 
         if parse_error:
             raise AnalysisError("TruffleHog emitted malformed or oversized JSON output; results were not published.")
@@ -277,11 +280,9 @@ class TruffleHogScanner:
         verified = [item for item in findings if item.get("Verified") is True]
         self._atomic_json(output_dir / "findings-verified.json", verified)
         raw_output_path = output_dir / "stdout.jsonl"
-        stdout_file.seek(0)
-        raw_output_path.write_bytes(stdout_file.read())
-        stderr_file.seek(0)
+        raw_output_path.write_bytes(raw_stdout)
         stderr_path = output_dir / "stderr.log"
-        stderr_path.write_bytes(stderr_file.read())
+        stderr_path.write_bytes(raw_stderr)
         log_text = (
             f"COMMAND: {json.dumps(command)}\n"
             f"RETURN CODE: {return_code}\n"
@@ -321,7 +322,6 @@ class TruffleHogScanner:
             "decoder_name",
             "file_path",
             "line",
-            "verification",
             "finding_json",
         ]
         rows: list[dict[str, object]] = []
@@ -351,7 +351,7 @@ class TruffleHogScanner:
                             "package_id": package_id,
                             "version_code": version_code,
                             "sha256": digest,
-                            **{field: (json.dumps(finding, ensure_ascii=False, sort_keys=True) if field == "finding_json" else finding.get(field, "")) for field in fields if field not in {"package_id", "version_code", "sha256"}},
+                            "finding_json": json.dumps(finding, ensure_ascii=False, sort_keys=True),
                         }
                     )
 
