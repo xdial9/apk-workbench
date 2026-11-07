@@ -223,3 +223,32 @@ def test_download_reports_shortfall_after_downloading_available_unique_binaries(
     assert result.exit_code == 2
     assert len(calls) == 2
     assert "SHORTFALL: requested 5, found 2; short by 3." in result.output
+
+
+def test_download_aborts_remaining_items_when_workspace_persistence_fails(monkeypatch, tmp_path):
+    from apkworkbench.database.workspace import DatabaseError
+
+    artifacts = [
+        make_download_artifact("org.example.alpha", 2, "a"),
+        make_download_artifact("org.example.beta", 1, "b"),
+    ]
+    database, _ = install_download_stubs(monkeypatch, tmp_path, artifacts)
+    attempted = []
+
+    class FailingDownloader:
+        def __init__(self, db, *, workspace, timeout_seconds):
+            self.database = db
+
+        def download(self, artifact, *, run_id, index_sha256):
+            attempted.append(artifact.package_id)
+            raise DatabaseError("history storage is unavailable")
+
+    monkeypatch.setattr(cli, "ArtifactDownloader", FailingDownloader)
+    result = CliRunner().invoke(cli.main, ["download", "--apk-count", "2"])
+
+    assert result.exit_code == 1
+    assert attempted == ["org.example.alpha"]
+    assert "FATAL WORKSPACE DATABASE ERROR" in result.output
+    assert database.read_manifest(next(iter(
+        path.stem.removeprefix("run_") for path in database.manifest_dir.glob("run_*.csv")
+    )))
