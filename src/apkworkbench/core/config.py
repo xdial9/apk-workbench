@@ -40,35 +40,15 @@ class Config:
             "workspace": str(workspace),
             "config_dir": str(config_dir),
             "state_dir": str(state_dir),
-            "gpg": {
-                "executable": "gpg",
-                "homedir": str(state_dir / "gpg"),
-                # Published by F-Droid for the admin@f-droid.org OpenPGP key.
-                "trusted_fingerprints": [
-                    "37D2C98789D8311948394E3E41E7044E1DBA2E89",
-                ],
-                "timeout_seconds": 30,
-            },
             "sources": {
-                "fdroid": {
-                    "repository_url": "https://f-droid.org/repo",
-                    "key_url": (
-                        "https://keyserver.ubuntu.com/pks/lookup?op=get&search="
-                        "0x37D2C98789D8311948394E3E41E7044E1DBA2E89"
-                    ),
-                    "signer_fingerprint": "37D2C98789D8311948394E3E41E7044E1DBA2E89",
-                    "timeout_seconds": 30,
-                    "max_index_bytes": 134217728,
-                    "max_signature_bytes": 1048576,
-                    "max_key_bytes": 2097152,
-                    # Cached index bytes are re-verified against the pinned key on each use.
-                    "cache_ttl_seconds": 21600,
+                "google_play": {
+                    "retry_backoff_seconds": 1.0,
                 },
             },
             "decompilation": {"timeout_seconds": 3600},
             "analysis": {"timeout_seconds": 7200, "max_output_bytes": 536870912},
             "tools": {
-                "gpg": "gpg",
+                "playstore_cli": "playstore-cli",
                 "java": "java",
                 "jadx": "jadx",
                 "apktool": "apktool",
@@ -112,7 +92,7 @@ class Config:
         return value
 
     def ensure_workspace(self) -> None:
-        """Create application-owned workspace directories, not the user's GPG home."""
+        """Create application-owned workspace directories, not external credential stores."""
         root = Path(self.get("workspace")).expanduser()
         for name in (
             "database/run_manifests",
