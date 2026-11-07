@@ -36,6 +36,7 @@ decompilation:
 
 analysis:
   timeout_seconds: 7200
+  max_output_bytes: 536870912
 
 tools:
   gpg: gpg
