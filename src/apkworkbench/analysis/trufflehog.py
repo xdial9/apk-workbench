@@ -250,7 +250,17 @@ class TruffleHogScanner:
 
             output_size = 0
             deadline = time.monotonic() + self.timeout_seconds
+            previous_sigterm = None
+
+            def handle_sigterm(signum, _frame):
+                raise KeyboardInterrupt(f"received signal {signum}")
+
             try:
+                try:
+                    previous_sigterm = signal.signal(signal.SIGTERM, handle_sigterm)
+                except ValueError:
+                    # Signal handlers can only be installed from the main thread.
+                    pass
                 with selectors.DefaultSelector() as selector:
                     selector.register(process.stdout, selectors.EVENT_READ)
                     while True:
@@ -287,8 +297,13 @@ class TruffleHogScanner:
                 raise AnalysisError(
                     f"TruffleHog exceeded the {self.timeout_seconds}-second timeout."
                 ) from exc
+            except KeyboardInterrupt:
+                self._terminate_process_tree(process)
+                raise
             finally:
                 process.stdout.close()
+                if previous_sigterm is not None:
+                    signal.signal(signal.SIGTERM, previous_sigterm)
 
             stderr_tail = self._stderr_tail(stderr_file)
             stdout_file.flush()
