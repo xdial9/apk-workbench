@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+from contextlib import nullcontext
 
 import click
 from click.testing import CliRunner
@@ -35,7 +36,32 @@ def make_stage_command(name, calls, *, exit_code=0):
     return click.Command(name, callback=callback, params=params)
 
 
+def install_reconciliation_stub(monkeypatch, *, complete: bool):
+    class FakeConfig:
+        def get(self, key, default=None):
+            return "/tmp/apk-workbench-test" if key == "workspace" else default
+
+    class FakeDatabase:
+        def __init__(self, _workspace):
+            pass
+
+        def _write_lock(self):
+            return nullcontext()
+
+        def reconcile_run(self, run_id):
+            assert run_id == "run-123"
+            return {
+                "total": 1,
+                "complete": int(complete),
+                "counts": {"complete": 1} if complete else {"download_failed": 1},
+            }
+
+    monkeypatch.setattr(cli, "Config", FakeConfig)
+    monkeypatch.setattr(cli, "WorkspaceDatabase", FakeDatabase)
+
+
 def test_run_invokes_all_stages_in_order_and_continues_after_download_shortfall(monkeypatch):
+    install_reconciliation_stub(monkeypatch, complete=False)
     calls = []
     monkeypatch.setattr(
         cli, "download", make_stage_command("download", calls, exit_code=2)
@@ -65,6 +91,7 @@ def test_run_invokes_all_stages_in_order_and_continues_after_download_shortfall(
 
 
 def test_run_returns_success_when_all_stages_finish_without_errors(monkeypatch):
+    install_reconciliation_stub(monkeypatch, complete=True)
     calls = []
     monkeypatch.setattr(cli, "download", make_stage_command("download", calls))
     monkeypatch.setattr(cli, "decompile", make_stage_command("decompile", calls))
