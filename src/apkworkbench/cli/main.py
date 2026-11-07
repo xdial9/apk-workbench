@@ -466,9 +466,6 @@ def run(
                     f"Stage {stage_name} ended with exit code {exc.exit_code}; "
                     "continuing with eligible artifacts."
                 )
-        except Exception as exc:
-            stages_with_issues.append(stage_name)
-            click.echo(f"Stage {stage_name} raised an error: {exc}", err=True)
 
     click.echo("\nFULL PIPELINE SUMMARY")
     if stages_with_issues:
