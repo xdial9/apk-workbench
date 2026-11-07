@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import tempfile
@@ -11,10 +12,11 @@ from urllib.parse import urlsplit
 
 import requests
 
-from ..database.workspace import WorkspaceDatabase, utc_now
+from ..database.workspace import DatabaseError, WorkspaceDatabase, utc_now
 from ..sources.fdroid import FdroidArtifact
 
 
+_LOGGER = logging.getLogger("apkworkbench.acquisition")
 _PACKAGE_RE = re.compile(r"^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$")
 
 
@@ -100,18 +102,21 @@ class ArtifactDownloader:
                 self._record_success(
                     artifact, destination, run_id, index_sha256, existing_hash, existing_size
                 )
-                self.database.append_attempt(
-                    {
-                        "timestamp": started,
-                        "run_id": run_id,
-                        "sha256": artifact.sha256,
-                        "package_id": artifact.package_id,
-                        "download_url": artifact.download_url,
-                        "status": "success_existing",
-                        "bytes_received": existing_size,
-                        "error": "",
-                    }
-                )
+                try:
+                    self.database.append_attempt(
+                        {
+                            "timestamp": started,
+                            "run_id": run_id,
+                            "sha256": artifact.sha256,
+                            "package_id": artifact.package_id,
+                            "download_url": artifact.download_url,
+                            "status": "success_existing",
+                            "bytes_received": existing_size,
+                            "error": "",
+                        }
+                    )
+                except DatabaseError as log_error:
+                    _LOGGER.warning("APK is verified and in history, but success attempt logging failed: %s", log_error)
                 return DownloadResult(
                     artifact, destination, existing_hash, existing_size, reused_existing=True
                 )
@@ -190,35 +195,41 @@ class ArtifactDownloader:
             self._record_success(
                 artifact, destination, run_id, index_sha256, actual_hash, received
             )
-            self.database.append_attempt(
-                {
-                    "timestamp": started,
-                    "run_id": run_id,
-                    "sha256": artifact.sha256,
-                    "package_id": artifact.package_id,
-                    "download_url": artifact.download_url,
-                    "status": "success",
-                    "bytes_received": received,
-                    "error": "",
-                }
-            )
+            try:
+                self.database.append_attempt(
+                    {
+                        "timestamp": started,
+                        "run_id": run_id,
+                        "sha256": artifact.sha256,
+                        "package_id": artifact.package_id,
+                        "download_url": artifact.download_url,
+                        "status": "success",
+                        "bytes_received": received,
+                        "error": "",
+                    }
+                )
+            except DatabaseError as log_error:
+                _LOGGER.warning("APK is verified and in history, but success attempt logging failed: %s", log_error)
             return DownloadResult(artifact, destination, actual_hash, received)
 
         except Exception as exc:
             if temporary is not None and temporary.exists():
                 temporary.unlink()
-            self.database.append_attempt(
-                {
-                    "timestamp": started,
-                    "run_id": run_id,
-                    "sha256": artifact.sha256,
-                    "package_id": artifact.package_id,
-                    "download_url": artifact.download_url,
-                    "status": "failed",
-                    "bytes_received": received,
-                    "error": str(exc)[:1000],
-                }
-            )
+            try:
+                self.database.append_attempt(
+                    {
+                        "timestamp": started,
+                        "run_id": run_id,
+                        "sha256": artifact.sha256,
+                        "package_id": artifact.package_id,
+                        "download_url": artifact.download_url,
+                        "status": "failed",
+                        "bytes_received": received,
+                        "error": str(exc)[:1000],
+                    }
+                )
+            except DatabaseError as log_error:
+                _LOGGER.error("Could not append failed-attempt record: %s", log_error)
             if isinstance(exc, DownloadError):
                 raise
             if isinstance(exc, requests.RequestException):
