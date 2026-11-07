@@ -207,6 +207,9 @@ def test_malformed_json_prevents_results_from_being_published(monkeypatch, tmp_p
 
 def test_existing_success_is_skipped_unless_forced(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
+    output = tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("[]", encoding="utf-8")
     database.update_processing_status(
         {
             "sha256": digest,
@@ -223,6 +226,53 @@ def test_existing_success_is_skipped_unless_forced(monkeypatch, tmp_path):
     assert summary.scanned == 0
     assert summary.skipped == 1
     assert calls == []
+
+
+def test_successful_scan_is_retried_when_sanitized_output_is_missing(monkeypatch, tmp_path):
+    database, digest = make_workspace(tmp_path)
+    database.update_processing_status(
+        {
+            "sha256": digest,
+            "package_id": "org.example.app",
+            "version_code": "7",
+            "scan_status": "success",
+        }
+    )
+    calls, _ = install_fakes(monkeypatch, b"")
+    scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
+
+    summary = scanner.run()
+
+    assert summary.scanned == 1
+    assert summary.failed == 0
+    assert [entry[0] for entry in calls] == ["help", "scan"]
+    output = tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings.json"
+    assert output.is_file()
+    assert json.loads(output.read_text(encoding="utf-8")) == []
+
+
+def test_successful_scan_is_retried_when_sanitized_output_is_invalid(monkeypatch, tmp_path):
+    database, digest = make_workspace(tmp_path)
+    output = tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("{not-json}", encoding="utf-8")
+    database.update_processing_status(
+        {
+            "sha256": digest,
+            "package_id": "org.example.app",
+            "version_code": "7",
+            "scan_status": "success",
+        }
+    )
+    calls, _ = install_fakes(monkeypatch, b"")
+    scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
+
+    summary = scanner.run()
+
+    assert summary.scanned == 1
+    assert summary.failed == 0
+    assert [entry[0] for entry in calls] == ["help", "scan"]
+    assert json.loads(output.read_text(encoding="utf-8")) == []
 
 
 def test_aggregate_csv_is_sanitized_and_has_expected_columns(monkeypatch, tmp_path):
