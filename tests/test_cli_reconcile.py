@@ -60,6 +60,12 @@ def test_reconcile_command_reports_unresolved_then_complete_run(monkeypatch, tmp
             "error": "",
         }
     )
+    findings = (
+        tmp_path / "results" / "org.example.cli" / "1" / digest
+        / "trufflehog" / "findings.json"
+    )
+    findings.parent.mkdir(parents=True, exist_ok=True)
+    findings.write_text("[]", encoding="utf-8")
 
     complete = runner.invoke(cli.main, ["reconcile", "--run-id", run_id])
     assert complete.exit_code == 0

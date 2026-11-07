@@ -28,11 +28,16 @@ output in place.
 
 ## Acquisition retries
 
-The downloader retries bounded transient connection failures and retryable HTTP
-responses (408, 425, 429, 500, 502, 503, and 504). It honors numeric or HTTP-date
-`Retry-After` values, capped at 60 seconds, and otherwise uses exponential
-backoff. A failure to commit verified acquisition history is fatal to the
-current batch; it is not treated as an ordinary APK download failure.
+The Google Play adapter retries each bundle component up to three times
+after its initial attempt. The delay is exponential, starting at
+`sources.google_play.retry_backoff_seconds` and capped at 30 seconds. The
+adapter currently retries all download exceptions rather than classifying
+HTTP status codes, and it does not interpret `Retry-After`. The pinned
+upstream downloader uses a 60-second HTTP request timeout, removes incomplete
+`.part` files on failure, and verifies the component against Play's supplied
+size and digest. APK Workbench then independently verifies each APK's SHA-256
+before recording it. A failure to commit verified acquisition history is fatal
+to the current batch; it is not treated as an ordinary APK download failure.
 
 ## Per-run accounting
 

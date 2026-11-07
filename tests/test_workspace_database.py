@@ -176,3 +176,39 @@ def test_concurrent_duplicate_history_writes_commit_exactly_once(tmp_path):
     assert outcomes.count("committed") == 1
     assert outcomes.count("duplicate") == 15
     assert database.history_hashes() == {"a" * 64}
+
+
+
+def test_manifest_writer_rejects_path_injection_before_creating_files(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+
+    with pytest.raises(DatabaseError, match="Run ID"):
+        database.write_manifest("../outside", [])
+
+    assert not (tmp_path / "outside.csv").exists()
+
+
+def test_database_rejects_symlinked_database_directory(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / "database").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(DatabaseError, match="symlinked workspace database directory"):
+        database.ensure()
+
+
+def test_database_rejects_symlinked_history_file(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+    database.ensure()
+    outside = tmp_path / "outside.csv"
+    outside.write_text(
+        "sha256,package_id,app_name,version_code,version_name,source,download_url,"
+        "local_path,size,run_id,downloaded_at,index_sha256\n",
+        encoding="utf-8",
+    )
+    database.history_path.unlink()
+    database.history_path.symlink_to(outside)
+
+    with pytest.raises(DatabaseError, match="symlinked database file"):
+        database.read_download_history()

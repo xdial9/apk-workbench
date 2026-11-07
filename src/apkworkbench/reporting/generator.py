@@ -56,7 +56,9 @@ class ReportGenerator:
         if path.is_symlink():
             raise ReportingError(f"Refusing to read a symlinked findings file: {path}")
         if not path.exists():
-            return []
+            raise ReportingError(
+                f"Sanitized findings file is missing despite a successful scan: {path}"
+            )
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:

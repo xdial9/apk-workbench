@@ -158,3 +158,64 @@ def test_exact_package_download_does_not_require_a_discovery_catalog(monkeypatch
     history = WorkspaceDatabase(config.get("workspace")).read_download_history()
     assert len(history) == 1
     assert history[0]["package_id"] == "com.example.direct"
+
+
+
+def test_discover_accepts_valid_package_ids_from_packages_file(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    packages_file = tmp_path / "packages.txt"
+    packages_file.write_text(
+        "com.example.bank\norg.example.wallet\n",
+        encoding="utf-8",
+    )
+
+    class FakeSource:
+        def __init__(self, **_kwargs):
+            pass
+
+        def discover(self, **_kwargs):
+            return []
+
+    monkeypatch.setattr(cli, "Config", lambda: config)
+    monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-packages-file"))
+    monkeypatch.setattr(cli, "GooglePlaySource", FakeSource)
+
+    result = CliRunner().invoke(
+        cli.main,
+        ["discover", "--packages-file", str(packages_file), "--limit", "10"],
+    )
+
+    assert result.exit_code == 0, result.output
+    catalog = Path(config.get("workspace")) / "database/google_play_discovery.csv"
+    with catalog.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["package_id"] for row in rows] == [
+        "com.example.bank",
+        "org.example.wallet",
+    ]
+
+
+def test_discover_rejects_invalid_package_ids_from_packages_file(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    packages_file = tmp_path / "packages.txt"
+    packages_file.write_text("com..example.bank\n", encoding="utf-8")
+
+    class FakeSource:
+        def __init__(self, **_kwargs):
+            pass
+
+        def discover(self, **_kwargs):
+            return []
+
+    monkeypatch.setattr(cli, "Config", lambda: config)
+    monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-packages-file-invalid"))
+    monkeypatch.setattr(cli, "GooglePlaySource", FakeSource)
+
+    result = CliRunner().invoke(
+        cli.main,
+        ["discover", "--packages-file", str(packages_file), "--limit", "10"],
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid Android package ID" in result.output
+    assert not (Path(config.get("workspace")) / "database/google_play_discovery.csv").exists()

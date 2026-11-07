@@ -90,19 +90,12 @@ def test_generates_json_and_html_without_secret_fields(tmp_path):
     assert "ExtraData" not in parsed["findings"][0]
 
 
-def test_report_is_generated_even_when_no_findings_file_exists(tmp_path):
+def test_report_refuses_missing_findings_file_after_successful_scan(tmp_path):
     database = setup_workspace(tmp_path)
     (tmp_path / "results/org.example.app/12" / ("a" * 64) / "trufflehog/findings.json").unlink()
 
-    summary = ReportGenerator(database, workspace=tmp_path).run()
-
-    assert summary.generated == 1
-    assert summary.with_findings == 0
-    assert summary.total_findings == 0
-    parsed = json.loads(
-        (tmp_path / "reports/org.example.app/12" / ("a" * 64) / "report.json").read_text(encoding="utf-8")
-    )
-    assert parsed["findings"] == []
+    with pytest.raises(ReportingError, match="missing despite a successful scan"):
+        ReportGenerator(database, workspace=tmp_path).run()
 
 
 

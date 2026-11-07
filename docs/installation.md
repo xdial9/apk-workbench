@@ -14,7 +14,13 @@ python3 --version
 java -version
 ```
 
-Install the external tools from their official instructions:\n\n- JADX: https://github.com/skylot/jadx\n- Apktool: https://github.com/iBotPeaches/Apktool\n- TruffleHog: https://github.com/trufflesecurity/trufflehog\n\nThe workbench does not download or install these tools.
+Install the external tools from their official instructions:
+
+- JADX: https://github.com/skylot/jadx
+- Apktool: https://github.com/iBotPeaches/Apktool
+- TruffleHog: https://github.com/trufflesecurity/trufflehog
+
+The workbench does not download or install these tools.
 
 ## 2. Clone and install the Google Play branch
 
