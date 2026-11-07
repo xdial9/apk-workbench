@@ -88,7 +88,7 @@ def add_processing(
 def test_reconcile_run_accounts_for_every_manifest_entry(tmp_path):
     database = WorkspaceDatabase(tmp_path)
     database.ensure()
-    selected = [manifest_row(index) for index in range(1, 10)]
+    selected = [manifest_row(index) for index in range(1, 11)]
     database.write_manifest(RUN_ID, selected)
 
     # Complete artifact.
@@ -121,10 +121,13 @@ def test_reconcile_run_accounts_for_every_manifest_entry(tmp_path):
         error="TruffleHog timeout",
     )
 
+    # Acquisition interrupted before the artifact could be committed.
+    add_attempt(database, selected[8], "interrupted", "SIGTERM received during stream")
+
     # No acquisition record or terminal attempt.
     result = database.reconcile_run(RUN_ID)
 
-    assert result["total"] == 9
+    assert result["total"] == 10
     assert result["complete"] == 1
     assert result["counts"] == {
         "acquisition_unaccounted": 1,
@@ -134,8 +137,8 @@ def test_reconcile_run_accounts_for_every_manifest_entry(tmp_path):
         "decompilation_failed": 1,
         "download_failed": 1,
         "history_commit_failed": 1,
-        "interrupted_or_running": 1,
+        "interrupted_or_running": 2,
         "pending_decompilation": 1,
     }
-    assert len(result["items"]) == 9
+    assert len(result["items"]) == 10
     assert {item["status"] for item in result["items"]} == set(result["counts"])
