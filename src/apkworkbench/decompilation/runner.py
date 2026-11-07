@@ -357,10 +357,9 @@ class DecompilationRunner:
             raise ValueError("limit must be at least 1 when supplied")
         self._validate_workspace_roots()
         self.database.ensure()
-        history = [
-            row for row in self.database.read_download_history()
-            if row.get("source") == "google_play"
-        ]
+        # Processing is source-neutral; acquisition provenance remains in history.
+        # Artifact path, size, and SHA-256 validation still applies before execution.
+        history = self.database.read_download_history()
         statuses = self.database.read_processing_status()
         examined = completed = failed = skipped = partial = 0
 
@@ -368,8 +367,8 @@ class DecompilationRunner:
             candidate_rows = history
         else:
             manifest_rows = self.database.read_manifest(run_id)
-            if any(row.get("source") != "google_play" for row in manifest_rows):
-                raise DecompilationError("Refusing to process a manifest that is not Google Play-sourced.")
+            if any(row.get("source") not in {"google_play", "fdroid"} for row in manifest_rows):
+                raise DecompilationError("Refusing to process a manifest with an unsupported acquisition source.")
             history_by_hash = {
                 row.get("sha256", "").lower(): row for row in history if row.get("sha256")
             }
@@ -378,6 +377,7 @@ class DecompilationRunner:
                 acquired = history_by_hash.get(selected["sha256"])
                 if (
                     acquired is None
+                    or acquired.get("source") != selected.get("source")
                     or acquired.get("run_id") != run_id
                     or acquired.get("package_id") != selected.get("package_id")
                     or str(acquired.get("version_code", "")) != str(selected.get("version_code", ""))
