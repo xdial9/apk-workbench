@@ -9,7 +9,7 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 
 class FdroidIndexError(ValueError):
@@ -17,6 +17,7 @@ class FdroidIndexError(ValueError):
 
 
 _SHA256_RE = re.compile(r"^[a-fA-F0-9]{64}$")
+_PACKAGE_RE = re.compile(r"^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$")
 
 
 @dataclass(frozen=True)
@@ -38,19 +39,40 @@ class FdroidIndexParser:
 
     def __init__(self, repository_url: str = "https://f-droid.org/repo"):
         parsed = urlsplit(repository_url)
-        if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
-            raise FdroidIndexError("Repository URL must be an HTTPS origin/path without query or fragment.")
-        self.repository_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise FdroidIndexError(
+                "Repository URL must be HTTPS without credentials, query, or fragment."
+            )
+        self.repository_url = urlunsplit(
+            (parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "")
+        )
 
     def _download_url(self, repository_path: str) -> str:
         parsed = urlsplit(repository_path)
-        if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        if (
+            parsed.scheme
+            or parsed.netloc
+            or parsed.query
+            or parsed.fragment
+            or parsed.path.startswith("/")
+            or "\\" in parsed.path
+            or "%" in parsed.path
+            or any(ord(char) < 32 or ord(char) == 127 for char in parsed.path)
+        ):
             raise FdroidIndexError(f"Unsafe repository artifact path: {repository_path!r}")
-        path = parsed.path.lstrip("/")
+        path = parsed.path
         parts = path.split("/")
         if not path or any(part in {"", ".", ".."} for part in parts):
             raise FdroidIndexError(f"Unsafe repository artifact path: {repository_path!r}")
-        return f"{self.repository_url}/{path}"
+        encoded_path = quote(path, safe="/-._~")
+        return f"{self.repository_url}/{encoded_path}"
 
     @staticmethod
     def _signer_fingerprints(manifest: dict[str, Any]) -> tuple[str, ...]:
@@ -82,8 +104,10 @@ class FdroidIndexParser:
 
         artifacts: list[FdroidArtifact] = []
         for package_id, package in root["packages"].items():
-            if not isinstance(package_id, str) or not isinstance(package, dict):
-                raise FdroidIndexError("Package entries must map package IDs to objects.")
+            if not isinstance(package_id, str) or not _PACKAGE_RE.fullmatch(package_id):
+                raise FdroidIndexError(f"Invalid Android package ID: {package_id!r}")
+            if not isinstance(package, dict):
+                raise FdroidIndexError(f"Package {package_id} entry must be an object.")
             versions = package.get("versions")
             if not isinstance(versions, dict):
                 raise FdroidIndexError(f"Package {package_id} has no versions object.")
@@ -104,7 +128,7 @@ class FdroidIndexParser:
                 repository_path = file_info.get("name")
                 digest = file_info.get("sha256")
                 size = file_info.get("size")
-                version_code = manifest.get("versionCode")
+                raw_version_code = manifest.get("versionCode")
                 version_name = manifest.get("versionName")
                 if not isinstance(repository_path, str):
                     raise FdroidIndexError(f"Package {package_id} has no artifact path.")
@@ -112,12 +136,17 @@ class FdroidIndexParser:
                     raise FdroidIndexError(f"Package {package_id} has an invalid APK SHA-256.")
                 if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
                     raise FdroidIndexError(f"Package {package_id} has an invalid APK size.")
+                if isinstance(raw_version_code, bool):
+                    raise FdroidIndexError(f"Package {package_id} has an invalid versionCode.")
                 try:
-                    version_code = int(version_code)
+                    version_code = int(raw_version_code)
+                    key_version_code = int(version_key)
                 except (TypeError, ValueError) as exc:
                     raise FdroidIndexError(f"Package {package_id} has an invalid versionCode.") from exc
-                if version_code < 0:
-                    raise FdroidIndexError(f"Package {package_id} has a negative versionCode.")
+                if version_code < 0 or key_version_code != version_code:
+                    raise FdroidIndexError(
+                        f"Package {package_id} version key and manifest versionCode do not match."
+                    )
                 if version_name is not None and not isinstance(version_name, str):
                     raise FdroidIndexError(f"Package {package_id} has an invalid versionName.")
 
@@ -140,6 +169,8 @@ class FdroidIndexParser:
 
 def sha256_file(path: str, chunk_size: int = 1024 * 1024) -> str:
     """Calculate a file's SHA-256 digest without loading it all into memory."""
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be positive")
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         for chunk in iter(lambda: handle.read(chunk_size), b""):
