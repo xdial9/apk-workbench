@@ -181,7 +181,7 @@ def test_scanner_rejects_unverified_findings(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
     finding = result_json()
     finding["Verified"] = False
-    install_fakes(monkeypatch, (json.dumps(finding) + "\\n").encode())
+    install_fakes(monkeypatch, (json.dumps(finding) + "\n").encode())
     scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
 
     summary = scanner.run()
