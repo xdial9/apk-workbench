@@ -76,7 +76,6 @@ def main() -> None:
 
 
 @main.command()
-@_workspace_locked
 def doctor() -> None:
     """Check required and optional external dependencies."""
     config = Config()
