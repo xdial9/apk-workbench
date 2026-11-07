@@ -215,7 +215,7 @@ def test_history_commit_failure_leaves_verified_file_for_retry(tmp_path):
         raise DatabaseError("history is read-only")
 
     database.append_history = fail_history_commit
-    with pytest.raises(DownloadError, match="verified file was left in place"):
+    with pytest.raises(DatabaseError, match="Stop this acquisition run"):
         downloader.download(
             artifact,
             run_id="run-123",
