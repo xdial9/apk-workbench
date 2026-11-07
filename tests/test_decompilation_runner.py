@@ -8,8 +8,6 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from apkworkbench.database.workspace import WorkspaceDatabase
 from apkworkbench.decompilation.runner import DecompilationRunner
 
@@ -151,7 +149,7 @@ def test_apktool_runs_even_when_jadx_fails_and_failure_is_recorded(monkeypatch, 
 
 
 def test_history_cannot_point_outside_download_workspace(monkeypatch, tmp_path):
-    runner, database, digest, apk_path = make_runner(tmp_path)
+    runner, database, digest, _apk_path = make_runner(tmp_path)
     outside = tmp_path / "outside.apk"
     outside.write_bytes(APK_BYTES)
     with database.history_path.open(encoding="utf-8", newline="") as handle:
