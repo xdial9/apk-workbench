@@ -21,7 +21,7 @@ def setup_workspace(tmp_path: Path):
             "version_name": "1.2",
             "source": "fdroid",
             "download_url": "https://f-droid.org/repo/app.apk",
-            "local_path": str(tmp_path / "downloads/org.example.app/12/app.apk"),
+            "local_path": str(tmp_path / "downloads/org.example.app/12" / digest / "app.apk"),
             "size": 20,
             "run_id": "test-run",
             "downloaded_at": "2026-11-07T12:00:00+00:00",
@@ -39,7 +39,7 @@ def setup_workspace(tmp_path: Path):
             "error": "",
         }
     )
-    finding_path = tmp_path / "results/org.example.app/12/trufflehog/findings.json"
+    finding_path = tmp_path / "results/org.example.app/12" / digest / "trufflehog/findings.json"
     finding_path.parent.mkdir(parents=True)
     finding_path.write_text(
         json.dumps(
@@ -70,7 +70,7 @@ def test_generates_json_and_html_without_secret_fields(tmp_path):
     assert summary.with_findings == 1
     assert summary.total_findings == 1
 
-    report_dir = tmp_path / "reports/org.example.app/12"
+    report_dir = tmp_path / "reports/org.example.app/12" / ("a" * 64)
     report_json = (report_dir / "report.json").read_text(encoding="utf-8")
     report_html = (report_dir / "report.html").read_text(encoding="utf-8")
 
