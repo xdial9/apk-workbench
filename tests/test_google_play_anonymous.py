@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -26,7 +27,7 @@ def _auth_payload(
 
 
 class FakePlayApi:
-    calls = []
+    calls: ClassVar[list] = []
 
     def __init__(self, device, session):
         self.device = device
