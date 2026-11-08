@@ -13,6 +13,7 @@ authors = [{ name = "dial9 + ChatGPT" }]
 dependencies = [
   "click>=8.1,<9",
   "playstore-cli==0.1.1",
+  "goopdl==2.0.0",
   "PyYAML>=6.0,<7",
 ]
 
