@@ -109,3 +109,25 @@ def test_refuses_to_fall_back_to_user_account_credentials(monkeypatch, name, val
 def test_rejects_invalid_country_code():
     with pytest.raises(ValueError, match="two-letter"):
         auth.AnonymousGooglePlaySession(country="United States")
+
+
+def test_google_play_source_delegates_session_creation_to_anonymous_provider():
+    from apkworkbench.sources.google_play import GooglePlaySource
+
+    class FakeAnonymousSession:
+        def __init__(self):
+            self.refresh_calls = []
+
+        def new_api(self, *, force_refresh=False):
+            self.refresh_calls.append(force_refresh)
+            return object()
+
+    provider = FakeAnonymousSession()
+    source = GooglePlaySource(anonymous_session=provider)
+
+    first = source._new_api()
+    renewed = source._new_api(force_session=True)
+
+    assert first is not None
+    assert renewed is not None
+    assert provider.refresh_calls == [False, True]
