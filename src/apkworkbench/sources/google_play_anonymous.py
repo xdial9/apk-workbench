@@ -149,7 +149,7 @@ class AnonymousGooglePlaySession:
             return api
         except AnonymousGooglePlaySessionError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - sanitize arbitrary network/client failures
             # Never surface request objects or credential-bearing exception text.
             raise AnonymousGooglePlaySessionError(
                 "Could not obtain an anonymous Google Play session. "
