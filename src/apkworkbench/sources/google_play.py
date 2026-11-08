@@ -134,7 +134,7 @@ class GooglePlaySource:
             return self._anonymous_session.new_api(force_refresh=force_session)
         except AnonymousGooglePlaySessionError as exc:
             raise GooglePlayAuthenticationError(str(exc)) from exc
-        except Exception:
+        except Exception:  # noqa: BLE001 - sanitize arbitrary dispenser/client failures
             raise GooglePlayAuthenticationError(
                 "Could not initialise anonymous Google Play access."
             ) from None
