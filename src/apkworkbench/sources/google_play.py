@@ -19,8 +19,10 @@ from pathlib import Path
 from typing import Any
 
 from playstore_cli import download as play_download
-from playstore_cli import session as play_session
-from playstore_cli import store as play_store
+from apkworkbench.sources.google_play_anonymous import (
+    AnonymousGooglePlaySession,
+    AnonymousGooglePlaySessionError,
+)
 from playstore_cli.api import (
     NotDownloadable,
     PlayApi,
@@ -104,32 +106,38 @@ def _app_from_doc(doc: Any) -> PlayApp:
 
 
 class GooglePlaySource:
-    """Authenticated Google Play API adapter using playstore-cli's saved local session."""
+    """Google Play adapter using anonymously-issued device sessions."""
 
-    def __init__(self, *, retry_backoff_seconds: float = 1.0):
+    def __init__(
+        self,
+        *,
+        retry_backoff_seconds: float = 1.0,
+        country: str = "US",
+        arch: str = "arm64",
+        profile: str | None = None,
+        dispenser_url: str | None = None,
+        anonymous_session: AnonymousGooglePlaySession | None = None,
+    ):
         if retry_backoff_seconds < 0:
             raise ValueError("retry_backoff_seconds cannot be negative")
         self.retry_backoff_seconds = retry_backoff_seconds
         self._api: PlayApi | None = None
+        self._anonymous_session = anonymous_session or AnonymousGooglePlaySession(
+            country=country,
+            arch=arch,
+            profile=profile,
+            dispenser_url=dispenser_url,
+        )
 
     def _new_api(self, *, force_session: bool = False) -> PlayApi:
-        account = play_store.load_account()
-        device = play_store.load_device()
-        if not account or not device:
+        try:
+            return self._anonymous_session.new_api(force_refresh=force_session)
+        except AnonymousGooglePlaySessionError as exc:
+            raise GooglePlayAuthenticationError(str(exc)) from exc
+        except Exception as exc:
             raise GooglePlayAuthenticationError(
-                "Google Play is not configured. Run 'playstore-cli login' and "
-                "'playstore-cli checkin' in this Python environment first."
-            )
-        session = None if force_session else play_store.load_session()
-        if not session or session.get("gsfId") != device.get("gsfId"):
-            try:
-                session = play_session.build(account, device)
-                play_store.save_session(session)
-            except Exception as exc:
-                raise GooglePlayAuthenticationError(
-                    f"Could not create a Google Play session: {exc}"
-                ) from exc
-        return PlayApi(device, session)
+                "Could not initialise anonymous Google Play access."
+            ) from None
 
     def _call(self, operation):
         if self._api is None:
