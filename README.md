@@ -33,18 +33,16 @@ python -m pip install -e ".[dev]"
 
 Install JADX, Apktool, and TruffleHog using their official installation instructions. APK Workbench checks for `playstore-cli`, Java, JADX, Apktool, and TruffleHog with `apkworkbench doctor`.
 
-## Authenticate Google Play locally
+## Configure anonymous Google Play access
 
-The Play client is installed in the same Python environment as APK Workbench.
+No Google login, AAS token, API key, browser sign-in, or manually supplied bearer token is required. On the first Play request, the adapter obtains a short-lived anonymous device session from Aurora Store's public token dispenser. Goopdl caches and rotates these tokens locally, normally under `~/.config/goopdl`.
 
 ```bash
 source .venv/bin/activate
-playstore-cli login
-playstore-cli checkin
 apkworkbench doctor
 ```
 
-Complete browser sign-in and any two-step verification locally. Do not paste Google credentials, cookies, AAS tokens, or session files into ChatGPT or GitHub. The first check-in registers a virtual device; choose a device profile compatible with the apps you intend to acquire.
+The adapter refuses to switch silently to Google-account mode. Unset `GOOPDL_ACCOUNT_EMAIL` and `GOOPDL_AAS_TOKEN` if either is present. Set `GOOPDL_CONFIG_DIR` to move the anonymous token cache. The Play API still uses an internal bearer token on the wire; it is issued anonymously by the public dispenser rather than supplied by you.
 
 ## Discover a corpus
 
