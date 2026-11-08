@@ -2,16 +2,11 @@
 
 All discovery and acquisition commands use Google Play Store. No other source is configured or used.
 
-## Authentication prerequisite
+## Google Play access
 
-Run these once in the same virtual environment as APK Workbench:
+No Google account sign-in, AAS token, API key, or user-supplied bearer token is required. The adapter obtains short-lived anonymous device-session credentials from Aurora Store's public token dispenser through goopdl. The Play FDFE API still receives a bearer token internally; it is provisioned anonymously and cached/rotated by goopdl.
 
-```bash
-playstore-cli login
-playstore-cli checkin
-```
-
-Use a dedicated research Google account. The upstream client uses an unofficial Google Play API and may result in account restrictions.
+The adapter refuses to use account mode. Unset `GOOPDL_ACCOUNT_EMAIL` and `GOOPDL_AAS_TOKEN` if either is configured. The token cache defaults to `~/.config/goopdl`; set `GOOPDL_CONFIG_DIR` to relocate it. The dispenser is a third-party service and can be rate-limited or unavailable.
 
 ## Commands
 
@@ -55,7 +50,7 @@ apkworkbench download --package com.example.app
 
 `--apk-count` is retained as the CLI option name for compatibility, but its value means the number of **apps**, not the number of APK split files. Each selected app can produce multiple manifest rows—one per APK component. OBBs are preserved in the bundle directory and recorded in its JSON bundle manifest.
 
-The immutable run manifest is published only after Play delivery metadata and expected component hashes have been retrieved. It is published before downloading the first component. The current upstream client supports free apps; an app not yet in the research account library may be added to it during delivery acquisition.
+The immutable run manifest is published only after Play delivery metadata and expected component hashes have been retrieved. It is published before downloading the first component. The current delivery path supports free apps; Play may add a free app to the anonymous device profile's library during delivery acquisition.
 
 ## Processing
 
