@@ -43,7 +43,7 @@ class GooglePlayUnavailableError(GooglePlayError):
 
 
 class GooglePlayAuthenticationError(GooglePlayError):
-    """Raised when the local Google Play account/device session is unavailable."""
+    """Raised when an anonymous Google Play device session is unavailable."""
 
 
 @dataclass(frozen=True)
@@ -134,7 +134,7 @@ class GooglePlaySource:
             return self._anonymous_session.new_api(force_refresh=force_session)
         except AnonymousGooglePlaySessionError as exc:
             raise GooglePlayAuthenticationError(str(exc)) from exc
-        except Exception as exc:
+        except Exception:
             raise GooglePlayAuthenticationError(
                 "Could not initialise anonymous Google Play access."
             ) from None
