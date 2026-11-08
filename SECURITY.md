@@ -10,11 +10,11 @@ APK Workbench acquires Android application bundles from Google Play Store and pe
 - Each bundle retains a JSON metadata record with package/version, component names, sizes, local hashes, Play-hash verification status, and available signing-certificate digests.
 - Each APK is re-hashed before decompilation.
 
-## Google account risk
+## Anonymous Play session risk
 
-The upstream client uses Google's unofficial internal Play API. It is an alpha research project, not an official Google API. Its use may violate Google's terms of service and may result in account restrictions. Use a dedicated research account, not a primary account.
+The adapter uses Google's unofficial internal Play API. It is not an official Google API, and its use may be subject to Google's terms and service-side restrictions. No user Google account or long-lived AAS token is required. Instead, goopdl obtains short-lived anonymous bearer tokens from Aurora Store's public token dispenser. Aurora is a third-party service, not Google; its dispenser may change, rate-limit requests, or become unavailable.
 
-The upstream client stores a long-lived AAS authentication token under `~/.config/playstore-cli` by default. Restrict filesystem permissions, back up only if necessary using encrypted storage, and never commit or share account/device/session files. Do not paste credentials, cookies, or tokens into ChatGPT, issues, logs, or pull requests.
+Goopdl caches anonymous tokens under `~/.config/goopdl` by default with restrictive directory/file permissions. Treat this cache as credential material: do not commit, share, or include it in archives. Set `GOOPDL_CONFIG_DIR` or `XDG_CONFIG_HOME` to relocate the cache. APK Workbench refuses to fall back to Google-account mode when `GOOPDL_ACCOUNT_EMAIL` or `GOOPDL_AAS_TOKEN` is set.
 
 ## Untrusted inputs
 
