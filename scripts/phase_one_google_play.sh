@@ -49,7 +49,7 @@ if [[ -L "$catalog_path" ]]; then
   exit 1
 fi
 if [[ -f "$catalog_path" ]]; then
-  previous_snapshot="$snapshot_dir/google_play_discovery_before_"$timestamp"_$.csv"
+  previous_snapshot="$snapshot_dir/google_play_discovery_before_"$timestamp"_"$BASHPID".csv"
   cp -p -- "$catalog_path" "$previous_snapshot"
   echo "Preserved previous discovery catalog: $previous_snapshot"
 fi
@@ -74,7 +74,7 @@ if [[ ! -f "$catalog_path" || -L "$catalog_path" ]]; then
   echo "Discovery did not produce a regular package catalog: $catalog_path" >&2
   exit 1
 fi
-new_snapshot="$snapshot_dir/google_play_discovery_after_"$timestamp"_$.csv"
+new_snapshot="$snapshot_dir/google_play_discovery_after_"$timestamp"_"$BASHPID".csv"
 cp -p -- "$catalog_path" "$new_snapshot"
 echo "Preserved this discovery catalog: $new_snapshot"
 
