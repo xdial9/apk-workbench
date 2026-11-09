@@ -53,6 +53,8 @@ def _hash_file(path: Path, algorithm: str) -> str:
 def _write_report(path: Path, payload: dict[str, Any]) -> None:
     if path.is_symlink():
         raise AcquisitionVerificationError(f"Refusing symlinked verification report: {path}")
+    if path.parent.is_symlink():
+        raise AcquisitionVerificationError(f"Refusing symlinked report directory: {path.parent}")
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
@@ -146,10 +148,14 @@ def verify_google_play_run(workspace: str | Path, run_id: str) -> dict[str, Any]
     total_apks = 0
     total_obbs = 0
     total_bytes = 0
-    verified_apk_hashes: set[tuple[str, str, str]] = set()
 
     for (package_id, version_code), manifest_rows in sorted(rows_by_bundle.items()):
-        bundle_dir = Path(manifest_rows[0]["_resolved_path"]).parent
+        bundle_dirs = {Path(row["_resolved_path"]).parent for row in manifest_rows}
+        if len(bundle_dirs) != 1:
+            raise AcquisitionVerificationError(
+                f"Manifest rows for {package_id} v{version_code} span multiple bundle directories."
+            )
+        bundle_dir = next(iter(bundle_dirs))
         if bundle_dir.is_symlink():
             raise AcquisitionVerificationError(f"Refusing symlinked bundle directory: {bundle_dir}")
         try:
@@ -192,6 +198,7 @@ def verify_google_play_run(workspace: str | Path, run_id: str) -> dict[str, Any]
 
         names: set[str] = set()
         apk_hashes: set[str] = set()
+        bundle_name_hashes: set[tuple[str, str]] = set()
         apk_count = 0
         obb_count = 0
         package_bytes = 0
@@ -261,12 +268,12 @@ def verify_google_play_run(workspace: str | Path, run_id: str) -> dict[str, Any]
                     f"Play-provided {algorithm} mismatch for {component_path}."
                 )
 
+            bundle_name_hashes.add((name, actual_sha256))
             package_bytes += actual_size
             if kind == "apk":
                 apk_count += 1
                 apk_hashes.add(actual_sha256)
                 has_base_apk = has_base_apk or name == "base.apk"
-                verified_apk_hashes.add((package_id, version_code, actual_sha256))
             else:
                 obb_count += 1
 
@@ -280,9 +287,16 @@ def verify_google_play_run(workspace: str | Path, run_id: str) -> dict[str, Any]
                 f"Unfinished partial download remains in {bundle_dir}: {partials[0].name}"
             )
 
-        manifest_hashes = {
-            item["_sha256"] for item in manifest_rows
+        manifest_hashes = {item["_sha256"] for item in manifest_rows}
+        manifest_name_hashes = {
+            (Path(item["_resolved_path"]).name, item["_sha256"])
+            for item in manifest_rows
         }
+        if not manifest_name_hashes.issubset(bundle_name_hashes):
+            raise AcquisitionVerificationError(
+                f"A CSV-referenced APK filename is absent from bundle metadata for "
+                f"{package_id} v{version_code}."
+            )
         if apk_hashes != manifest_hashes:
             missing = sorted(apk_hashes - manifest_hashes)
             unexpected = sorted(manifest_hashes - apk_hashes)
