@@ -65,8 +65,10 @@ printf '%s\n' "${PACKAGE_ID}" > "${PACKAGE_FILE}"
 echo "[Phase 1/3] Enumerating Google Play search results for: ${SEARCH_QUERY}"
 apkworkbench discover \
   --query "${SEARCH_QUERY}" \
+  --category FINANCE \
   --limit 50 \
-  --per-query 25 \
+  --per-query 10 \
+  --per-category 10 \
   --packages-file "${PACKAGE_FILE}" \
   2>&1 | tee "${WORKSPACE}/phase-one-discovery.log"
 
