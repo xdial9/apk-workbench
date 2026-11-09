@@ -41,6 +41,19 @@ run_log="$workspace/logs/phase_one_${timestamp}.log"
 download_log="$workspace/logs/phase_one_download_${timestamp}.log"
 exec > >(tee -a "$run_log") 2>&1
 
+catalog_path="$workspace/database/google_play_discovery.csv"
+snapshot_dir="$workspace/database/discovery_snapshots"
+mkdir -p "$snapshot_dir"
+if [[ -L "$catalog_path" ]]; then
+  echo "Refusing symlinked discovery catalog: $catalog_path" >&2
+  exit 1
+fi
+if [[ -f "$catalog_path" ]]; then
+  previous_snapshot="$snapshot_dir/google_play_discovery_before_"$timestamp"_$.csv"
+  cp -p -- "$catalog_path" "$previous_snapshot"
+  echo "Preserved previous discovery catalog: $previous_snapshot"
+fi
+
 echo "APK WORKBENCH — PHASE ONE"
 echo "Started: $(date -u --iso-8601=seconds)"
 echo "Workspace: $workspace"
@@ -56,6 +69,14 @@ apkworkbench discover \
   --limit "$discovery_limit" \
   --per-category "$discovery_limit" \
   --per-query "$discovery_limit"
+
+if [[ ! -f "$catalog_path" || -L "$catalog_path" ]]; then
+  echo "Discovery did not produce a regular package catalog: $catalog_path" >&2
+  exit 1
+fi
+new_snapshot="$snapshot_dir/google_play_discovery_after_"$timestamp"_$.csv"
+cp -p -- "$catalog_path" "$new_snapshot"
+echo "Preserved this discovery catalog: $new_snapshot"
 
 echo
 echo "Starting acquisition..."
