@@ -68,15 +68,15 @@ bash scripts/phase_one_google_play.sh
 
 The runner performs only these stages, in order:
 
-1. Discover package IDs from the Google Play Finance category and a banking search.
+1. Discover package IDs from the Google Play Finance category and a file-manager search.
 2. Download one new, available app bundle (including all APK splits and any OBB files).
 3. Independently verify the on-disk files against the immutable run CSV and the bundle JSON.
 4. Reconcile the acquisition attempts and download-history ledger.
 
 It does **not** call `apkworkbench run`, JADX, Apktool, TruffleHog, or any other downstream analyzer. The default discovery cap is 30 and the default acquisition target is one app. Override the defaults with:
 
-- `APKWORKBENCH_PHASE1_QUERY` (default: `banking`)
-- `APKWORKBENCH_PHASE1_CATEGORY` (default: `FINANCE`)
+- `APKWORKBENCH_PHASE1_QUERY` (default: `file manager`)
+- `APKWORKBENCH_PHASE1_CATEGORY` (default: `TOOLS`)
 - `APKWORKBENCH_PHASE1_DISCOVERY_LIMIT` (default: `30`)
 - `APKWORKBENCH_PHASE1_APK_COUNT` (default: `1`)
 
