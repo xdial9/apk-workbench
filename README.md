@@ -8,9 +8,11 @@ APK Workbench is a Linux-native Python CLI for discovering Android apps on Googl
 
 ## Important Google Play limitations
 
-The acquisition adapter uses [playstore-cli](https://pypi.org/project/playstore-cli/) 0.1.1, an alpha research client for Google's **unofficial internal Play API**. It is not an official Google API and may violate Google's terms or cause the research account to be restricted. Use a dedicated Google account, not your primary account. The upstream client stores a long-lived AAS token locally; protect its configuration directory and never share or commit it.
+The acquisition adapter uses [playstore-cli](https://pypi.org/project/playstore-cli/) 0.1.1 for Google's unofficial internal Play API protocol and verified file delivery. It no longer reads a saved Google account or requires `playstore-cli login`.
 
-The upstream client currently downloads free apps. Paid apps, unavailable versions, and apps incompatible with the selected device profile cannot be acquired through this path. A free app that is not already in the research account's Play library may be added to that account as part of delivery acquisition. Review this account-side effect before using the research account. Play may serve different APK variants depending on the device profile.
+By default, APK Workbench obtains short-lived **anonymous device-session credentials** from [Aurora Store's public token dispenser](https://auroraoss.com/api/auth), through [goopdl](https://github.com/Villoh/goopdl) 2.0.0. No Google account, AAS token, API key, browser sign-in, or user-supplied bearer token is required. The Play FDFE API itself still expects a bearer token; the dispenser issues it anonymously, and goopdl caches/rotates the short-lived tokens locally (normally under `~/.config/goopdl`). A dispenser outage or rate limit can temporarily stop new sessions. The adapter refuses to silently switch to Google-account mode: unset `GOOPDL_ACCOUNT_EMAIL` and `GOOPDL_AAS_TOKEN` if either is present.
+
+Google Play's internal API is unofficial and may be subject to Google's terms and service-side restrictions. Aurora's dispenser is a third-party service, not Google. This does not change the acquisition source: app metadata and APK bundles still come from Google Play. The upstream client currently downloads free apps. Play may add a free app to the anonymous device profile's library as part of delivery acquisition. Play may also serve different APK variants depending on the selected device profile.
 
 ## Install
 
@@ -31,18 +33,16 @@ python -m pip install -e ".[dev]"
 
 Install JADX, Apktool, and TruffleHog using their official installation instructions. APK Workbench checks for `playstore-cli`, Java, JADX, Apktool, and TruffleHog with `apkworkbench doctor`.
 
-## Authenticate Google Play locally
+## Configure anonymous Google Play access
 
-The Play client is installed in the same Python environment as APK Workbench.
+No Google login, AAS token, API key, browser sign-in, or manually supplied bearer token is required. On the first Play request, the adapter obtains a short-lived anonymous device session from Aurora Store's public token dispenser. Goopdl caches and rotates these tokens locally, normally under `~/.config/goopdl`.
 
 ```bash
 source .venv/bin/activate
-playstore-cli login
-playstore-cli checkin
 apkworkbench doctor
 ```
 
-Complete browser sign-in and any two-step verification locally. Do not paste Google credentials, cookies, AAS tokens, or session files into ChatGPT or GitHub. The first check-in registers a virtual device; choose a device profile compatible with the apps you intend to acquire.
+The adapter refuses to switch silently to Google-account mode. Unset `GOOPDL_ACCOUNT_EMAIL` and `GOOPDL_AAS_TOKEN` if either is present. Set `GOOPDL_CONFIG_DIR` to move the anonymous token cache. The Play API still uses an internal bearer token on the wire; it is issued anonymously by the public dispenser rather than supplied by you.
 
 ## Discover a corpus
 

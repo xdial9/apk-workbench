@@ -38,7 +38,7 @@ logging:
 | Key | Default | Description |
 |---|---:|---|
 | `sources.google_play.retry_backoff_seconds` | 1.0 | Initial delay for bounded bundle-download retries |
-| `tools.playstore_cli` | `playstore-cli` | Upstream login/check-in executable |
+| `tools.playstore_cli` | `playstore-cli` | Upstream Play API package executable checked by `doctor`; local login/check-in is not required |
 
 Discovery limits are command options rather than configuration keys:
 
@@ -46,16 +46,9 @@ Discovery limits are command options rather than configuration keys:
 - `discover --per-category`: top-free chart cap per category (default 200).
 - `discover --per-query`: search cap per query (default 516).
 
-The adapter uses the pinned `playstore-cli==0.1.1` Python package directly for Play API/session/download operations. The upstream HTTP timeouts are defined by that package.
+The adapter uses pinned `playstore-cli==0.1.1` for the Play FDFE request, category, search, chart, and delivery protocol, plus `goopdl==2.0.0` to obtain anonymous device-session credentials from Aurora Store's public token dispenser. No local Google login, AAS token, or API key is required. The Play FDFE API still receives a short-lived bearer token internally; goopdl issues, caches, and rotates it anonymously.
 
-Authenticate in the same Python environment as APK Workbench:
-
-```bash
-playstore-cli login
-playstore-cli checkin
-```
-
-The adapter reads the upstream client's local account, device, and session files. By default those are stored under `~/.config/playstore-cli`; the upstream `PLAYSTORE_HOME` environment variable can relocate them. These files contain a long-lived authentication token and must remain private.
+The anonymous token cache defaults to `~/.config/goopdl`. Set `GOOPDL_CONFIG_DIR` or `XDG_CONFIG_HOME` to relocate it. The adapter deliberately refuses to read `GOOPDL_ACCOUNT_EMAIL` or `GOOPDL_AAS_TOKEN`; unset those variables to remain in anonymous mode. The upstream Play API HTTP timeouts are defined by playstore-cli.
 
 ## Other tools
 
@@ -76,6 +69,7 @@ The adapter reads the upstream client's local account, device, and session files
 - `APKWORKBENCH_WORKSPACE`: runtime workspace root.
 - `APKWORKBENCH_CONFIG_DIR`: directory containing `config.yaml`.
 - `APKWORKBENCH_STATE_DIR`: application state directory.
-- `PLAYSTORE_HOME`: upstream Play client credential/session directory.
+- `GOOPDL_CONFIG_DIR`: anonymous Play token-cache directory.
+- `XDG_CONFIG_HOME`: parent directory for goopdl's default token cache.
 
 Do not place Google credentials or Play client token files in the source checkout or workspace.
