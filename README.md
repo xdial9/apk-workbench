@@ -112,3 +112,26 @@ Airtable is the engineering coordination mirror. Runtime APK data remains local 
 The upstream downloader validates every Play delivery component against the size and digest returned by Play (SHA-256 for APK files and SHA-1 for OBB files). APK Workbench independently re-hashes the acquired files and verifies APK SHA-256 values again before decompilation. A successful automated test run verifies mocked adapter and subprocess behavior; it does not prove that a live Google account can authenticate, that a specific app is downloadable for a device profile, or that an overnight 15,000-app acquisition will complete. Those require live validation on the operator's machine.
 
 APK Workbench does not install or execute acquired apps. Treat APKs and all generated output as untrusted input.
+
+
+## Phase 1: Google Play enumeration and verified APK acquisition
+
+Phase 1 stops after APK bundle acquisition. It does not run JADX, Apktool, TruffleHog, or any other analysis stage.
+
+Use the saved `playstore-cli` account/device session on the machine that will hold the downloads. The smoke runner checks that the session exists without printing credentials, performs a bounded Google Play search plus Finance-category enumeration, downloads the selected package, and verifies the files against both the Play-provided digests and the frozen Workbench run manifest.
+
+```bash
+bash scripts/phase_one_google_play_smoke.sh
+```
+
+The default package for the repeatable file-level test is `com.roleplai.app`. To choose another package:
+
+```bash
+APKWORKBENCH_PHASE_ONE_PACKAGE=com.example.app \
+APKWORKBENCH_PHASE_ONE_QUERY="Example App" \
+bash scripts/phase_one_google_play_smoke.sh com.example.app
+```
+
+By default, each run writes to a new timestamped workspace below `~/APK-Workbench-PhaseOne/`. Set `APKWORKBENCH_WORKSPACE` to select an empty output directory. The runner refuses to reuse a non-empty workspace so a previous acquisition cannot be mistaken for a new test.
+
+A successful run leaves the APK base/splits and any OBB components under `downloads/`, a frozen CSV under `database/run_manifests/`, and a `phase-one-result.json` containing the verified paths, sizes, and hashes. Incomplete or mismatching download attempts are retained under the bundle's `.quarantine/` directory rather than silently deleted.
