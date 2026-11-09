@@ -131,3 +131,51 @@ def test_google_play_source_delegates_session_creation_to_anonymous_provider():
     assert first is not None
     assert renewed is not None
     assert provider.refresh_calls == [False, True]
+
+
+def test_dispenser_failure_preserves_safe_status_and_reason(monkeypatch):
+    failure = auth.token_auth.DispenserUnavailableError(503, reason="server")
+
+    def fail(**_kwargs):
+        raise failure
+
+    monkeypatch.setattr(auth.token_auth, "pick_pool_token", fail)
+    with pytest.raises(auth.AnonymousGooglePlaySessionError) as raised:
+        auth.AnonymousGooglePlaySession().new_api()
+
+    message = str(raised.value)
+    assert "DispenserUnavailableError" in message
+    assert "HTTP 503" in message
+    assert "reason=server" in message
+    assert "api/auth" not in message
+
+
+def test_dispenser_rate_limit_preserves_retry_after_without_credentials(monkeypatch):
+    failure = auth.token_auth.DispenserRateLimitedError(120)
+
+    def fail(**_kwargs):
+        raise failure
+
+    monkeypatch.setattr(auth.token_auth, "pick_pool_token", fail)
+    with pytest.raises(auth.AnonymousGooglePlaySessionError) as raised:
+        auth.AnonymousGooglePlaySession().new_api()
+
+    message = str(raised.value)
+    assert "HTTP 429" in message
+    assert "retry_after=120s" in message
+
+
+def test_unexpected_dispenser_error_text_is_not_exposed(monkeypatch):
+    secret_message = "Authorization: Bearer do-not-log-me https://auroraoss.com/api/auth"
+
+    def fail(**_kwargs):
+        raise RuntimeError(secret_message)
+
+    monkeypatch.setattr(auth.token_auth, "pick_pool_token", fail)
+    with pytest.raises(auth.AnonymousGooglePlaySessionError) as raised:
+        auth.AnonymousGooglePlaySession().new_api()
+
+    message = str(raised.value)
+    assert "RuntimeError" in message
+    assert "do-not-log-me" not in message
+    assert "auroraoss.com" not in message
