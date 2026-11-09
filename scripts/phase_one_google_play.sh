@@ -82,7 +82,7 @@ echo
 echo "Starting acquisition..."
 set +e
 apkworkbench download --apk-count "$apk_count" 2>&1 | tee "$download_log"
-download_status=${PIPESTATUS[0]}
+download_status=$?
 set -e
 
 run_id="$(sed -n 's/^Run ID: //p' "$download_log" | tail -n 1 | tr -d '\r')"
