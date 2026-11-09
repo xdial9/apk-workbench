@@ -45,8 +45,9 @@ def validate_workspace(
     expected_package_id: str | None = None,
 ) -> dict[str, Any]:
     root = Path(workspace).expanduser().resolve()
-    if not root.is_dir():
-        raise PhaseOneValidationError(f"Workspace directory does not exist: {root}")
+    original_root = Path(workspace).expanduser()
+    if original_root.is_symlink() or not root.is_dir():
+        raise PhaseOneValidationError(f"Workspace directory does not exist or is unsafe: {root}")
 
     downloads = root / "downloads"
     database = root / "database"
@@ -100,8 +101,19 @@ def validate_workspace(
             f"Downloaded package {package_id} does not match requested package {expected_package_id}"
         )
 
-    run_manifest = database / "run_manifests" / f"run_{run_id}.csv"
-    manifest_rows = _read_csv(run_manifest, "Frozen run manifest")
+    manifest_directory = database / "run_manifests"
+    if manifest_directory.is_symlink() or not manifest_directory.is_dir():
+        raise PhaseOneValidationError(f"Run-manifest directory is missing or unsafe: {manifest_directory}")
+    matching_manifests: list[tuple[Path, list[dict[str, str]]]] = []
+    for candidate in manifest_directory.glob("*.csv"):
+        rows = _read_csv(candidate, "Frozen run manifest")
+        if any(row.get("run_id") == run_id for row in rows):
+            matching_manifests.append((candidate, rows))
+    if len(matching_manifests) != 1:
+        raise PhaseOneValidationError(
+            f"Expected one frozen manifest for run {run_id}, found {len(matching_manifests)}"
+        )
+    run_manifest, manifest_rows = matching_manifests[0]
     for row in manifest_rows:
         if row.get("source") != "google_play":
             raise PhaseOneValidationError("Frozen run manifest contains a non-Google-Play source")
@@ -115,12 +127,21 @@ def validate_workspace(
 
     for item in bundle.get("files") or []:
         name = item.get("name")
-        if not isinstance(name, str) or not name or Path(name).name != name or name in {".", ".."}:
+        if (
+            not isinstance(name, str)
+            or not name
+            or Path(name).name != name
+            or "/" in name
+            or "\\" in name
+            or name in {".", ".."}
+        ):
             raise PhaseOneValidationError(f"Unsafe component filename in bundle manifest: {name!r}")
         if name in files_by_name:
             raise PhaseOneValidationError(f"Duplicate component in bundle manifest: {name}")
 
         path = bundle_directory / name
+        if bundle_path.parent.is_symlink():
+            raise PhaseOneValidationError(f"Bundle directory is a symlink: {bundle_path.parent}")
         if path.is_symlink() or not path.is_file():
             raise PhaseOneValidationError(f"Downloaded component is missing or unsafe: {path}")
         size, local_sha256 = _hash_file(path, "sha256")
@@ -166,6 +187,8 @@ def validate_workspace(
         if not local_path_value:
             raise PhaseOneValidationError("A frozen manifest row has no local_path")
         local_path = Path(local_path_value).expanduser()
+        if local_path.is_symlink():
+            raise PhaseOneValidationError(f"Frozen manifest path is a symlink: {local_path}")
         if not local_path.is_absolute():
             local_path = root / local_path
         resolved = local_path.resolve()
@@ -181,8 +204,10 @@ def validate_workspace(
         if not verified or row.get("sha256") != verified["sha256"]:
             raise PhaseOneValidationError(f"Frozen manifest hash/path does not match: {name}")
 
-    if not manifest_names or not manifest_names.issubset(apk_names):
-        raise PhaseOneValidationError("Frozen run manifest does not reference acquired APK components")
+    if not manifest_names or manifest_names != apk_names:
+        raise PhaseOneValidationError(
+            "Frozen run manifest does not reference every acquired APK component exactly"
+        )
     partials = [
         path for path in downloads.rglob("*.part")
         if ".quarantine" not in path.parts
