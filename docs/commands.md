@@ -62,9 +62,9 @@ The immutable run manifest is published only after Play delivery metadata and ex
 
 Run the focused Phase One workflow from the repository root:
 
-\`\`\`bash
+```bash
 bash scripts/phase_one_google_play.sh
-\`\`\`
+```
 
 The runner performs only these stages, in order:
 
@@ -73,23 +73,23 @@ The runner performs only these stages, in order:
 3. Independently verify the on-disk files against the immutable run CSV and the bundle JSON.
 4. Reconcile the acquisition attempts and download-history ledger.
 
-It does **not** call \`apkworkbench run\`, JADX, Apktool, TruffleHog, or any other downstream analyzer. The default discovery cap is 30 and the default acquisition target is one app. Override the defaults with:
+It does **not** call `apkworkbench run`, JADX, Apktool, TruffleHog, or any other downstream analyzer. The default discovery cap is 30 and the default acquisition target is one app. Override the defaults with:
 
-- \`APKWORKBENCH_PHASE1_QUERY\` (default: \`banking\`)
-- \`APKWORKBENCH_PHASE1_CATEGORY\` (default: \`FINANCE\`)
-- \`APKWORKBENCH_PHASE1_DISCOVERY_LIMIT\` (default: \`30\`)
-- \`APKWORKBENCH_PHASE1_APK_COUNT\` (default: \`1\`)
+- `APKWORKBENCH_PHASE1_QUERY` (default: `banking`)
+- `APKWORKBENCH_PHASE1_CATEGORY` (default: `FINANCE`)
+- `APKWORKBENCH_PHASE1_DISCOVERY_LIMIT` (default: `30`)
+- `APKWORKBENCH_PHASE1_APK_COUNT` (default: `1`)
 
-The script uses the configured APK Workbench workspace. Logs are written to its \`logs/\` directory; APK/OBB files remain under \`downloads/\`; and the independent verification report is written under \`reports/\`.
+The script uses the configured APK Workbench workspace. Logs are written to its `logs/` directory; APK/OBB files remain under `downloads/`; and the independent verification report is written under `reports/`.
 
-The current \`main\` Google Play adapter uses the saved \`playstore-cli\` local session described above. The anonymous Aurora/Goopdl experiment is kept on a separate branch and is not used by this Phase One runner.
+The current `main` Google Play adapter uses the saved `playstore-cli` local session described above. The anonymous Aurora/Goopdl experiment is kept on a separate branch and is not used by this Phase One runner.
 
 For an existing completed run, verify it again without downloading:
 
-\`\`\`bash
+```bash
 apkworkbench verify-downloads --run-id RUN_ID
 apkworkbench reconcile --run-id RUN_ID
-\`\`\`
+```
 
 
 ## Processing
