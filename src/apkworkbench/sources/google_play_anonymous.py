@@ -8,6 +8,7 @@ delivery metadata, and downstream downloads.
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 from typing import Any
@@ -19,6 +20,25 @@ from playstore_cli.device import DEFAULT_PROFILE
 
 class AnonymousGooglePlaySessionError(RuntimeError):
     """Raised when an anonymous Play API session cannot be obtained."""
+
+
+def _safe_exception_summary(exc: Exception) -> str:
+    """Preserve typed, non-secret failure details without exposing request data."""
+    parts = [type(exc).__name__]
+    status = getattr(exc, "status", None)
+    if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599:
+        parts.append(f"HTTP {status}")
+    reason = getattr(exc, "reason", None)
+    if reason in {"transport", "server", "profile_rejected"}:
+        parts.append(f"reason={reason}")
+    stage = getattr(exc, "stage", None)
+    if stage in {"auth", "checkin", "toc"}:
+        parts.append(f"stage={stage}")
+    retry_after = getattr(exc, "retry_after", None)
+    if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool):
+        if math.isfinite(retry_after) and 0 <= retry_after <= 3600:
+            parts.append(f"retry_after={retry_after:g}s")
+    return "; ".join(parts)
 
 
 class _ProfileView:
@@ -150,9 +170,10 @@ class AnonymousGooglePlaySession:
         except AnonymousGooglePlaySessionError:
             raise
         except Exception as exc:  # noqa: BLE001 - sanitize arbitrary network/client failures
-            # Never surface request objects or credential-bearing exception text.
+            # Keep only typed status/category fields; never expose response bodies,
+            # request URLs, headers, tokens, or arbitrary exception text.
+            summary = _safe_exception_summary(exc)
             raise AnonymousGooglePlaySessionError(
-                "Could not obtain an anonymous Google Play session. "
-                "The public token dispenser may be unavailable or rate-limited "
-                f"({type(exc).__name__})."
+                "Could not obtain an anonymous Google Play session from the public "
+                f"token dispenser ({summary})."
             ) from None
