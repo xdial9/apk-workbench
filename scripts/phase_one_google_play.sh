@@ -95,15 +95,27 @@ fi
 
 echo
 echo "Independent on-disk verification: run $run_id"
+set +e
 apkworkbench verify-downloads --run-id "$run_id"
+verify_status=$?
 
 echo
 echo "Reconciling immutable manifest and acquisition ledger..."
 apkworkbench reconcile --run-id "$run_id"
+reconcile_status=$?
+set -e
 
 if (( download_status != 0 )); then
-  echo "Acquisition returned exit status $download_status; verified files and reconciliation were preserved." >&2
+  echo "Acquisition returned exit status $download_status." >&2
   exit "$download_status"
+fi
+if (( verify_status != 0 )); then
+  echo "On-disk verification failed with exit status $verify_status." >&2
+  exit "$verify_status"
+fi
+if (( reconcile_status != 0 )); then
+  echo "Run reconciliation failed with exit status $reconcile_status." >&2
+  exit "$reconcile_status"
 fi
 
 echo
