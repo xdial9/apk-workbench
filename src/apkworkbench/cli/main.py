@@ -12,6 +12,10 @@ from pathlib import Path
 import click
 
 from apkworkbench import __version__
+from apkworkbench.acquisition.verification import (
+    AcquisitionVerificationError,
+    verify_google_play_run,
+)
 from apkworkbench.analysis.trufflehog import AnalysisError, TruffleHogScanner
 from apkworkbench.core.config import Config
 from apkworkbench.core.logging import setup_logging
@@ -437,6 +441,40 @@ def download(apk_count: int | None, package_id: str | None) -> None:
         raise click.exceptions.Exit(1)
     if shortfall:
         raise click.exceptions.Exit(2)
+
+
+@main.command("verify-downloads")
+@click.option(
+    "--run-id",
+    required=True,
+    type=str,
+    help="Verify every APK/OBB file in this immutable Google Play acquisition run.",
+)
+@_workspace_locked
+def verify_downloads(run_id: str) -> None:
+    """Independently verify downloaded component files and their Play hashes."""
+    config = Config()
+    click.echo(BANNER)
+    click.echo(f"Verifying Google Play acquisition run {run_id}...")
+    try:
+        summary = verify_google_play_run(config.get("workspace"), run_id)
+    except (AcquisitionVerificationError, DatabaseError, OSError, ValueError) as exc:
+        click.echo(f"Acquisition verification failed: {exc}", err=True)
+        raise click.exceptions.Exit(1) from exc
+
+    click.echo("PHASE ONE VERIFICATION")
+    click.echo(f"  Status: {summary['status'].upper()}")
+    click.echo(f"  Verified bundles: {summary['verified_bundles']}")
+    click.echo(f"  APK components: {summary['apk_components']}")
+    click.echo(f"  OBB components: {summary['obb_components']}")
+    click.echo(f"  Total bytes on disk: {summary['total_bytes']:,}")
+    click.echo(f"  Verification report: {summary['report_path']}")
+    for bundle in summary["bundles"]:
+        click.echo(
+            f"  {bundle['package_id']} v{bundle['version_code']}: "
+            f"{bundle['apk_components']} APK / {bundle['obb_components']} OBB "
+            f"| {bundle['directory']}"
+        )
 
 
 @main.command()
