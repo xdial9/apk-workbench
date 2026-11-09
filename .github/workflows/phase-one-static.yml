@@ -1,0 +1,41 @@
+name: Phase One acquisition checks
+
+on:
+  push:
+    branches:
+      - feat/phase-one-google-play-acquisition
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  phase-one:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install application and test tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest ruff
+
+      - name: Check local runner shell syntax
+        run: bash -n scripts/phase_one_google_play_smoke.sh
+
+      - name: Compile on-disk validator
+        run: python -m py_compile scripts/validate_phase_one_run.py
+
+      - name: Lint acquisition and validator changes
+        run: ruff check src/apkworkbench/sources/google_play.py scripts tests/test_google_play_source.py tests/test_phase_one_validation.py
+
+      - name: Test download retry and Phase One validation
+        run: pytest -q tests/test_google_play_source.py tests/test_phase_one_validation.py
