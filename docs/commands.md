@@ -68,7 +68,7 @@ bash scripts/phase_one_google_play.sh
 
 The runner performs only these stages, in order:
 
-1. Discover package IDs from the Google Play Finance category and a file-manager search.
+1. Discover package IDs from the Google Play Tools category and a file-manager search.
 2. Download one new, available app bundle (including all APK splits and any OBB files).
 3. Independently verify the on-disk files against the immutable run CSV and the bundle JSON.
 4. Reconcile the acquisition attempts and download-history ledger.
