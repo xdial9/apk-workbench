@@ -279,25 +279,118 @@ class GooglePlaySource:
         except (OSError, ValueError) as exc:
             raise GooglePlayError("Bundle directory resolves outside the downloads workspace") from exc
 
+        try:
+            listed_files = play_download.play_files(plan.app.package_id, plan._delivery)
+        except Exception as exc:
+            raise GooglePlayError(
+                f"Could not enumerate Play bundle components for {plan.app.package_id}: {exc}"
+            ) from exc
+
+        upstream_files: dict[str, Any] = {}
+        for upstream_file in listed_files:
+            name = getattr(upstream_file, "name", "")
+            if (
+                not isinstance(name, str)
+                or not name
+                or Path(name).name != name
+                or "/" in name
+                or "\\" in name
+            ):
+                raise GooglePlayError(f"Unsafe Google Play bundle filename: {name!r}")
+            if name in upstream_files:
+                raise GooglePlayError(f"Duplicate Google Play bundle filename: {name}")
+            upstream_files[name] = upstream_file
+
+        missing_files = [item.name for item in plan.files if item.name not in upstream_files]
+        if missing_files:
+            raise GooglePlayError(
+                "Play delivery omitted planned bundle components: " + ", ".join(missing_files)
+            )
+
         downloader = play_download.Downloader(plan._delivery)
+        quarantined_files: list[dict[str, str]] = []
         for item in plan.files:
+            if Path(item.name).name != item.name or item.name in {"", ".", ".."}:
+                raise GooglePlayError(f"Unsafe planned bundle filename: {item.name!r}")
             component_path = directory / item.name
             partial_path = component_path.with_name(component_path.name + ".part")
             if component_path.is_symlink() or partial_path.is_symlink():
                 raise GooglePlayError(f"Refusing symlinked bundle component: {component_path}")
+
+            if component_path.exists():
+                try:
+                    _verify_downloaded_component(component_path, item)
+                except GooglePlayError as exc:
+                    quarantined = _quarantine_download_component(
+                        component_path, bundle_directory=directory, run_id=run_id, attempt=0
+                    )
+                    if quarantined:
+                        quarantined_files.append({
+                            "original_name": item.name,
+                            "quarantined_path": str(quarantined.relative_to(directory)),
+                            "reason": str(exc),
+                        })
+                else:
+                    if partial_path.exists():
+                        quarantined = _quarantine_download_component(
+                            partial_path, bundle_directory=directory, run_id=run_id, attempt=0
+                        )
+                        if quarantined:
+                            quarantined_files.append({
+                                "original_name": partial_path.name,
+                                "quarantined_path": str(quarantined.relative_to(directory)),
+                                "reason": "stale partial file beside a verified component",
+                            })
+                    continue
+
+            if partial_path.exists():
+                quarantined = _quarantine_download_component(
+                    partial_path, bundle_directory=directory, run_id=run_id, attempt=0
+                )
+                if quarantined:
+                    quarantined_files.append({
+                        "original_name": partial_path.name,
+                        "quarantined_path": str(quarantined.relative_to(directory)),
+                        "reason": "stale partial file from an earlier attempt",
+                    })
+
             for attempt in range(_MAX_RETRIES + 1):
                 try:
-                    upstream_file = next(
-                        candidate for candidate in play_download.play_files(
-                            plan.app.package_id, plan._delivery
-                        ) if candidate.name == item.name
-                    )
-                    downloader.fetch(upstream_file, directory)
+                    downloader.fetch(upstream_files[item.name], directory)
+                    _verify_downloaded_component(component_path, item)
+                    if partial_path.exists():
+                        quarantined = _quarantine_download_component(
+                            partial_path,
+                            bundle_directory=directory,
+                            run_id=run_id,
+                            attempt=attempt + 1,
+                        )
+                        if quarantined:
+                            quarantined_files.append({
+                                "original_name": partial_path.name,
+                                "quarantined_path": str(quarantined.relative_to(directory)),
+                                "reason": "partial file remained after a verified download",
+                            })
                     break
                 except Exception as exc:
+                    for failed_path in (partial_path, component_path):
+                        quarantined = _quarantine_download_component(
+                            failed_path,
+                            bundle_directory=directory,
+                            run_id=run_id,
+                            attempt=attempt + 1,
+                        )
+                        if quarantined:
+                            quarantined_files.append({
+                                "original_name": failed_path.name,
+                                "quarantined_path": str(quarantined.relative_to(directory)),
+                                "reason": str(exc)[:500],
+                            })
                     if attempt >= _MAX_RETRIES:
                         raise GooglePlayError(
-                            f"Google Play download failed for {plan.app.package_id}/{item.name}: {exc}"
+                            f"Google Play download or integrity verification failed for "
+                            f"{plan.app.package_id}/{item.name} after {_MAX_RETRIES + 1} attempts: "
+                            f"{exc}"
                         ) from exc
                     time.sleep(min(30.0, self.retry_backoff_seconds * (2 ** attempt)))
 
@@ -306,16 +399,7 @@ class GooglePlaySource:
         obb_paths: list[Path] = []
         for item in plan.files:
             path = directory / item.name
-            if path.is_symlink() or not path.is_file():
-                raise GooglePlayError(f"Downloaded bundle component is missing or unsafe: {path}")
-            digest = hashlib.new(item.expected_algorithm)
-            size = 0
-            with path.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    digest.update(chunk)
-                    size += len(chunk)
-            if size != item.size or digest.hexdigest() != item.expected_digest:
-                raise GooglePlayError(f"Post-download integrity verification failed: {item.name}")
+            size = _verify_downloaded_component(path, item)
             sha256 = _sha256_file(path)
             file_rows.append(
                 {
@@ -340,6 +424,7 @@ class GooglePlaySource:
             "run_id": run_id,
             "signer_sha256": list(plan.signer_sha256),
             "files": file_rows,
+            "quarantined_files": quarantined_files,
             "downloaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         serialized = json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode()
@@ -354,6 +439,59 @@ class GooglePlaySource:
             manifest_path=manifest_path,
             manifest_sha256=manifest_sha256,
         )
+
+
+def _verify_downloaded_component(path: Path, item: PlayFile) -> int:
+    """Verify one downloaded component against Play's expected size and digest."""
+    if path.is_symlink() or not path.is_file():
+        raise GooglePlayError(f"Downloaded bundle component is missing or unsafe: {path}")
+    try:
+        digest = hashlib.new(item.expected_algorithm)
+    except ValueError as exc:
+        raise GooglePlayError(
+            f"Unsupported Play digest algorithm for {item.name}: {item.expected_algorithm}"
+        ) from exc
+    size = 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+            size += len(chunk)
+    if size != item.size or digest.hexdigest() != item.expected_digest:
+        raise GooglePlayError(f"Play size/hash verification failed: {item.name}")
+    return size
+
+
+def _quarantine_download_component(
+    path: Path,
+    *,
+    bundle_directory: Path,
+    run_id: str,
+    attempt: int,
+) -> Path | None:
+    """Preserve an incomplete or mismatching file rather than silently deleting it."""
+    if path.is_symlink():
+        raise GooglePlayError(f"Refusing to quarantine symlinked component: {path}")
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise GooglePlayError(f"Refusing to move non-file download component: {path}")
+
+    quarantine_directory = bundle_directory / ".quarantine"
+    if quarantine_directory.is_symlink():
+        raise GooglePlayError(f"Refusing symlinked quarantine directory: {quarantine_directory}")
+    quarantine_directory.mkdir(parents=True, exist_ok=True)
+    safe_run_id = re.sub(r"[^A-Za-z0-9_.-]", "_", run_id)[:64] or "run"
+    target = quarantine_directory / (
+        f"{safe_run_id}-attempt-{attempt:02d}-{path.name}.quarantined"
+    )
+    suffix = 1
+    while target.exists():
+        target = quarantine_directory / (
+            f"{safe_run_id}-attempt-{attempt:02d}-{suffix}-{path.name}.quarantined"
+        )
+        suffix += 1
+    os.replace(path, target)
+    return target
 
 
 def _sha256_file(path: Path) -> str:
