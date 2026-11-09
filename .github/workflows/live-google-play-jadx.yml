@@ -1,7 +1,9 @@
 name: Phase 1 — Live Google Play enumeration and APK acquisition
 
-# Deliberately manual until the acquisition adapter changes land.
 on:
+  push:
+    branches:
+      - feat/anonymous-google-play-session
   workflow_dispatch:
 
 permissions:
