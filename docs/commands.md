@@ -20,6 +20,7 @@ Use a dedicated research Google account. The upstream client uses an unofficial 
 | `doctor` | Check Play client, Java, JADX, Apktool, and TruffleHog |
 | `discover` | Collect package IDs from Google Play charts, categories, searches, or a package file |
 | `download` | Freeze delivery hashes and download complete Play app bundles |
+| `verify-downloads` | Independently re-hash and verify every file in a completed acquisition run |
 | `decompile` | Run JADX and Apktool on acquired APK components |
 | `analyze` | Run TruffleHog locally and retain verified findings |
 | `report` | Generate reports containing complete original finding objects |
@@ -56,6 +57,40 @@ apkworkbench download --package com.example.app
 `--apk-count` is retained as the CLI option name for compatibility, but its value means the number of **apps**, not the number of APK split files. Each selected app can produce multiple manifest rows—one per APK component. OBBs are preserved in the bundle directory and recorded in its JSON bundle manifest.
 
 The immutable run manifest is published only after Play delivery metadata and expected component hashes have been retrieved. It is published before downloading the first component. The current upstream client supports free apps; an app not yet in the research account library may be added to it during delivery acquisition.
+
+## Phase One: enumeration and download only
+
+Run the focused Phase One workflow from the repository root:
+
+\`\`\`bash
+bash scripts/phase_one_google_play.sh
+\`\`\`
+
+The runner performs only these stages, in order:
+
+1. Discover package IDs from the Google Play Finance category and a banking search.
+2. Download one new, available app bundle (including all APK splits and any OBB files).
+3. Independently verify the on-disk files against the immutable run CSV and the bundle JSON.
+4. Reconcile the acquisition attempts and download-history ledger.
+
+It does **not** call \`apkworkbench run\`, JADX, Apktool, TruffleHog, or any other downstream analyzer. The default discovery cap is 30 and the default acquisition target is one app. Override the defaults with:
+
+- \`APKWORKBENCH_PHASE1_QUERY\` (default: \`banking\`)
+- \`APKWORKBENCH_PHASE1_CATEGORY\` (default: \`FINANCE\`)
+- \`APKWORKBENCH_PHASE1_DISCOVERY_LIMIT\` (default: \`30\`)
+- \`APKWORKBENCH_PHASE1_APK_COUNT\` (default: \`1\`)
+
+The script uses the configured APK Workbench workspace. Logs are written to its \`logs/\` directory; APK/OBB files remain under \`downloads/\`; and the independent verification report is written under \`reports/\`.
+
+The current \`main\` Google Play adapter uses the saved \`playstore-cli\` local session described above. The anonymous Aurora/Goopdl experiment is kept on a separate branch and is not used by this Phase One runner.
+
+For an existing completed run, verify it again without downloading:
+
+\`\`\`bash
+apkworkbench verify-downloads --run-id RUN_ID
+apkworkbench reconcile --run-id RUN_ID
+\`\`\`
+
 
 ## Processing
 
