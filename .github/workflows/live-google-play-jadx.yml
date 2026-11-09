@@ -1,18 +1,17 @@
-name: Live Google Play APK and JADX smoke test
+name: Phase 1 — Live Google Play enumeration and APK acquisition
 
+# Deliberately manual until the acquisition adapter changes land.
 on:
-  push:
-    branches:
-      - feat/anonymous-google-play-session
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  live-play-jadx:
-    name: Live Play acquisition and real decompilers
+  phase-one:
+    name: Enumerate Play apps and acquire a verified APK bundle
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - name: Check out the tested branch
         uses: actions/checkout@v4
@@ -23,61 +22,21 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-
       - name: Create isolated workbench and token-cache directories
         shell: bash
         run: |
           set -Eeuo pipefail
-          mkdir -p "$RUNNER_TEMP/apk-workbench-live-smoke"
+          mkdir -p "$RUNNER_TEMP/apk-workbench-phase-one"
           mkdir -p "$RUNNER_TEMP/apk-workbench-config"
           mkdir -p "$RUNNER_TEMP/apk-workbench-state"
           mkdir -p "$RUNNER_TEMP/goopdl-cache"
+          mkdir -p "$GITHUB_WORKSPACE/phase-one-output/diagnostics"
           {
-            echo "APKWORKBENCH_WORKSPACE=$RUNNER_TEMP/apk-workbench-live-smoke"
+            echo "APKWORKBENCH_WORKSPACE=$RUNNER_TEMP/apk-workbench-phase-one"
             echo "APKWORKBENCH_CONFIG_DIR=$RUNNER_TEMP/apk-workbench-config"
             echo "APKWORKBENCH_STATE_DIR=$RUNNER_TEMP/apk-workbench-state"
             echo "GOOPDL_CONFIG_DIR=$RUNNER_TEMP/goopdl-cache"
-            echo "APKTOOL_JAR=$RUNNER_TEMP/apktool_3.0.3.jar"
           } >> "$GITHUB_ENV"
-
-      - name: Install pinned JADX and Apktool binaries
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          mkdir -p "$RUNNER_TEMP/jadx" "$RUNNER_TEMP/bin"
-
-          curl --fail --location --retry 4 --retry-all-errors \
-            https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip \
-            --output "$RUNNER_TEMP/jadx-1.5.6.zip"
-          echo "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974  $RUNNER_TEMP/jadx-1.5.6.zip" \
-            | sha256sum --check -
-          unzip -q "$RUNNER_TEMP/jadx-1.5.6.zip" -d "$RUNNER_TEMP/jadx"
-
-          curl --fail --location --retry 4 --retry-all-errors \
-            https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar \
-            --output "$RUNNER_TEMP/apktool_3.0.3.jar"
-          echo "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423  $RUNNER_TEMP/apktool_3.0.3.jar" \
-            | sha256sum --check -
-
-          cat > "$RUNNER_TEMP/bin/apktool" <<'EOF'
-          #!/usr/bin/env bash
-          exec java -Duser.language=en -jar "${APKTOOL_JAR:?APKTOOL_JAR is not configured}" "$@"
-          EOF
-          chmod 0755 "$RUNNER_TEMP/bin/apktool"
-          {
-            echo "$RUNNER_TEMP/jadx/bin"
-            echo "$RUNNER_TEMP/bin"
-          } >> "$GITHUB_PATH"
-          export PATH="$RUNNER_TEMP/jadx/bin:$RUNNER_TEMP/bin:$PATH"
-
-          java -version
-          jadx --version
-          apktool --version
 
       - name: Install APK Workbench and pinned Play clients
         shell: bash
@@ -88,89 +47,213 @@ jobs:
           python -c "import goopdl, playstore_cli; print('goopdl and playstore-cli imports: OK')"
           apkworkbench --version
 
-      - name: Acquire a known Play-deliverable app and verify its bundle
-        id: acquire
+      - name: Enumerate live Google Play Finance chart
         shell: bash
         run: |
           set -Eeuo pipefail
-          selected_package=""
-          run_id=""
+          apkworkbench discover --category FINANCE --limit 50 --per-category 50 \
+            2>&1 | tee "$RUNNER_TEMP/phase-one-discovery.log"
+          test -s "$APKWORKBENCH_WORKSPACE/database/google_play_discovery.csv"
 
-          for package_id in com.roleplai.app app.bitbear.tav; do
-            log_file="$RUNNER_TEMP/play-download-$package_id.log"
-            echo "Attempting exact package acquisition: $package_id"
-            command_status=0
-            apkworkbench download --package "$package_id" > "$log_file" 2>&1 || command_status=$?
-            cat "$log_file"
+      - name: Acquire one downloadable app from the discovered catalogue
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          apkworkbench download --apk-count 1 \
+            2>&1 | tee "$RUNNER_TEMP/phase-one-download.log"
 
-            if [[ "$command_status" -eq 0 ]]; then
-              run_id="$(awk '/^Run ID: / { sub(/^Run ID: /, ""); print; exit }' "$log_file")"
-              if [[ ! "$run_id" =~ ^[0-9a-fA-F-]{36}$ ]]; then
-                echo "Download returned success without a valid run ID." >&2
-                exit 1
-              fi
-              selected_package="$package_id"
-              break
-            fi
+      - name: Validate every downloaded component and the frozen manifest
+        id: validate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cp "$RUNNER_TEMP/phase-one-discovery.log" "$APKWORKBENCH_WORKSPACE/phase-one-discovery.log"
+          cp "$RUNNER_TEMP/phase-one-download.log" "$APKWORKBENCH_WORKSPACE/phase-one-download.log"
 
-            if grep -Eiq 'no downloadable delivery|no Google Play listing|cannot deliver this app' "$log_file"; then
-              echo "This recorded package is currently unavailable to the selected Play device; trying the second recorded package."
-              continue
-            fi
+          python - <<'PY'
+          import csv
+          import hashlib
+          import json
+          import os
+          import re
+          from pathlib import Path
 
-            echo "Google Play acquisition failed for $package_id with exit status $command_status." >&2
-            exit "$command_status"
+          root = Path(os.environ["APKWORKBENCH_WORKSPACE"])
+          download_log = (root / "phase-one-download.log").read_text(encoding="utf-8")
+          match = re.search(r"^Run ID: ([A-Fa-f0-9-]{36})$", download_log, re.MULTILINE)
+          if not match:
+              raise SystemExit("Download command returned no valid run ID")
+          run_id = match.group(1)
+
+          catalog_path = root / "database" / "google_play_discovery.csv"
+          with catalog_path.open(encoding="utf-8", newline="") as handle:
+              discovered = list(csv.DictReader(handle))
+          if not discovered:
+              raise SystemExit("Google Play discovery produced an empty catalogue")
+
+          run_manifest = root / "database" / "run_manifests" / f"run_{run_id}.csv"
+          if not run_manifest.is_file() or run_manifest.stat().st_size == 0:
+              raise SystemExit(f"Frozen acquisition manifest is missing: {run_manifest}")
+          with run_manifest.open(encoding="utf-8", newline="") as handle:
+              manifest_rows = list(csv.DictReader(handle))
+          if not manifest_rows:
+              raise SystemExit("Frozen acquisition manifest contains no APK rows")
+          if any(row.get("source") != "google_play" for row in manifest_rows):
+              raise SystemExit("Frozen manifest contains a non-Google-Play source")
+
+          bundle_manifests = sorted((root / "downloads").glob("*/google-play-bundle.json"))
+          if len(bundle_manifests) != 1:
+              raise SystemExit(f"Expected exactly one acquired bundle manifest, found {len(bundle_manifests)}")
+
+          bundle_path = bundle_manifests[0]
+          bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+          if bundle.get("source") != "google_play" or bundle.get("run_id") != run_id:
+              raise SystemExit("Bundle manifest source/run ID does not match the acquisition")
+          if not bundle.get("files"):
+              raise SystemExit("Bundle manifest contains no downloaded components")
+
+          verified = []
+          apk_count = 0
+          for item in bundle["files"]:
+              name = item["name"]
+              path = bundle_path.parent / name
+              if path.is_symlink() or not path.is_file():
+                  raise SystemExit(f"Downloaded component is missing or unsafe: {path}")
+              size = path.stat().st_size
+              if size <= 0 or size != int(item["size"]):
+                  raise SystemExit(f"Downloaded component has an invalid size: {name}")
+              digest = hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              sha256 = digest.hexdigest()
+              if sha256 != item.get("sha256"):
+                  raise SystemExit(f"Local SHA-256 mismatch: {name}")
+              if not item.get("play_hash_verified"):
+                  raise SystemExit(f"Play-provided hash was not verified: {name}")
+              if item.get("kind") == "apk":
+                  apk_count += 1
+              verified.append({
+                  "name": name,
+                  "kind": item["kind"],
+                  "size": size,
+                  "sha256": sha256,
+                  "play_hash_algorithm": item.get("play_hash_algorithm"),
+                  "play_hash": item.get("play_hash"),
+                  "play_hash_verified": True,
+                  "path": str(path.relative_to(root)),
+              })
+
+          if apk_count < 1 or not any(item["name"] == "base.apk" for item in verified):
+              raise SystemExit("No verified base.apk was acquired")
+          if list((root / "downloads").rglob("*.part")):
+              raise SystemExit("Partial download files remain in the download workspace")
+
+          result = {
+              "phase": 1,
+              "status": "verified",
+              "source": "google_play",
+              "run_id": run_id,
+              "discovered_candidates": len(discovered),
+              "package_id": bundle["package_id"],
+              "version_code": bundle["version_code"],
+              "version_name": bundle["version_name"],
+              "verified_apk_count": apk_count,
+              "verified_component_count": len(verified),
+              "bundle_manifest": str(bundle_path.relative_to(root)),
+              "files": verified,
+          }
+          (root / "phase-one-result.json").write_text(
+              json.dumps(result, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(result, indent=2, sort_keys=True))
+          PY
+          cp "$APKWORKBENCH_WORKSPACE/phase-one-result.json" "$GITHUB_WORKSPACE/phase-one-output/phase-one-result.json"
+          echo "bundle_ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Encrypt the verified bundle for private retrieval
+        if: steps.validate.outputs.bundle_ready == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat > "$RUNNER_TEMP/phase-one-public.pem" <<'PUBKEY'
+          -----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAoGqP0RPwzB84bDiibx8o
+          JnbCc1CS3R4hSysqDZyh8cvYFUOOvyFEkvuyrnRfkDueAGuWwzQkNCRfV2SCt97O
+          YqGw8XIPqOhTkmjayf2Mb2m7FE1n3RdGr3WL62wmk2/siQDhQgeH1dZutwDzMBeE
+          +DmhQhTSQFrLWVQZNa/0s4R4DJJAT6OjET4On1cPkbMst+CHCvUuTFhbTcMnLMH5
+          h9LRjI5gmyCYAcmNgz7LAG1tmnjwyhOnP7zMnWK3iyFVFru/Db+f/pCrtd0Qbm4V
+          XCYoyxiCLa6RNaUf6nMTtmG30VDNanalWUV4easNFWxYDAxQ3rrR+iX01+4tCtSN
+          ymfxqD8xrAh0QPXWKSFw17qPwMUFaNqyay3zXZOiJs1A3ztpSVs7lxS4rjWN/odp
+          RGHRW5dvPDqmyO5OebD3vYZtFZZW0+WJwbY785UgrPIInZyanRr57ztcpbfrLGfh
+          ZgInIV/qCv8orpTUH89pEn57E032oPjvdjzcgRohdwohAgMBAAE=
+          -----END PUBLIC KEY-----
+          PUBKEY
+
+          tar -C "$APKWORKBENCH_WORKSPACE" -czf "$RUNNER_TEMP/phase-one-bundle.tar.gz" \
+            downloads database phase-one-result.json phase-one-discovery.log phase-one-download.log
+
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import padding
+          from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+          runner = Path(os.environ["RUNNER_TEMP"])
+          output_dir = Path(os.environ["GITHUB_WORKSPACE"]) / "phase-one-output"
+          public_key = serialization.load_pem_public_key(
+              (runner / "phase-one-public.pem").read_bytes()
+          )
+          key = os.urandom(32)
+          nonce = os.urandom(12)
+          wrapped_key = public_key.encrypt(
+              key,
+              padding.OAEP(
+                  mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                  algorithm=hashes.SHA256(),
+                  label=None,
+              ),
+          )
+          source = runner / "phase-one-bundle.tar.gz"
+          encrypted = output_dir / "phase-one-bundle.tar.gz.enc"
+          encryptor = Cipher(algorithms.AES(key), modes.GCM(nonce)).encryptor()
+          with source.open("rb") as src, encrypted.open("wb") as dst:
+              dst.write(b"APWBENC1" + nonce)
+              for chunk in iter(lambda: src.read(1024 * 1024), b""):
+                  dst.write(encryptor.update(chunk))
+              dst.write(encryptor.finalize())
+              dst.write(encryptor.tag)
+          (output_dir / "phase-one-bundle.key.enc").write_bytes(wrapped_key)
+          os.chmod(encrypted, 0o600)
+          os.chmod(output_dir / "phase-one-bundle.key.enc", 0o600)
+          print("Private bundle encryption completed; plaintext archive is not uploaded.")
+          PY
+
+      - name: Upload encrypted APK bundle
+        if: steps.validate.outputs.bundle_ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase-one-google-play-private
+          path: phase-one-output/*.enc
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Stage diagnostics for upload
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p phase-one-output/diagnostics
+          for f in "$RUNNER_TEMP"/phase-one-*.log; do
+            if [[ -f "$f" ]]; then cp "$f" phase-one-output/diagnostics/; fi
           done
 
-          if [[ -z "$run_id" ]]; then
-            echo "Neither previously recorded downloadable package could be acquired." >&2
-            exit 1
-          fi
-
-          echo "package_id=$selected_package" >> "$GITHUB_OUTPUT"
-          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          echo "Acquisition produced run $run_id for $selected_package."
-
-      - name: Run JADX and Apktool against one real acquired APK
-        shell: bash
-        env:
-          APKWB_RUN_ID: ${{ steps.acquire.outputs.run_id }}
-          APKWB_PACKAGE_ID: ${{ steps.acquire.outputs.package_id }}
-        run: |
-          set -Eeuo pipefail
-          test -n "$APKWB_RUN_ID"
-          test -n "$APKWB_PACKAGE_ID"
-          apkworkbench decompile --run-id "$APKWB_RUN_ID" --limit 1 2>&1 | tee "$RUNNER_TEMP/decompile.log"
-
-          grep -Eq 'Examined:[[:space:]]+1' "$RUNNER_TEMP/decompile.log"
-          grep -Eq 'Completed:[[:space:]]+1' "$RUNNER_TEMP/decompile.log"
-          grep -Eq 'Failed:[[:space:]]+0' "$RUNNER_TEMP/decompile.log"
-
-          result_root="$APKWORKBENCH_WORKSPACE/results/$APKWB_PACKAGE_ID"
-          jadx_dir="$(find "$result_root" -type d -name jadx -print -quit)"
-          apktool_dir="$(find "$result_root" -type d -name apktool -print -quit)"
-          test -n "$jadx_dir"
-          test -n "$apktool_dir"
-          find "$jadx_dir" -type f -print -quit | grep -q .
-          find "$apktool_dir" -type f -print -quit | grep -q .
-          test -s "$(dirname "$jadx_dir")/jadx.log"
-          test -s "$(dirname "$apktool_dir")/apktool.log"
-
-          echo "LIVE SMOKE TEST PASSED"
-          echo "Google Play supplied a real APK bundle and Workbench verified its bytes."
-          echo "JADX and Apktool both ran as real external binaries and published non-empty outputs."
-          echo "JADX output: $jadx_dir"
-          echo "Apktool output: $apktool_dir"
-
-      - name: Upload sanitized smoke-test evidence
+      - name: Upload diagnostic logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: live-play-jadx-smoke-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/play-download-*.log
-            ${{ runner.temp }}/decompile.log
-            ${{ runner.temp }}/apk-workbench-live-smoke/results/
-            ${{ runner.temp }}/apk-workbench-live-smoke/database/run_manifests/
+          name: phase-one-google-play-diagnostics
+          path: phase-one-output/diagnostics/*
           if-no-files-found: ignore
           retention-days: 7
