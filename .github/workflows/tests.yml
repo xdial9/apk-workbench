@@ -2,7 +2,7 @@ name: tests
 
 on:
   push:
-    branches: ["main", "chatgpt/**", "fix/**", "repair/**"]
+    branches: ["main", "chatgpt/**", "feat/**", "fix/**", "repair/**"]
   pull_request:
 
 jobs:
@@ -21,8 +21,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
-      - name: Validate batch runner syntax
-        run: bash -n scripts/acquire_15000_google_play.sh
+      - name: Validate acquisition runner syntax
+        run: |
+          bash -n scripts/acquire_15000_google_play.sh
+          bash -n scripts/phase_one_google_play.sh
       - name: Run tests
         run: python -m pytest
       - name: Lint
