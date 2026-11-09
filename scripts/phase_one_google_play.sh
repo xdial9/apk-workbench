@@ -4,8 +4,8 @@
 set -Eeuo pipefail
 umask 077
 
-query="${APKWORKBENCH_PHASE1_QUERY:-banking}"
-category="${APKWORKBENCH_PHASE1_CATEGORY:-FINANCE}"
+query="${APKWORKBENCH_PHASE1_QUERY:-file manager}"
+category="${APKWORKBENCH_PHASE1_CATEGORY:-TOOLS}"
 discovery_limit="${APKWORKBENCH_PHASE1_DISCOVERY_LIMIT:-30}"
 apk_count="${APKWORKBENCH_PHASE1_APK_COUNT:-1}"
 
