@@ -219,3 +219,45 @@ def test_discover_rejects_invalid_package_ids_from_packages_file(monkeypatch, tm
     assert result.exit_code != 0
     assert "Invalid Android package ID" in result.output
     assert not (Path(config.get("workspace")) / "database/google_play_discovery.csv").exists()
+
+
+def test_verify_downloads_command_reports_verified_files(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    called = {}
+
+    def fake_verify(workspace, run_id):
+        called["workspace"] = workspace
+        called["run_id"] = run_id
+        return {
+            "status": "verified",
+            "verified_bundles": 1,
+            "apk_components": 2,
+            "obb_components": 1,
+            "total_bytes": 12345,
+            "report_path": str(tmp_path / "phase-one-report.json"),
+            "bundles": [
+                {
+                    "package_id": "com.example.bank",
+                    "version_code": 42,
+                    "apk_components": 2,
+                    "obb_components": 1,
+                    "directory": str(tmp_path / "downloads" / "com.example.bank-42"),
+                }
+            ],
+        }
+
+    monkeypatch.setattr(cli, "Config", lambda: config)
+    monkeypatch.setattr(cli, "verify_google_play_run", fake_verify)
+
+    result = CliRunner().invoke(
+        cli.main, ["verify-downloads", "--run-id", "phase-one-001"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert called == {
+        "workspace": config.get("workspace"),
+        "run_id": "phase-one-001",
+    }
+    assert "Status: VERIFIED" in result.output
+    assert "APK components: 2" in result.output
+    assert "OBB components: 1" in result.output
