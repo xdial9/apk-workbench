@@ -41,6 +41,25 @@ def _doc(package="com.example.app"):
     )
 
 
+def _single_file_plan(payload: bytes) -> tuple[FakePlayFile, gp.PlayBundlePlan]:
+    play_file = FakePlayFile("base.apk", payload)
+    item = gp.PlayFile(
+        name="base.apk",
+        size=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        expected_algorithm="sha256",
+        expected_digest=hashlib.sha256(payload).hexdigest(),
+        kind="apk",
+    )
+    return play_file, gp.PlayBundlePlan(
+        app=gp.PlayApp("com.example.app", "Example App", "Example Developer", "2.4.1", 241),
+        files=(item,),
+        signer_sha256=("a" * 64,),
+        _doc=_doc(),
+        _delivery=object(),
+    )
+
+
 def test_base64url_hash_is_decoded_to_hex():
     raw = hashlib.sha256(b"play hash").digest()
     assert gp._hex_from_b64url(_b64(raw)) == raw.hex()
@@ -132,3 +151,80 @@ def test_download_preserves_and_verifies_base_split_and_obb(monkeypatch, tmp_pat
     assert result.manifest_path.is_file()
     assert len(result.manifest_sha256) == 64
     assert (result.directory / "google-play-bundle.json").is_file()
+
+
+
+def test_download_retries_and_quarantines_integrity_failure_and_partial_file(monkeypatch, tmp_path):
+    expected = b"complete APK bytes"
+    play_file, plan = _single_file_plan(expected)
+    play_files_calls = 0
+
+    def list_files(_package, _delivery):
+        nonlocal play_files_calls
+        play_files_calls += 1
+        return [play_file]
+
+    monkeypatch.setattr(gp.play_download, "play_files", list_files)
+    fetch_attempts = 0
+
+    class FakeDownloader:
+        def __init__(self, _delivery):
+            pass
+
+        def fetch(self, item, directory):
+            nonlocal fetch_attempts
+            fetch_attempts += 1
+            if fetch_attempts == 1:
+                (directory / f"{item.name}.part").write_bytes(b"partial transfer")
+                raise OSError("connection interrupted")
+            if fetch_attempts == 2:
+                (directory / item.name).write_bytes(b"truncated APK")
+                return True
+            (directory / item.name).write_bytes(expected)
+            return True
+
+    monkeypatch.setattr(gp.play_download, "Downloader", FakeDownloader)
+    result = gp.GooglePlaySource(retry_backoff_seconds=0).download(
+        plan, workspace=tmp_path, run_id="phase-one-test"
+    )
+
+    assert play_files_calls == 1
+    assert fetch_attempts == 3
+    assert (result.directory / "base.apk").read_bytes() == expected
+    quarantined = sorted((result.directory / ".quarantine").iterdir())
+    assert {path.read_bytes() for path in quarantined} == {
+        b"partial transfer",
+        b"truncated APK",
+    }
+    metadata = __import__("json").loads(result.manifest_path.read_text(encoding="utf-8"))
+    assert len(metadata["quarantined_files"]) == 2
+    assert metadata["files"][0]["play_hash_verified"] is True
+
+
+def test_download_reuses_an_existing_verified_component(monkeypatch, tmp_path):
+    expected = b"already verified"
+    play_file, plan = _single_file_plan(expected)
+    monkeypatch.setattr(gp.play_download, "play_files", lambda _package, _delivery: [play_file])
+    fetch_calls = 0
+
+    class FakeDownloader:
+        def __init__(self, _delivery):
+            pass
+
+        def fetch(self, _item, _directory):
+            nonlocal fetch_calls
+            fetch_calls += 1
+            raise AssertionError("a verified existing component must not be fetched again")
+
+    monkeypatch.setattr(gp.play_download, "Downloader", FakeDownloader)
+    directory = tmp_path / "downloads" / "com.example.app-241"
+    directory.mkdir(parents=True)
+    (directory / "base.apk").write_bytes(expected)
+
+    result = gp.GooglePlaySource(retry_backoff_seconds=0).download(
+        plan, workspace=tmp_path, run_id="phase-one-resume"
+    )
+
+    assert fetch_calls == 0
+    assert (result.directory / "base.apk").read_bytes() == expected
+    assert not (result.directory / ".quarantine").exists()
