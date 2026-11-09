@@ -112,7 +112,7 @@ class GooglePlaySource:
         self,
         *,
         retry_backoff_seconds: float = 1.0,
-        country: str = "US",
+        country: str | None = None,
         arch: str = "arm64",
         profile: str | None = None,
         dispenser_url: str | None = None,
