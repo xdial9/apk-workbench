@@ -35,9 +35,13 @@ def _safe_exception_summary(exc: Exception) -> str:
     if stage in {"auth", "checkin", "toc"}:
         parts.append(f"stage={stage}")
     retry_after = getattr(exc, "retry_after", None)
-    if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool):
-        if math.isfinite(retry_after) and 0 <= retry_after <= 3600:
-            parts.append(f"retry_after={retry_after:g}s")
+    if (
+        isinstance(retry_after, (int, float))
+        and not isinstance(retry_after, bool)
+        and math.isfinite(retry_after)
+        and 0 <= retry_after <= 3600
+    ):
+        parts.append(f"retry_after={retry_after:g}s")
     return "; ".join(parts)
 
 
@@ -74,13 +78,14 @@ class AnonymousGooglePlaySession:
         self,
         *,
         arch: str = "arm64",
-        country: str = "US",
+        country: str | None = None,
         profile: str | None = None,
         dispenser_url: str | None = None,
     ) -> None:
-        country = (country or "US").strip().upper()
-        if not re.fullmatch(r"[A-Z]{2}", country):
-            raise ValueError("country must be a two-letter ISO country code")
+        if country is not None:
+            country = country.strip().upper()
+            if not re.fullmatch(r"[A-Z]{2}", country):
+                raise ValueError("country must be a two-letter ISO country code")
         self.arch = arch
         self.country = country
         self.profile = profile
@@ -107,9 +112,10 @@ class AnonymousGooglePlaySession:
     def _token_options(self) -> dict[str, Any]:
         options: dict[str, Any] = {
             "arch": self.arch,
-            "country": self.country,
             "raise_on_error": True,
         }
+        if self.country:
+            options["country"] = self.country
         if self.profile:
             options["profile"] = self.profile
         if self.dispenser_url:
@@ -146,7 +152,7 @@ class AnonymousGooglePlaySession:
                 "deviceCheckInConsistencyToken": str(
                     auth_data.get("deviceCheckInConsistencyToken") or ""
                 ),
-                "locale": f"en_{self.country}",
+                "locale": f"en_{self.country or 'US'}",
             }
             session = {
                 "authToken": str(auth_data["authToken"]),
