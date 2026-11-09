@@ -51,7 +51,13 @@ def no_account_environment(monkeypatch):
 def test_uses_anonymous_dispenser_session_and_matches_device_headers(monkeypatch):
     payload = _auth_payload()
     monkeypatch.setattr(auth, "PlayApi", FakePlayApi)
-    monkeypatch.setattr(auth.token_auth, "pick_pool_token", lambda **_kwargs: payload)
+    seen_options = {}
+
+    def pick_token(**kwargs):
+        seen_options.update(kwargs)
+        return payload
+
+    monkeypatch.setattr(auth.token_auth, "pick_pool_token", pick_token)
 
     session = auth.AnonymousGooglePlaySession(country="US")
     api = session.new_api()
@@ -66,6 +72,26 @@ def test_uses_anonymous_dispenser_session_and_matches_device_headers(monkeypatch
     }
     assert api.profile.user_agent() == "Android-Finsky/test (api=3,device=test)"
     assert api.profile.props["CellOperator"] == "310260"
+    assert seen_options["country"] == "US"
+
+
+def test_default_anonymous_session_does_not_force_dispenser_country(monkeypatch):
+    payload = _auth_payload()
+    seen_options = {}
+
+    def pick_token(**kwargs):
+        seen_options.update(kwargs)
+        return payload
+
+    monkeypatch.setattr(auth, "PlayApi", FakePlayApi)
+    monkeypatch.setattr(auth.token_auth, "pick_pool_token", pick_token)
+
+    api = auth.AnonymousGooglePlaySession().new_api()
+
+    assert "country" not in seen_options
+    # Preserve the established English/US Play catalogue locale without
+    # rewriting each anonymous device profile's registered country.
+    assert api.device["locale"] == "en_US"
 
 
 def test_401_replaces_the_rejected_anonymous_token(monkeypatch):
