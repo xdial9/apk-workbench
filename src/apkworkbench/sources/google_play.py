@@ -320,7 +320,7 @@ class GooglePlaySource:
             if component_path.exists():
                 try:
                     _verify_downloaded_component(component_path, item)
-                except GooglePlayError as exc:
+                except (GooglePlayError, OSError) as exc:
                     quarantined = _quarantine_download_component(
                         component_path, bundle_directory=directory, run_id=run_id, attempt=0
                     )
@@ -480,7 +480,11 @@ def _quarantine_download_component(
     if quarantine_directory.is_symlink():
         raise GooglePlayError(f"Refusing symlinked quarantine directory: {quarantine_directory}")
     quarantine_directory.mkdir(parents=True, exist_ok=True)
-    safe_run_id = re.sub(r"[^A-Za-z0-9_.-]", "_", run_id)[:64] or "run"
+    safe_run_id = "".join(
+        character if character in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
+        else "_"
+        for character in run_id
+    )[:64] or "run"
     target = quarantine_directory / (
         f"{safe_run_id}-attempt-{attempt:02d}-{path.name}.quarantined"
     )
