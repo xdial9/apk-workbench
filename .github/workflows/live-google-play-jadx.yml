@@ -1,9 +1,7 @@
 name: Phase 1 — Live Google Play enumeration and APK acquisition
 
+# Manual experiment only; GitHub-hosted runners are receiving profile_rejected.
 on:
-  push:
-    branches:
-      - feat/anonymous-google-play-session
   workflow_dispatch:
 
 permissions:
