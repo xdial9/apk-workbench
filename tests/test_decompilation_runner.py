@@ -285,6 +285,34 @@ def test_timeout_logs_and_terminates_process_group(monkeypatch, tmp_path):
     assert b"TIMEOUT AFTER: 30 seconds" in contents
 
 
+def test_timeout_with_usable_partial_output_is_published_for_analysis(monkeypatch, tmp_path):
+    runner, database, digest, _ = make_runner(tmp_path)
+
+    class TimedOut(FakeProcess):
+        def wait(self, timeout=None):
+            raise subprocess.TimeoutExpired(["apktool"], timeout)
+
+    def spawn(command, **kwargs):
+        output = output_path(command)
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "AndroidManifest.xml").write_text(
+            "<manifest />", encoding="utf-8"
+        )
+        kwargs["stdout"].write(b"partial decode before timeout\n")
+        return TimedOut()
+
+    monkeypatch.setattr(subprocess, "Popen", spawn)
+    monkeypatch.setattr(runner, "_terminate_process_tree", lambda _process: None)
+
+    summary = runner.run()
+
+    assert summary.failed == 0
+    assert summary.partial == 1
+    state = database.read_processing_status()[digest]
+    assert state["apktool_status"] == "partial"
+    output = tmp_path / "results/org.example.app/7" / digest / "apktool"
+    assert (output / "AndroidManifest.xml").is_file()
+
 def test_download_history_cannot_escape_workspace(monkeypatch, tmp_path):
     runner, database, digest, _ = make_runner(tmp_path)
     outside = tmp_path / "outside.apk"
