@@ -450,7 +450,7 @@ def download(apk_count: int | None, package_id: str | None) -> None:
 @click.option(
     "--force",
     is_flag=True,
-    help="Re-run decompilation even when both tools already have usable output.",
+    help="Re-run Apktool even when usable decoded output already exists.",
 )
 @click.option(
     "--run-id",
@@ -460,20 +460,19 @@ def download(apk_count: int | None, package_id: str | None) -> None:
 )
 @_workspace_locked
 def decompile(limit: int, force: bool, run_id: str | None) -> None:
-    """Run JADX and Apktool sequentially against verified acquired APKs."""
+    """Run Apktool against verified acquired APKs."""
     config = Config()
     logger = setup_logging(config)
     database = WorkspaceDatabase(config.get("workspace"))
     runner = DecompilationRunner(
         database,
         workspace=config.get("workspace"),
-        jadx_executable=str(config.get("tools.jadx", "jadx")),
         apktool_executable=str(config.get("tools.apktool", "apktool")),
         timeout_seconds=int(config.get("decompilation.timeout_seconds", 3600)),
         logger=logger,
     )
     click.echo(BANNER)
-    click.echo("Starting sequential decompilation; each APK is SHA-256 checked first.")
+    click.echo("Starting Apktool decoding; each APK is SHA-256 checked first.")
     try:
         summary = runner.run(limit=limit or None, force=force, run_id=run_id)
     except (DatabaseError, OSError, ValueError) as exc:
@@ -486,7 +485,6 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
         click.echo(f"  Run ID: {run_id}")
     click.echo(f"  Examined: {summary.examined}")
     click.echo(f"  Completed: {summary.completed}")
-    click.echo(f"  Completed with partial JADX output: {summary.partial}")
     click.echo(f"  Failed: {summary.failed}")
     click.echo(f"  Already complete / skipped: {summary.skipped}")
     if summary.failed:
@@ -514,7 +512,7 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
 )
 @_workspace_locked
 def analyze(limit: int, force: bool, run_id: str | None) -> None:
-    """Scan usable full or partial decompilations and retain verified findings."""
+    """Scan Apktool-decoded output and retain verified findings."""
     config = Config()
     logger = setup_logging(config)
     database = WorkspaceDatabase(config.get("workspace"))
@@ -595,24 +593,19 @@ def status() -> None:
         raise click.exceptions.Exit(1) from exc
 
     total = len(history)
-    jadx_ok = sum(1 for row in processing.values() if row.get("jadx_status") == "success")
     apktool_ok = sum(1 for row in processing.values() if row.get("apktool_status") == "success")
     scan_ok = sum(1 for row in processing.values() if row.get("scan_status") == "success")
-    decompile_failed = sum(
-        1 for row in processing.values()
-        if row.get("jadx_status") == "failed" or row.get("apktool_status") == "failed"
-    )
+    decompile_failed = sum(1 for row in processing.values() if row.get("apktool_status") == "failed")
     scan_failed = sum(1 for row in processing.values() if row.get("scan_status") == "failed")
     click.echo(BANNER)
     click.echo("WORKSPACE STATUS")
     click.echo(f"  Unique acquired APK binaries: {total}")
-    click.echo(f"  JADX complete: {jadx_ok}")
-    click.echo(f"  Apktool complete: {apktool_ok}")
-    click.echo(f"  Fully decompiled: {sum(1 for row in processing.values() if row.get('jadx_status') == 'success' and row.get('apktool_status') == 'success')}")
+    click.echo(f"  Apktool decoded: {apktool_ok}")
     click.echo(f"  TruffleHog scans complete: {scan_ok}")
-    click.echo(f"  Decompilation failures: {decompile_failed}")
+    click.echo(f"  Apktool failures: {decompile_failed}")
     click.echo(f"  Scan failures: {scan_failed}")
     click.echo(f"  Workspace: {config.get('workspace')}")
+
 
 
 @main.command()
