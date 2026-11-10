@@ -130,6 +130,57 @@ def _plan_digest(plan) -> str:
     ).hexdigest()
 
 
+
+def _count_usable_apktool_outputs(workspace: str | Path, run_id: str) -> int:
+    """Count run-scoped success or partial Apktool outputs safe for TruffleHog."""
+    database = WorkspaceDatabase(workspace)
+    manifest = database.read_manifest(run_id)
+    history = database.read_download_history()
+    statuses = database.read_processing_status()
+    history_by_hash = {
+        row.get("sha256", "").lower(): row for row in history if row.get("sha256")
+    }
+    root = Path(workspace).expanduser().resolve()
+    results_root = root / "results"
+    if results_root.is_symlink() or not results_root.is_dir():
+        return 0
+    results_root = results_root.resolve(strict=True)
+
+    count = 0
+    for selected in manifest:
+        digest = str(selected.get("sha256", "")).lower()
+        package_id = str(selected.get("package_id", ""))
+        version_code = str(selected.get("version_code", ""))
+        acquired = history_by_hash.get(digest)
+        state = statuses.get(digest, {})
+        if (
+            state.get("apktool_status") not in {"success", "partial"}
+            or acquired is None
+            or acquired.get("run_id") != run_id
+            or acquired.get("source") != selected.get("source")
+            or acquired.get("package_id") != package_id
+            or str(acquired.get("version_code", "")) != version_code
+            or not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id)
+            or not version_code.isdigit()
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
+            continue
+
+        package_root = results_root / package_id
+        version_root = package_root / version_code
+        artifact_root = version_root / digest
+        output = artifact_root / "apktool"
+        if any(path.is_symlink() for path in (package_root, version_root, artifact_root, output)):
+            continue
+        try:
+            output.resolve(strict=True).relative_to(results_root)
+        except (OSError, ValueError):
+            continue
+        if DecompilationRunner._has_usable_output(output):
+            count += 1
+    return count
+
+
 @click.group()
 @click.version_option(__version__, prog_name="apkworkbench")
 def main() -> None:
@@ -524,6 +575,7 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
     click.echo(f"  Examined: {summary.examined}")
     click.echo(f"  Completed: {summary.completed}")
     click.echo(f"  Failed: {summary.failed}")
+    click.echo(f"  Partial output saved: {summary.partial}")
     click.echo(f"  Already complete / skipped: {summary.skipped}")
     if summary.failed:
         raise click.exceptions.Exit(1)
@@ -694,17 +746,51 @@ def run(
                 stages_with_issues.append(f"{stage_name}_missing_run_manifest")
                 break
             kwargs["run_id"] = run_id
+        if stage_name == "analyze":
+            usable_outputs = _count_usable_apktool_outputs(Config().get("workspace"), run_id)
+            if usable_outputs == 0:
+                click.echo(
+                    "No usable Apktool output was saved for this run. TruffleHog will be skipped; "
+                    "reporting and reconciliation will continue."
+                )
+                stages_with_issues.append("no_usable_apktool_output")
+                continue
+            click.echo(
+                f"Starting TruffleHog for {usable_outputs} APK(s) with saved Apktool output "
+                "(complete or partial)."
+            )
         try:
             context.invoke(command, **kwargs)
         except click.exceptions.Exit as exc:
             if exc.exit_code:
                 stages_with_issues.append(stage_name)
                 click.echo(f"Stage {stage_name} ended with exit code {exc.exit_code}.")
-                if stage_name in {"download", "decompile", "analyze"}:
-                    click.echo(
-                        "Stopping the pipeline here. Downstream stages will not run "
-                        "until this stage completes successfully."
+                if stage_name == "decompile":
+                    usable_outputs = _count_usable_apktool_outputs(
+                        Config().get("workspace"), context.meta.get("apkworkbench_run_id", "")
                     )
+                    if usable_outputs:
+                        click.echo(
+                            f"{usable_outputs} APK(s) have saved usable Apktool output. "
+                            "Continuing to TruffleHog for those artifacts; failed APKs remain recorded."
+                        )
+                    else:
+                        click.echo(
+                            "No usable Apktool output exists. TruffleHog will be skipped; "
+                            "reporting and reconciliation will continue."
+                        )
+                    continue
+                if stage_name == "analyze":
+                    click.echo(
+                        "TruffleHog completed its per-APK pass with failures. "
+                        "Continuing to reports and reconciliation for saved results."
+                    )
+                    continue
+                if stage_name == "download":
+                    click.echo("Download stage failed. Stopping before decompilation and analysis.")
+                    break
+                if stage_name == "report":
+                    click.echo("Report generation failed; see the report log.")
                     break
         if stage_name == "download":
             run_id = context.meta.get("apkworkbench_run_id")
@@ -749,6 +835,11 @@ def run(
             total = int(reconciliation["total"])
             complete = int(reconciliation["complete"])
             click.echo(f"  Final accounting: {complete}/{total} artifacts complete.")
+            if reconciliation["counts"].get("complete_with_warnings", 0):
+                click.echo(
+                    f"  Completed after partial Apktool output: "
+                    f"{reconciliation['counts']['complete_with_warnings']} artifact(s)."
+                )
             if complete != total:
                 stages_with_issues.append("reconciliation")
 
