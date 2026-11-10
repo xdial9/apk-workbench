@@ -239,21 +239,24 @@ def test_zero_exit_without_usable_output_fails(monkeypatch, tmp_path):
     assert "no usable output" in state["error"]
 
 
-def test_apktool_exit_code_three_is_not_partial_success(monkeypatch, tmp_path):
+def test_apktool_nonzero_exit_with_output_is_preserved_as_partial(monkeypatch, tmp_path):
     runner, database, digest, _ = make_runner(tmp_path)
 
     def nonzero(command, **kwargs):
-        successful_tool(command, kwargs, "decoded but nonzero")
-        return FakeProcess(3)
+        successful_tool(command, kwargs, "partially decoded output")
+        return FakeProcess(1)
 
     monkeypatch.setattr(subprocess, "Popen", nonzero)
     summary = runner.run()
 
-    assert summary.failed == 1
+    assert summary.failed == 0
+    assert summary.partial == 1
     state = database.read_processing_status()[digest]
-    assert state["apktool_status"] == "failed"
+    assert state["apktool_status"] == "partial"
     assert state["jadx_status"] == "not_used"
-
+    assert "partial output" in state["error"].lower()
+    output = tmp_path / "results/org.example.app/7" / digest / "apktool"
+    assert (output / "AndroidManifest.xml").is_file()
 
 def test_timeout_logs_and_terminates_process_group(monkeypatch, tmp_path):
     runner = make_runner(tmp_path)[0]
