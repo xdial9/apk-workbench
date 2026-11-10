@@ -24,7 +24,6 @@ analysis:
 tools:
   playstore_cli: playstore-cli
   java: java
-  jadx: jadx
   apktool: apktool
   trufflehog: trufflehog
 
@@ -59,13 +58,15 @@ The adapter reads the upstream client's local account, device, and session files
 
 ## Other tools
 
+Apktool is the sole active decompiler. JADX is no longer an installed runtime dependency or a required configuration key. The legacy `jadx_status` processing column remains for existing workspace compatibility.
+
+
 | Key | Default | Description |
 |---|---|---|
-| `decompilation.timeout_seconds` | 3600 | Maximum runtime per decompiler process |
+| `decompilation.timeout_seconds` | 3600 | Maximum runtime per Apktool process |
 | `analysis.timeout_seconds` | 7200 | Maximum TruffleHog runtime per APK |
 | `analysis.max_output_bytes` | 536870912 | Maximum scanner output (512 MiB) |
 | `tools.java` | `java` | Java executable |
-| `tools.jadx` | `jadx` | JADX executable |
 | `tools.apktool` | `apktool` | Apktool executable |
 | `tools.trufflehog` | `trufflehog` | TruffleHog executable |
 | `logging.level` | `INFO` | Python logger level |
