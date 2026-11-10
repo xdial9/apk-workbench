@@ -50,7 +50,6 @@ class Config:
             "tools": {
                 "playstore_cli": "playstore-cli",
                 "java": "java",
-                "jadx": "jadx",
                 "apktool": "apktool",
                 "trufflehog": "trufflehog",
             },
