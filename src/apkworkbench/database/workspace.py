@@ -302,7 +302,7 @@ class WorkspaceDatabase:
                     outcome = "decompilation_failed"
                 elif "running" in {apktool, scan}:
                     outcome = "interrupted_or_running"
-                elif apktool == "success":
+                elif apktool in {"success", "partial"}:
                     if scan == "failed":
                         outcome = "analysis_failed"
                     elif scan == "success":
@@ -330,9 +330,13 @@ class WorkspaceDatabase:
                                 "findings file is missing or unsafe."
                             )
                         else:
-                            outcome = "complete"
+                            outcome = "complete_with_warnings" if apktool == "partial" else "complete"
                     else:
-                        outcome = "awaiting_analysis"
+                        outcome = (
+                            "awaiting_analysis_partial_decompilation"
+                            if apktool == "partial"
+                            else "awaiting_analysis"
+                        )
                 else:
                     outcome = "pending_decompilation"
                 detail = detail or state.get("error", "")
@@ -351,7 +355,7 @@ class WorkspaceDatabase:
         return {
             "run_id": run_id,
             "total": len(manifest),
-            "complete": counts.get("complete", 0),
+            "complete": counts.get("complete", 0) + counts.get("complete_with_warnings", 0),
             "counts": dict(sorted(counts.items())),
             "items": items,
         }
