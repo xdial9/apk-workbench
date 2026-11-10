@@ -118,7 +118,6 @@ class ReportGenerator:
             f"<dt>Downloaded</dt><dd>{html.escape(str(artifact['downloaded_at']))}</dd>",
             "</dl>",
             "<h2>Processing status</h2><ul>",
-            f"<li>JADX: {html.escape(str(status.get('jadx_status', 'pending')))}</li>",
             f"<li>Apktool: {html.escape(str(status.get('apktool_status', 'pending')))}</li>",
             f"<li>TruffleHog: {html.escape(str(status.get('scan_status', 'pending')))}</li>",
             "</ul>",
