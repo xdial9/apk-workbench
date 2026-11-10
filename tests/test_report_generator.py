@@ -35,7 +35,7 @@ def setup_workspace(tmp_path: Path):
             "sha256": digest,
             "package_id": "org.example.app",
             "version_code": "12",
-            "jadx_status": "success",
+            "jadx_status": "not_used",
             "apktool_status": "success",
             "scan_status": "success",
             "error": "",
@@ -83,7 +83,7 @@ def test_generates_json_and_html_with_complete_original_findings(tmp_path):
 
     parsed = json.loads(report_json)
     assert parsed["artifact"]["app_name"] == "Example <App>"
-    assert parsed["processing"]["jadx_status"] == "success"
+    assert parsed["processing"]["jadx_status"] == "not_used"
     assert parsed["analysis"]["verification"] == "enabled"
     assert parsed["findings"][0]["Raw"] == "MUST_NOT_APPEAR_IN_REPORTS"
     assert parsed["findings"][0]["ExtraData"]["credential"] == "MUST_NOT_APPEAR_IN_REPORTS"
