@@ -67,7 +67,7 @@ def add_processing(
     database: WorkspaceDatabase,
     selected: dict[str, object],
     *,
-    jadx: str = "pending",
+    jadx: str = "not_used",
     apktool: str = "pending",
     scan: str = "pending",
     error: str = "",
@@ -114,11 +114,11 @@ def test_reconcile_run_accounts_for_every_manifest_entry(tmp_path):
 
     # Decompilation failure.
     add_history(database, selected[5])
-    add_processing(database, selected[5], jadx="failed", error="JADX exit 9")
+    add_processing(database, selected[5], apktool="failed", error="Apktool exit 9")
 
     # Interrupted or currently running stage.
     add_history(database, selected[6])
-    add_processing(database, selected[6], jadx="running")
+    add_processing(database, selected[6], apktool="running")
 
     # Analysis failure.
     add_history(database, selected[7])
@@ -196,7 +196,7 @@ def test_manifest_reader_rejects_package_path_injection(tmp_path):
         database.read_manifest(RUN_ID)
 
 
-def test_reconcile_preserves_partial_decompilation_warning_after_analysis(tmp_path):
+def test_reconcile_ignores_legacy_jadx_status_after_apktool_completion(tmp_path):
     database = WorkspaceDatabase(tmp_path)
     awaiting = manifest_row(11)
     complete = manifest_row(12)
@@ -205,19 +205,19 @@ def test_reconcile_preserves_partial_decompilation_warning_after_analysis(tmp_pa
     add_processing(
         database,
         awaiting,
-        jadx="partial",
+        jadx="failed",
         apktool="success",
         scan="pending",
-        error="JADX completed with errors; partial output retained.",
+        error="Legacy JADX status is ignored by Apktool-only processing.",
     )
     add_history(database, complete)
     add_processing(
         database,
         complete,
-        jadx="partial",
+        jadx="failed",
         apktool="success",
         scan="success",
-        error="JADX completed with errors; partial output retained.",
+        error="Legacy JADX status is ignored by Apktool-only processing.",
     )
     findings = (
         tmp_path / "results" / complete["package_id"] / "1"
@@ -228,8 +228,8 @@ def test_reconcile_preserves_partial_decompilation_warning_after_analysis(tmp_pa
 
     result = database.reconcile_run(RUN_ID)
 
-    assert result["complete"] == 0
+    assert result["complete"] == 1
     assert result["counts"] == {
-        "awaiting_analysis_with_decompilation_warnings": 1,
-        "complete_with_decompilation_warnings": 1,
+        "awaiting_analysis": 1,
+        "complete": 1,
     }
