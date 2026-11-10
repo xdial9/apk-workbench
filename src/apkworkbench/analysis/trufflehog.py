@@ -557,7 +557,7 @@ class TruffleHogScanner:
                 )
                 continue
             previous = statuses.get(digest, {})
-            if previous.get("jadx_status") not in {"success", "partial"} or previous.get("apktool_status") != "success":
+            if previous.get("apktool_status") != "success":
                 skipped += 1
                 continue
             if (
@@ -587,7 +587,7 @@ class TruffleHogScanner:
                 self._update_status(row, "failed", "Malformed version code or SHA-256 in history.")
                 continue
             base_dir = self.results_root / package_id / version_code / digest
-            directories = [base_dir / "jadx", base_dir / "apktool"]
+            directories = [base_dir / "apktool"]
             self._update_status(row, "running")
             try:
                 findings = self._run_one(package_id, version_code, digest, directories)
