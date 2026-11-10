@@ -21,10 +21,10 @@ Install the external tools from their official instructions:
 
 The workbench does not download or install these tools.
 
-## 2. Clone and install the Google Play branch
+## 2. Clone and install the Apktool-only validation branch
 
 ```bash
-git clone --branch fix/google-play-acquisition https://github.com/xdial9/apk-workbench.git
+git clone --branch fix/apktool-only-trufflehog-pipeline https://github.com/xdial9/apk-workbench.git
 cd apk-workbench
 python3 -m venv .venv
 source .venv/bin/activate
