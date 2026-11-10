@@ -233,3 +233,30 @@ def test_reconcile_ignores_legacy_jadx_status_after_apktool_completion(tmp_path)
         "awaiting_analysis": 1,
         "complete": 1,
     }
+
+
+
+def test_reconcile_counts_scanned_partial_apktool_output_as_complete_with_warning(tmp_path):
+    database = WorkspaceDatabase(tmp_path)
+    selected = manifest_row(20)
+    database.write_manifest(RUN_ID, [selected])
+    add_history(database, selected)
+    add_processing(
+        database,
+        selected,
+        apktool="partial",
+        scan="success",
+        error="Apktool returned non-zero after writing files.",
+    )
+    findings = (
+        tmp_path / "results" / selected["package_id"] / "1"
+        / selected["sha256"] / "trufflehog" / "findings.json"
+    )
+    findings.parent.mkdir(parents=True, exist_ok=True)
+    findings.write_text("[]", encoding="utf-8")
+
+    result = database.reconcile_run(RUN_ID)
+
+    assert result["complete"] == 1
+    assert result["counts"] == {"complete_with_warnings": 1}
+    assert "non-zero" in result["items"][0]["detail"]
