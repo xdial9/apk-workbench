@@ -219,3 +219,83 @@ def test_discover_rejects_invalid_package_ids_from_packages_file(monkeypatch, tm
     assert result.exit_code != 0
     assert "Invalid Android package ID" in result.output
     assert not (Path(config.get("workspace")) / "database/google_play_discovery.csv").exists()
+
+
+def test_verify_downloads_command_reports_verified_files(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    called = {}
+
+    def fake_verify(workspace, run_id):
+        called["workspace"] = workspace
+        called["run_id"] = run_id
+        return {
+            "status": "verified",
+            "verified_bundles": 1,
+            "apk_components": 2,
+            "obb_components": 1,
+            "total_bytes": 12345,
+            "report_path": str(tmp_path / "phase-one-report.json"),
+            "bundles": [{
+                "package_id": "com.example.bank",
+                "version_code": 42,
+                "apk_components": 2,
+                "obb_components": 1,
+                "directory": str(tmp_path / "downloads" / "com.example.bank-42"),
+            }],
+        }
+
+    monkeypatch.setattr(cli, "Config", lambda: config)
+    monkeypatch.setattr(cli, "verify_google_play_run", fake_verify)
+
+    result = CliRunner().invoke(cli.main, ["verify-downloads", "--run-id", "phase-one-001"])
+
+    assert result.exit_code == 0, result.output
+    assert called == {"workspace": config.get("workspace"), "run_id": "phase-one-001"}
+    assert "Status: VERIFIED" in result.output
+    assert "APK components: 2" in result.output
+    assert "OBB components: 1" in result.output
+
+
+def test_full_run_stops_before_trufflehog_when_apktool_fails(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    calls = []
+
+    def fake_download(apk_count, package_id):
+        calls.append("download")
+        __import__("click").get_current_context().meta["apkworkbench_run_id"] = "test-run"
+
+    def fake_decompile(limit, force, run_id):
+        calls.append("decompile")
+        assert run_id == "test-run"
+        raise __import__("click").exceptions.Exit(1)
+
+    def fake_analyze(limit, force, run_id):
+        calls.append("analyze")
+
+    def fake_report():
+        calls.append("report")
+
+    def fake_verify(workspace, run_id):
+        calls.append("verify")
+        assert run_id == "test-run"
+        return {
+            "verified_bundles": 1,
+            "apk_components": 1,
+            "obb_components": 0,
+            "report_path": str(tmp_path / "verify.json"),
+        }
+
+    monkeypatch.setattr(cli, "Config", lambda: config)
+    monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-run"))
+    monkeypatch.setattr(cli, "download", fake_download)
+    monkeypatch.setattr(cli, "decompile", fake_decompile)
+    monkeypatch.setattr(cli, "analyze", fake_analyze)
+    monkeypatch.setattr(cli, "report", fake_report)
+    monkeypatch.setattr(cli, "verify_google_play_run", fake_verify)
+
+    result = CliRunner().invoke(cli.main, ["run", "--apk-count", "1"])
+
+    assert result.exit_code == 1, result.output
+    assert calls == ["download", "verify", "decompile"]
+    assert "Stopping the pipeline here" in result.output
+    assert "ANALYZE" not in result.output
