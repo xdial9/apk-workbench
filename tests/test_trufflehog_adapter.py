@@ -32,18 +32,17 @@ def make_context(results_root, directories=None):
         version_code="12",
         artifact_path=Path("/workspace/app.apk"),
         input_kind="decompiled_apk",
-        capabilities=frozenset({"jadx_output", "apktool_output"}),
+        capabilities=frozenset({"apktool_output"}),
         parsed_facts={
             "decompilation_dirs": directories
-            or [results_root / "org.example.app" / "12" / ("a" * 64) / "jadx",
-                results_root / "org.example.app" / "12" / ("a" * 64) / "apktool"]
+            or [results_root / "org.example.app" / "12" / ("a" * 64) / "apktool"]
         },
     )
 
 
 def test_adapter_maps_complete_secret_finding_to_common_contract(tmp_path):
     results_root = tmp_path / "results"
-    file_path = results_root / "org.example.app" / "12" / ("a" * 64) / "jadx" / "Example.java"
+    file_path = results_root / "org.example.app" / "12" / ("a" * 64) / "apktool" / "smali" / "Example.smali"
     scanner = FakeScanner(
         results_root,
         [{
@@ -70,7 +69,7 @@ def test_adapter_maps_complete_secret_finding_to_common_contract(tmp_path):
     assert finding.raw_data["Raw"] == "original-secret-value"
     assert finding.raw_data["ExtraData"] == {"preserve": True}
     assert len(finding.value_fingerprint) == 64
-    assert finding.evidence[0].source_path.endswith("jadx/Example.java")
+    assert finding.evidence[0].source_path.endswith("apktool/smali/Example.smali")
     assert finding.evidence[0].line_start == 42
     assert finding.verification_state == "tool_verified"
     assert result.diagnostics[0].code == "credential_verification_enabled"
@@ -92,12 +91,12 @@ def test_adapter_rejects_source_path_outside_results_workspace(tmp_path):
         analyzer.analyze(make_context(results_root))
 
 
-def test_adapter_requires_both_decompilation_inputs(tmp_path):
+def test_adapter_requires_exactly_one_apktool_input(tmp_path):
     scanner = FakeScanner(tmp_path / "results", [])
     analyzer = TruffleHogAnalyzer(scanner, tool_version="3.90.0")
-    context = make_context(tmp_path / "results", directories=["only-one"])
+    context = make_context(tmp_path / "results", directories=[])
 
-    with pytest.raises(AnalysisError, match="exactly two decompilation_dirs"):
+    with pytest.raises(AnalysisError, match="exactly one decompilation_dirs"):
         analyzer.analyze(context)
 
 
