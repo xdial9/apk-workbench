@@ -132,6 +132,25 @@ def install_fakes(monkeypatch, output, *, return_code=0, help_text=HELP_TEXT, st
     return calls, process
 
 
+def test_scanner_processes_saved_partial_apktool_output(monkeypatch, tmp_path):
+    database, digest = make_workspace(tmp_path)
+    database.update_processing_status({
+        "sha256": digest,
+        "package_id": "org.example.app",
+        "version_code": "7",
+        "apktool_status": "partial",
+    })
+    calls, _ = install_fakes(monkeypatch, (json.dumps(result_json()) + "\n").encode())
+    scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
+
+    summary = scanner.run()
+
+    assert summary.scanned == 1
+    assert summary.failed == 0
+    assert database.read_processing_status()[digest]["apktool_status"] == "partial"
+    assert any(entry[0] == "scan" for entry in calls)
+
+
 def test_scanner_selects_verified_results_and_persists_complete_original_objects(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
     line = json.dumps(result_json()).encode() + b"\n"
