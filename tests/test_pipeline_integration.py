@@ -55,22 +55,6 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(tmp_path
         }
     )
 
-    jadx = write_executable(
-        tmp_path / "jadx-fixture",
-        textwrap.dedent(
-            """\
-            #!/usr/bin/env python3
-            import pathlib
-            import sys
-
-            args = sys.argv[1:]
-            output = pathlib.Path(args[args.index("--output-dir") + 1])
-            output.mkdir(parents=True, exist_ok=True)
-            (output / "Main.java").write_text("class Main {}", encoding="utf-8")
-            print("JADX integration fixture completed")
-            """,
-        ),
-    )
     apktool = write_executable(
         tmp_path / "apktool-fixture",
         textwrap.dedent(
@@ -104,7 +88,7 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(tmp_path
 
             finding = {
                 "SourceMetadata": {
-                    "Data": {"Filesystem": {"file": "sources/Main.java", "line": 1}}
+                    "Data": {"Filesystem": {"file": "res/AndroidManifest.xml", "line": 1}}
                 },
                 "DetectorType": 2,
                 "DetectorName": "SYNTHETIC_TEST",
@@ -122,13 +106,13 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(tmp_path
     decompilation = DecompilationRunner(
         database,
         workspace=workspace,
-        jadx_executable=str(jadx),
         apktool_executable=str(apktool),
         timeout_seconds=20,
     ).run(run_id=run_id)
     assert decompilation.examined == 1
     assert decompilation.completed == 1
     assert decompilation.failed == 0
+    assert database.read_processing_status()[digest]["jadx_status"] == "not_used"
 
     analysis = TruffleHogScanner(
         database,
