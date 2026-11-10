@@ -497,7 +497,7 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
     type=click.IntRange(min=0),
     default=0,
     show_default=True,
-    help="Maximum number of fully or partially decompiled APKs to scan; 0 scans all eligible downloads.",
+    help="Maximum number of Apktool-decoded APKs to scan; 0 scans all eligible downloads.",
 )
 @click.option(
     "--force",
