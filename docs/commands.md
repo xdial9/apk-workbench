@@ -94,7 +94,7 @@ The runner executes these stages strictly in order:
 5. Only after the Apktool stage returns successfully, run TruffleHog against the saved Apktool output.
 6. Generate reports and reconcile every artifact in the acquisition run.
 
-A failed download, verification, or Apktool stage stops the pipeline before TruffleHog starts. The exact run ID is carried into each processing stage; unrelated workspace downloads are not swept into the run. Logs, decoded output, verification evidence, and reports remain in the configured workspace.
+A failed download or verification stops processing because the acquired inputs are not trusted. Apktool is evaluated per APK: successful outputs and non-zero/terminated runs that leave usable decoded files are saved transactionally; the latter are marked `partial`. TruffleHog scans every saved `success` or `partial` Apktool output and skips APKs with no usable decoded files. If no usable output exists in the run, TruffleHog is skipped. Per-APK failures remain visible in processing status and run reconciliation; reports and reconciliation still run after partial Apktool or TruffleHog failures. The exact run ID is carried into each processing stage; unrelated workspace downloads are not swept into the run. Logs, decoded output, verification evidence, and reports remain in the configured workspace.
 
 For a manual staged run, the equivalent commands are `apkworkbench discover`, `apkworkbench download`, `apkworkbench verify-downloads --run-id RUN_ID`, `apkworkbench decompile --run-id RUN_ID`, `apkworkbench analyze --run-id RUN_ID`, `apkworkbench report`, and finally `apkworkbench reconcile --run-id RUN_ID`.
 
