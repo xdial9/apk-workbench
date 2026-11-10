@@ -14,13 +14,13 @@ The upstream client currently downloads free apps. Paid apps, unavailable versio
 
 ## Install
 
-Supported runtime: Linux, Python 3.10+, Java 11+, JADX, Apktool, and TruffleHog.
+Supported runtime: Linux, Python 3.10+, Java 11+, Apktool, and TruffleHog.
 
 ```bash
 sudo apt update
 sudo apt install -y ca-certificates git curl unzip python3 python3-venv python3-pip default-jre-headless
 
-git clone https://github.com/xdial9/apk-workbench.git
+git clone --branch fix/apktool-only-trufflehog-pipeline https://github.com/xdial9/apk-workbench.git
 cd apk-workbench
 
 python3 -m venv .venv
@@ -29,7 +29,7 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-Install JADX, Apktool, and TruffleHog using their official installation instructions. APK Workbench checks for `playstore-cli`, Java, JADX, Apktool, and TruffleHog with `apkworkbench doctor`.
+Install Apktool and TruffleHog using their official installation instructions. APK Workbench checks for `playstore-cli`, Java, Apktool, and TruffleHog with `apkworkbench doctor`.
 
 ## Authenticate Google Play locally
 
