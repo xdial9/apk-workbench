@@ -1,4 +1,4 @@
-"""Sequential JADX and Apktool execution for verified local APKs."""
+"""Apktool-only decompilation for verified local APKs."""
 from __future__ import annotations
 
 import hashlib
@@ -29,14 +29,13 @@ class DecompilationSummary:
 
 
 class DecompilationRunner:
-    """Re-verify each acquired APK and run both decompilers sequentially."""
+    """Re-verify each acquired APK and decode it with Apktool."""
 
     def __init__(
         self,
         database: WorkspaceDatabase,
         *,
         workspace: str | Path,
-        jadx_executable: str = "jadx",
         apktool_executable: str = "apktool",
         timeout_seconds: int = 3600,
         logger: logging.Logger | None = None,
@@ -47,7 +46,6 @@ class DecompilationRunner:
         self.workspace = Path(workspace).expanduser().resolve()
         self.download_root = self.workspace / "downloads"
         self.results_root = self.workspace / "results"
-        self.jadx_executable = jadx_executable
         self.apktool_executable = apktool_executable
         self.timeout_seconds = timeout_seconds
         self.logger = logger or logging.getLogger("apkworkbench.decompilation")
@@ -313,17 +311,18 @@ class DecompilationRunner:
         self,
         row: dict[str, str],
         *,
-        jadx_status: str,
         apktool_status: str,
         scan_status: str,
         error: str = "",
     ) -> None:
+        # Retain the legacy CSV column so existing workspaces remain readable.
+        # New runs no longer invoke JADX.
         self.database.update_processing_status(
             {
                 "sha256": row["sha256"],
                 "package_id": row.get("package_id", ""),
                 "version_code": row.get("version_code", ""),
-                "jadx_status": jadx_status,
+                "jadx_status": "not_used",
                 "apktool_status": apktool_status,
                 "scan_status": scan_status,
                 "updated_at": utc_now(),
@@ -357,18 +356,18 @@ class DecompilationRunner:
             raise ValueError("limit must be at least 1 when supplied")
         self._validate_workspace_roots()
         self.database.ensure()
-        # Processing is source-neutral; acquisition provenance remains in history.
-        # Artifact path, size, and SHA-256 validation still applies before execution.
         history = self.database.read_download_history()
         statuses = self.database.read_processing_status()
-        examined = completed = failed = skipped = partial = 0
+        examined = completed = failed = skipped = 0
 
         if run_id is None:
             candidate_rows = history
         else:
             manifest_rows = self.database.read_manifest(run_id)
             if any(row.get("source") not in {"google_play", "fdroid"} for row in manifest_rows):
-                raise DecompilationError("Refusing to process a manifest with an unsupported acquisition source.")
+                raise DecompilationError(
+                    "Refusing to process a manifest with an unsupported acquisition source."
+                )
             history_by_hash = {
                 row.get("sha256", "").lower(): row for row in history if row.get("sha256")
             }
@@ -382,7 +381,6 @@ class DecompilationRunner:
                     or acquired.get("package_id") != selected.get("package_id")
                     or str(acquired.get("version_code", "")) != str(selected.get("version_code", ""))
                 ):
-                    # Failed downloads remain in the manifest but never become processing inputs.
                     skipped += 1
                     continue
                 candidate_rows.append(acquired)
@@ -395,15 +393,15 @@ class DecompilationRunner:
                     "Acquisition history contains an invalid SHA-256; item cannot be processed."
                 )
                 continue
+
             previous = statuses.get(digest, {})
             scan_status = previous.get("scan_status") or "pending"
-
             package_id = row.get("package_id", "unknown")
-            version_code = row.get("version_code", "unknown")
+            version_code = str(row.get("version_code", "unknown"))
+
             if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id):
                 self._status_update(
                     row,
-                    jadx_status="failed",
                     apktool_status="failed",
                     scan_status=scan_status,
                     error=f"Unsafe package ID in download history: {package_id!r}",
@@ -413,7 +411,6 @@ class DecompilationRunner:
             if not version_code.isdigit():
                 self._status_update(
                     row,
-                    jadx_status="failed",
                     apktool_status="failed",
                     scan_status=scan_status,
                     error=f"Unsafe version code in download history: {version_code!r}",
@@ -434,32 +431,24 @@ class DecompilationRunner:
                 raise DecompilationError(
                     "Resolved decompilation path escapes results workspace."
                 ) from exc
-            jadx_output = output_root / "jadx"
+
             apktool_output = output_root / "apktool"
             output_root.mkdir(parents=True, exist_ok=True)
 
-            # A recorded success is reusable only when its output is still present and usable.
-            jadx_had_usable_output = (
-                previous.get("jadx_status") in {"success", "partial"}
-                and self._has_usable_output(jadx_output)
-            )
+            # Ignore historical JADX status. Reuse Apktool only when its output is usable.
             apktool_had_usable_output = (
                 previous.get("apktool_status") == "success"
                 and self._has_usable_output(apktool_output)
             )
-            jadx_status = (
-                previous.get("jadx_status", "success")
-                if jadx_had_usable_output else "pending"
-            )
-            apktool_status = "success" if apktool_had_usable_output else "pending"
-            jadx_existing_status = jadx_status
-            apktool_existing_status = apktool_status
-
-            if not force and jadx_had_usable_output and apktool_had_usable_output:
+            if not force and apktool_had_usable_output:
+                self._status_update(
+                    row,
+                    apktool_status="success",
+                    scan_status=scan_status,
+                )
                 skipped += 1
-                if jadx_status == "partial":
-                    partial += 1
                 continue
+
             if limit is not None and examined >= limit:
                 break
             examined += 1
@@ -469,117 +458,61 @@ class DecompilationRunner:
             except (DecompilationError, OSError, ValueError) as exc:
                 self._status_update(
                     row,
-                    jadx_status=jadx_status if jadx_had_usable_output else "failed",
-                    apktool_status=apktool_status if apktool_had_usable_output else "failed",
+                    apktool_status="success" if apktool_had_usable_output else "failed",
                     scan_status=scan_status,
                     error=str(exc),
                 )
                 failed += 1
                 continue
 
-            errors: list[str] = []
-            warnings: list[str] = []
             self._status_update(
                 row,
-                jadx_status=jadx_status,
-                apktool_status=apktool_status,
+                apktool_status="running",
                 scan_status=scan_status,
             )
-
-            stages = (
-                (
-                    "JADX",
-                    self.jadx_executable,
-                    jadx_output,
-                    "jadx",
-                    ["--threads-count", "4", "--output-dir"],
-                ),
-                (
-                    "Apktool",
-                    self.apktool_executable,
-                    apktool_output,
-                    "apktool",
-                    ["d", "--jobs", "4", "--force", "-o"],
-                ),
+            staged_output = apktool_output.with_name(
+                f".{apktool_output.name}.staging-{uuid.uuid4().hex}"
             )
-            for label, executable, destination, tool_name, arguments in stages:
-                current_status = jadx_status if tool_name == "jadx" else apktool_status
-                if not force and current_status in {"success", "partial"}:
-                    continue
+            command = [
+                self.apktool_executable,
+                "d",
+                "--jobs",
+                "4",
+                "--force",
+                "-o",
+                str(staged_output),
+                str(apk_path),
+            ]
 
-                staged_output = destination.with_name(
-                    f".{destination.name}.staging-{uuid.uuid4().hex}"
+            errors: list[str] = []
+            try:
+                stage_status = self._run_tool_transactionally(
+                    command,
+                    staged_output=staged_output,
+                    destination=apktool_output,
+                    log_path=output_root / "apktool.log",
+                    label="Apktool",
                 )
-                command = [executable, *arguments, str(staged_output), str(apk_path)]
-                if tool_name == "jadx":
-                    jadx_status = "running"
-                else:
-                    apktool_status = "running"
-                self._status_update(
-                    row,
-                    jadx_status=jadx_status,
-                    apktool_status=apktool_status,
-                    scan_status=scan_status,
-                    error="; ".join(errors + warnings),
-                )
+            except (DecompilationError, OSError) as exc:
+                errors.append(str(exc))
+                # A failed forced refresh never destroys previous usable output.
+                stage_status = "success" if apktool_had_usable_output else "failed"
 
-                try:
-                    stage_status = self._run_tool_transactionally(
-                        command,
-                        staged_output=staged_output,
-                        destination=destination,
-                        log_path=output_root / f"{tool_name}.log",
-                        label=label,
-                        allow_partial=(tool_name == "jadx"),
-                    )
-                    if stage_status == "partial":
-                        warnings.append(
-                            "JADX completed with decompilation errors (exit code 3); "
-                            "usable partial output was retained."
-                        )
-                except (DecompilationError, OSError) as exc:
-                    errors.append(str(exc))
-                    had_usable_output = (
-                        jadx_had_usable_output if tool_name == "jadx"
-                        else apktool_had_usable_output
-                    )
-                    existing_status = (
-                        jadx_existing_status if tool_name == "jadx"
-                        else apktool_existing_status
-                    )
-                    # A failed forced refresh does not invalidate previous usable output.
-                    stage_status = existing_status if had_usable_output else "failed"
-
-                if tool_name == "jadx":
-                    jadx_status = stage_status
-                else:
-                    apktool_status = stage_status
-                self._status_update(
-                    row,
-                    jadx_status=jadx_status,
-                    apktool_status=apktool_status,
-                    scan_status=scan_status,
-                    error="; ".join(errors + warnings),
-                )
-
-            usable_statuses = {"success", "partial"}
-            if jadx_status in usable_statuses and apktool_status in usable_statuses and not errors:
-                if "partial" in {jadx_status, apktool_status}:
-                    partial += 1
-                    self.logger.warning(
-                        "Decompilation completed with partial JADX output for %s: %s",
-                        package_id,
-                        "; ".join(warnings),
-                    )
-                else:
-                    completed += 1
-                    self.logger.info("Decompilation completed for %s", package_id)
+            self._status_update(
+                row,
+                apktool_status=stage_status,
+                scan_status=scan_status,
+                error="; ".join(errors),
+            )
+            if stage_status == "success" and not errors:
+                completed += 1
+                self.logger.info("Apktool decoding completed for %s", package_id)
             else:
                 failed += 1
                 self.logger.error(
-                    "Decompilation requires attention for %s: %s",
+                    "Apktool decoding requires attention for %s: %s",
                     package_id,
-                    "; ".join(errors) or "one or more tool outputs are unavailable",
+                    "; ".join(errors) or "usable Apktool output is unavailable",
                 )
 
-        return DecompilationSummary(examined, completed, failed, skipped, partial)
+        return DecompilationSummary(examined, completed, failed, skipped, 0)
