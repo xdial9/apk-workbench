@@ -2,7 +2,7 @@
 
 **Target:** 64-bit Debian or Ubuntu  
 **Python:** 3.10+  
-**External tools:** Java 11+, JADX, Apktool, TruffleHog  
+**External tools:** Java 11+, Apktool, TruffleHog  
 **Acquisition:** Google Play Store only
 
 ## 1. System prerequisites
@@ -16,7 +16,6 @@ java -version
 
 Install the external tools from their official instructions:
 
-- JADX: https://github.com/skylot/jadx
 - Apktool: https://github.com/iBotPeaches/Apktool
 - TruffleHog: https://github.com/trufflesecurity/trufflehog
 
@@ -52,7 +51,7 @@ The upstream client communicates with Google's unofficial internal Play API. Goo
 apkworkbench doctor
 ```
 
-The required executables are `playstore-cli`, `java`, `jadx`, `apktool`, and `trufflehog`.
+The required executables are `playstore-cli`, `java`, `apktool`, and `trufflehog`.
 
 ## 5. Discover and acquire a small sample
 
@@ -68,7 +67,7 @@ Or run the full pipeline:
 apkworkbench run --apk-count 3
 ```
 
-A Google Play app can contain a base APK, split APKs, and OBB expansion files. All bundle components are preserved. Each APK component is recorded separately for decompilation and static analysis; OBB files are retained but not decompiled.
+A Google Play app can contain a base APK, split APKs, and OBB expansion files. All bundle components are preserved. Each APK component is recorded separately for Apktool decoding and static analysis; OBB files are retained and integrity-checked but are not passed to Apktool.
 
 ## 6. Development checks
 
