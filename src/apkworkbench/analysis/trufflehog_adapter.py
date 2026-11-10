@@ -40,7 +40,7 @@ class TruffleHogAnalyzer:
             version=tool_version.strip(),
             categories=("secrets",),
             input_kinds=("decompiled_apk",),
-            required_capabilities=("apktool_output",)
+            required_capabilities=("apktool_output",),
             resource_profile=ResourceProfile(
                 timeout_seconds=timeout,
                 max_output_bytes=output_limit,
