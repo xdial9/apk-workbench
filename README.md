@@ -2,7 +2,7 @@
 
 **Google Play Store discovery · verified APK bundle acquisition · decompilation · static analysis · reporting**
 
-APK Workbench is a Linux-native Python CLI for discovering Android apps on Google Play, acquiring their complete Play-delivered APK bundles, verifying each component against hashes supplied by Google Play, and processing APK components with JADX, Apktool, and TruffleHog.
+APK Workbench is a Linux-native Python CLI for discovering Android apps on Google Play, acquiring their complete Play-delivered APK bundles, verifying each component against hashes supplied by Google Play, and decoding APK components with Apktool and scanning the decoded output with TruffleHog.
 
 **Acquisition source policy: Google Play Store only.** There is no alternate repository, mirror, or source fallback.
 
