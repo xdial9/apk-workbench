@@ -296,15 +296,13 @@ class WorkspaceDatabase:
                 outcome = "acquisition_conflict"
                 detail = "Acquisition history does not match the frozen manifest entry."
             else:
-                jadx = state.get("jadx_status", "pending")
                 apktool = state.get("apktool_status", "pending")
                 scan = state.get("scan_status", "pending")
-                if "failed" in {jadx, apktool}:
+                if apktool == "failed":
                     outcome = "decompilation_failed"
-                elif "running" in {jadx, apktool, scan}:
+                elif "running" in {apktool, scan}:
                     outcome = "interrupted_or_running"
-                elif jadx in {"success", "partial"} and apktool == "success":
-                    has_decompilation_warnings = jadx == "partial" or apktool == "partial"
+                elif apktool == "success":
                     if scan == "failed":
                         outcome = "analysis_failed"
                     elif scan == "success":
@@ -332,15 +330,9 @@ class WorkspaceDatabase:
                                 "findings file is missing or unsafe."
                             )
                         else:
-                            outcome = (
-                                "complete_with_decompilation_warnings"
-                                if has_decompilation_warnings else "complete"
-                            )
+                            outcome = "complete"
                     else:
-                        outcome = (
-                            "awaiting_analysis_with_decompilation_warnings"
-                            if has_decompilation_warnings else "awaiting_analysis"
-                        )
+                        outcome = "awaiting_analysis"
                 else:
                     outcome = "pending_decompilation"
                 detail = detail or state.get("error", "")
