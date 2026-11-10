@@ -6,9 +6,9 @@ from apkworkbench.core.config import Config
 def test_unsupported_source_and_tool_overrides_are_discarded(tmp_path):
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
-        "sources:\\n  obsolete_source:\\n    endpoint: https://invalid.example\\n"
-        "tools:\\n  obsolete_tool: old-tool\\n  jadx: /opt/jadx\\n"
-        "  apktool: /opt/apktool-wrapper\\n",
+        "sources:\n  obsolete_source:\n    endpoint: https://invalid.example\n"
+        "tools:\n  obsolete_tool: old-tool\n  jadx: /opt/jadx\n"
+        "  apktool: /opt/apktool-wrapper\n",
         encoding="utf-8",
     )
 
