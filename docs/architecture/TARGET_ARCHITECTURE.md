@@ -116,7 +116,7 @@ ArtifactView exposes artifact_id, sha256, package/version metadata when availabl
 
 **Existing-code mapping**
 
-Extend src/apkworkbench/decompilation/runner.py and existing JADX/Apktool output layout. New modules proposed: analysis/artifacts.py, analysis/parsers/base.py, analysis/parsers/zip_apk.py, analysis/parsers/androguard.py. Existing output remains consumable.
+Extend src/apkworkbench/decompilation/runner.py and the active Apktool output layout. New modules proposed: analysis/artifacts.py, analysis/parsers/base.py, analysis/parsers/zip_apk.py, analysis/parsers/androguard.py. Existing output remains consumable.
 
 **Constraints**
 
@@ -137,7 +137,7 @@ Separate unit, contract, integration and operational tests. CI validates support
 
 **Interfaces and contracts**
 
-Capture toolchain manifest (Python, OS, Java, JADX, Apktool, TruffleHog, MobSF/Androguard versions), package lock hashes, CI run URL, APK fixture SHA-256 and test outcome. External tool adapters expose doctor/health checks.
+Capture toolchain manifest (Python, OS, Java, Apktool, TruffleHog, MobSF/Androguard versions), package lock hashes, CI run URL, APK fixture SHA-256 and test outcome. External tool adapters expose doctor/health checks.
 
 **Existing-code mapping**
 
