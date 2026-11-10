@@ -18,7 +18,7 @@ The upstream client stores a long-lived AAS authentication token under `~/.confi
 
 ## Untrusted inputs
 
-Treat APKs, OBBs, generated source, decompiler output, and scanner output as untrusted. Keep JADX, Apktool, and TruffleHog current. Do not install acquired APKs on a production device.
+Treat APKs, OBBs, generated source, decompiler output, and scanner output as untrusted. Keep Apktool and TruffleHog current. Do not install acquired APKs on a production device.
 
 ## Reporting a vulnerability
 
