@@ -33,7 +33,6 @@ class DependencyDetector:
     CHECKS: ClassVar[dict[str, tuple[bool, list[str]]]] = {
         "playstore-cli": (True, ["--help"]),
         "java": (True, ["-version"]),
-        "jadx": (True, ["--version"]),
         "apktool": (True, ["--version"]),
         "trufflehog": (True, ["--version"]),
     }
