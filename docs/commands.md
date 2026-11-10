@@ -17,10 +17,10 @@ Use a dedicated research Google account. The upstream client uses an unofficial 
 
 | Command | Purpose |
 |---|---|
-| `doctor` | Check Play client, Java, JADX, Apktool, and TruffleHog |
+| `doctor` | Check Play client, Java, Apktool, and TruffleHog |
 | `discover` | Collect package IDs from Google Play charts, categories, searches, or a package file |
 | `download` | Freeze delivery hashes and download complete Play app bundles |
-| `decompile` | Run JADX and Apktool on acquired APK components |
+| `decompile` | Decode acquired APK components with Apktool |
 | `analyze` | Run TruffleHog locally and retain verified findings |
 | `report` | Generate reports containing complete original finding objects |
 | `status` | Summarize acquired APK components and processing state |
@@ -66,7 +66,7 @@ apkworkbench report
 apkworkbench reconcile --run-id RUN_ID
 ```
 
-Each APK component is independently re-hashed before JADX and Apktool. TruffleHog selects verified results with `--results=verified`; findings not explicitly marked verified are rejected.
+Each APK component is independently re-hashed before Apktool decoding. TruffleHog selects verified results with `--results=verified`; findings not explicitly marked verified are rejected.
 
 ## Full pipeline
 
