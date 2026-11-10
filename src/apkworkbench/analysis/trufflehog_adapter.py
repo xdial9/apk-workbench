@@ -40,7 +40,7 @@ class TruffleHogAnalyzer:
             version=tool_version.strip(),
             categories=("secrets",),
             input_kinds=("decompiled_apk",),
-            required_capabilities=("jadx_output", "apktool_output"),
+            required_capabilities=("apktool_output",)
             resource_profile=ResourceProfile(
                 timeout_seconds=timeout,
                 max_output_bytes=output_limit,
@@ -70,11 +70,11 @@ class TruffleHogAnalyzer:
 
     def analyze(self, context: AnalyzerContext) -> AnalyzerResult:
         raw_directories = context.parsed_facts.get("decompilation_dirs")
-        if not isinstance(raw_directories, (list, tuple)) or len(raw_directories) != 2:
+        if not isinstance(raw_directories, (list, tuple)) or len(raw_directories) != 1:
             raise AnalysisError(
-                "TruffleHog requires exactly two decompilation_dirs: JADX and Apktool."
+                "TruffleHog requires exactly one decompilation_dirs entry: Apktool."
             )
-        directories = [Path(value) for value in raw_directories]
+        directories = [Path(raw_directories[0])]
         original_findings = self.scanner._run_one(
             context.package_id,
             context.version_code,
