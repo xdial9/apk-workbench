@@ -161,7 +161,7 @@ def test_apktool_failure_is_recorded_and_no_other_decompiler_is_called(monkeypat
     runner, database, digest, _ = make_runner(tmp_path)
     calls = []
 
-    def failed(command, kwargs):
+    def failed(command, **kwargs):
         calls.append(command[0])
         kwargs["stdout"].write(b"Apktool failed")
         return FakeProcess(9)
@@ -188,7 +188,7 @@ def test_retry_reexecutes_only_apktool(monkeypatch, tmp_path):
 
     calls = []
 
-    def success(command, kwargs):
+    def success(command, **kwargs):
         calls.append(command[0])
         successful_tool(command, kwargs, "retried Apktool output")
         return FakeProcess()
@@ -212,7 +212,7 @@ def test_failed_forced_refresh_preserves_previous_good_output(monkeypatch, tmp_p
     assert runner.run().completed == 1
     output = tmp_path / "results/org.example.app/7" / digest / "apktool/AndroidManifest.xml"
 
-    def failed_refresh(command, kwargs):
+    def failed_refresh(command, **kwargs):
         kwargs["stdout"].write(b"forced refresh failed")
         return FakeProcess(9)
 
@@ -242,7 +242,7 @@ def test_zero_exit_without_usable_output_fails(monkeypatch, tmp_path):
 def test_apktool_exit_code_three_is_not_partial_success(monkeypatch, tmp_path):
     runner, database, digest, _ = make_runner(tmp_path)
 
-    def nonzero(command, kwargs):
+    def nonzero(command, **kwargs):
         successful_tool(command, kwargs, "decoded but nonzero")
         return FakeProcess(3)
 
@@ -264,7 +264,7 @@ def test_timeout_logs_and_terminates_process_group(monkeypatch, tmp_path):
         def wait(self, timeout=None):
             raise subprocess.TimeoutExpired(["apktool"], timeout)
 
-    def spawn(command, kwargs):
+    def spawn(command, **kwargs):
         kwargs["stdout"].write(b"partial output before timeout")
         return TimedOut()
 
@@ -348,7 +348,7 @@ def test_manifest_scope_limits_apktool_to_selected_artifact(monkeypatch, tmp_pat
     runner = DecompilationRunner(database, workspace=tmp_path)
     calls = []
 
-    def spawn(command, kwargs):
+    def spawn(command, **kwargs):
         calls.append(command[-1])
         successful_tool(command, kwargs)
         return FakeProcess()
