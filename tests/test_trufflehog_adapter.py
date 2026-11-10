@@ -94,7 +94,7 @@ def test_adapter_rejects_source_path_outside_results_workspace(tmp_path):
 def test_adapter_requires_exactly_one_apktool_input(tmp_path):
     scanner = FakeScanner(tmp_path / "results", [])
     analyzer = TruffleHogAnalyzer(scanner, tool_version="3.90.0")
-    context = make_context(tmp_path / "results", directories=[])
+    context = make_context(tmp_path / "results", directories=["only-one", "extra"])
 
     with pytest.raises(AnalysisError, match="exactly one decompilation_dirs"):
         analyzer.analyze(context)
