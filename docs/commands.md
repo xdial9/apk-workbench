@@ -20,6 +20,7 @@ Use a dedicated research Google account. The upstream client uses an unofficial 
 | `doctor` | Check Play client, Java, Apktool, and TruffleHog |
 | `discover` | Collect package IDs from Google Play charts, categories, searches, or a package file |
 | `download` | Freeze delivery hashes and download complete Play app bundles |
+| `verify-downloads` | Independently re-hash and verify every file in a completed acquisition run |
 | `decompile` | Decode acquired APK components with Apktool |
 | `analyze` | Run TruffleHog locally and retain verified findings |
 | `report` | Generate reports containing complete original finding objects |
@@ -68,16 +69,36 @@ apkworkbench reconcile --run-id RUN_ID
 
 Each APK component is independently re-hashed before Apktool decoding. TruffleHog selects verified results with `--results=verified`; findings not explicitly marked verified are rejected.
 
-## Full pipeline
+## Full Google Play pipeline
+
+Activate the project environment, then run the end-to-end workflow:
 
 ```bash
-apkworkbench run --apk-count 100
-
-# Resumable 15,000-app target, in batches of 100.
-scripts/acquire_15000_google_play.sh
+source .venv/bin/activate
+bash scripts/full_google_play_pipeline.sh
 ```
 
-The pipeline passes the exact run ID to decompilation and analysis; it does not sweep unrelated workspace downloads into the batch. The 15,000-app helper runs 150 batches of 100 sequentially, stops on the first incomplete batch, and can be rerun because already acquired Google Play package IDs are skipped.
+Defaults are one new free app, the Google Play Tools category, and the search query `file manager`. Set these environment variables to change the scope:
+
+- `APKWORKBENCH_QUERY` (default: `file manager`)
+- `APKWORKBENCH_CATEGORY` (default: `TOOLS`)
+- `APKWORKBENCH_DISCOVERY_LIMIT` (default: `30`)
+- `APKWORKBENCH_APP_COUNT` (default: `1`)
+
+The runner executes these stages strictly in order:
+
+1. Discover apps and save the package catalog.
+2. Download complete APK bundles from Google Play.
+3. Independently verify the immutable run manifest, APK/OBB files, file sizes, local SHA-256 values, Play-provided digests, and bundle identity.
+4. Run Apktool to completion for every APK component in the run and persist decoded output.
+5. Only after the Apktool stage returns successfully, run TruffleHog against the saved Apktool output.
+6. Generate reports and reconcile every artifact in the acquisition run.
+
+A failed download, verification, or Apktool stage stops the pipeline before TruffleHog starts. The exact run ID is carried into each processing stage; unrelated workspace downloads are not swept into the run. Logs, decoded output, verification evidence, and reports remain in the configured workspace.
+
+For a manual staged run, the equivalent commands are `apkworkbench discover`, `apkworkbench download`, `apkworkbench verify-downloads --run-id RUN_ID`, `apkworkbench decompile --run-id RUN_ID`, `apkworkbench analyze --run-id RUN_ID`, `apkworkbench report`, and finally `apkworkbench reconcile --run-id RUN_ID`.
+
+The older 15,000-app acquisition helper remains separate and does not replace this end-to-end workflow.
 
 ## Exit statuses
 
