@@ -430,3 +430,81 @@ def test_process_group_termination_escalates_from_term_to_kill(monkeypatch, tmp_
     runner._terminate_process_tree(process)
     assert signals == [signal.SIGTERM, signal.SIGKILL]
     assert process.calls == 2
+
+
+def test_apktool_runs_even_when_legacy_jadx_status_is_failed(monkeypatch, tmp_path):
+    runner, database, digest, _ = make_runner(tmp_path)
+    database.update_processing_status(
+        {
+            "sha256": digest,
+            "package_id": "org.example.app",
+            "version_code": "7",
+            "jadx_status": "failed",
+            "apktool_status": "pending",
+            "scan_status": "pending",
+            "error": "Historical JADX failure must not block Apktool.",
+        }
+    )
+    calls = []
+
+    def spawn(command, kwargs):
+        calls.append(command[0])
+        successful_tool(command, kwargs, "fresh Apktool output")
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", spawn)
+    summary = runner.run()
+
+    assert summary.completed == 1
+    assert summary.failed == 0
+    assert calls == ["apktool"]
+    state = database.read_processing_status()[digest]
+    assert state["jadx_status"] == "not_used"
+    assert state["apktool_status"] == "success"
+    assert state["error"] == ""
+
+
+def test_malformed_history_digest_is_counted_as_failed(monkeypatch, tmp_path):
+    runner, database, _digest, _ = make_runner(tmp_path)
+    with database.history_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    rows[0]["sha256"] = ""
+    with database.history_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerow(rows[0])
+
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda *args, **kwargs: pytest.fail("invalid record reached Apktool")
+    )
+    summary = runner.run()
+
+    assert summary.examined == 0
+    assert summary.failed == 1
+    assert summary.skipped == 0
+
+
+def test_keyboard_interrupt_terminates_apktool_process_group(monkeypatch, tmp_path):
+    runner = make_runner(tmp_path)[0]
+    log_path = tmp_path / "results/tool.log"
+    terminated = []
+
+    class InterruptedProcess(FakeProcess):
+        def wait(self, timeout=None):
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda *args, **kwargs: InterruptedProcess()
+    )
+    monkeypatch.setattr(
+        runner,
+        "_terminate_process_tree",
+        lambda process: terminated.append(process.pid),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        runner._run_tool(["apktool", "d", "input.apk"], log_path, "Apktool")
+
+    assert terminated == [424242]
+    assert b"INTERRUPTED: process group terminated" in log_path.read_bytes()
+
