@@ -73,3 +73,8 @@ The implementation-ready specifications are in [Target Architecture](architectur
 6. Add milestones when meaningful engineering pivots occur, with commit/PR links and the reason for the change.
 
 **The point is not to make the project look flawless. The point is to make the work real, reproducible and understandable—including how we got things wrong and what we learned.**
+
+
+### Current decompiler selection — November 2026
+
+The active processing pipeline now uses Apktool as its sole decompiler. The selection follows the recorded local APK trial where Apktool completed successfully while JADX produced partial output. Historical source references, existing JADX output directories and the legacy `jadx_status` workspace column are retained for traceability and compatibility; new runs mark that status `not_used`. TruffleHog's current command parameters, verified-result selection and complete original-finding preservation are unchanged by this decompiler selection.
