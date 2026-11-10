@@ -256,7 +256,7 @@ def test_verify_downloads_command_reports_verified_files(monkeypatch, tmp_path):
     assert "OBB components: 1" in result.output
 
 
-def test_full_run_stops_before_trufflehog_when_apktool_fails(monkeypatch, tmp_path):
+def test_full_run_continues_to_trufflehog_when_some_apktool_output_exists(monkeypatch, tmp_path):
     config = _config(tmp_path)
     calls = []
 
@@ -280,10 +280,15 @@ def test_full_run_stops_before_trufflehog_when_apktool_fails(monkeypatch, tmp_pa
         assert run_id == "test-run"
         return {
             "verified_bundles": 1,
-            "apk_components": 1,
+            "apk_components": 2,
             "obb_components": 0,
             "report_path": str(tmp_path / "verify.json"),
         }
+
+    def fake_count(workspace, run_id):
+        calls.append("count")
+        assert run_id == "test-run"
+        return 1
 
     monkeypatch.setattr(cli, "Config", lambda: config)
     monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-run"))
@@ -292,10 +297,20 @@ def test_full_run_stops_before_trufflehog_when_apktool_fails(monkeypatch, tmp_pa
     monkeypatch.setattr(cli, "analyze", fake_analyze)
     monkeypatch.setattr(cli, "report", fake_report)
     monkeypatch.setattr(cli, "verify_google_play_run", fake_verify)
+    monkeypatch.setattr(cli, "_count_usable_apktool_outputs", fake_count)
+    monkeypatch.setattr(
+        WorkspaceDatabase,
+        "reconcile_run",
+        lambda self, run_id: {
+            "total": 1,
+            "complete": 1,
+            "counts": {"complete": 1},
+        },
+    )
 
     result = CliRunner().invoke(cli.main, ["run", "--apk-count", "1"])
 
     assert result.exit_code == 1, result.output
-    assert calls == ["download", "verify", "decompile"]
-    assert "Stopping the pipeline here" in result.output
-    assert "ANALYZE" not in result.output
+    assert calls == ["download", "verify", "decompile", "count", "count", "analyze", "report"]
+    assert "Continuing to TruffleHog for those artifacts" in result.output
+    assert "Starting TruffleHog for 1 APK(s) with saved Apktool output" in result.output
