@@ -273,22 +273,51 @@ class DecompilationRunner:
         label: str,
         allow_partial: bool = False,
     ) -> str:
-        """Run into a temporary sibling and publish only a validated result."""
+        """Run into a temporary sibling and publish only usable, validated output.
+
+        With allow_partial enabled, non-zero exits or terminated processes may still
+        publish useful decoded files. Such output is explicitly marked partial.
+        Empty staging output remains a hard failure.
+        """
         try:
             staged_output.mkdir(mode=0o700)
-            returncode = self._run_tool(
-                command,
-                log_path,
-                label,
-                accepted_return_codes=(0, 3) if allow_partial else (0,),
-            )
-            if returncode == 3:
-                if not self._has_usable_output(staged_output):
-                    raise DecompilationError(
-                        f"{label} exited with status 3 but produced no usable output."
-                    )
+            accepted_codes = tuple(range(-255, 256)) if allow_partial else (0,)
+            try:
+                returncode = self._run_tool(
+                    command,
+                    log_path,
+                    label,
+                    accepted_return_codes=accepted_codes,
+                )
+            except DecompilationError:
+                if not allow_partial or not self._has_usable_output(staged_output):
+                    raise
+                self.logger.warning(
+                    "%s was interrupted or exited abnormally after writing usable output; "
+                    "publishing it as partial for downstream scanning. See %s",
+                    label,
+                    log_path,
+                )
                 self._publish_output(staged_output, destination, label)
                 return "partial"
+
+            if returncode != 0:
+                if not allow_partial or not self._has_usable_output(staged_output):
+                    detail = self._log_tail(log_path)
+                    raise DecompilationError(
+                        f"{label} exited with status {returncode} and produced no usable output. "
+                        f"{detail}"
+                    )
+                self.logger.warning(
+                    "%s exited with status %s after writing usable output; "
+                    "publishing it as partial for downstream scanning. See %s",
+                    label,
+                    returncode,
+                    log_path,
+                )
+                self._publish_output(staged_output, destination, label)
+                return "partial"
+
             self._publish_output(staged_output, destination, label)
             return "success"
         except OSError as exc:
@@ -358,7 +387,7 @@ class DecompilationRunner:
         self.database.ensure()
         history = self.database.read_download_history()
         statuses = self.database.read_processing_status()
-        examined = completed = failed = skipped = 0
+        examined = completed = failed = skipped = partial = 0
 
         if run_id is None:
             candidate_rows = history
@@ -437,13 +466,13 @@ class DecompilationRunner:
 
             # Ignore historical JADX status. Reuse Apktool only when its output is usable.
             apktool_had_usable_output = (
-                previous.get("apktool_status") == "success"
+                previous.get("apktool_status") in {"success", "partial"}
                 and self._has_usable_output(apktool_output)
             )
             if not force and apktool_had_usable_output:
                 self._status_update(
                     row,
-                    apktool_status="success",
+                    apktool_status=previous.get("apktool_status", "success"),
                     scan_status=scan_status,
                 )
                 skipped += 1
@@ -492,12 +521,19 @@ class DecompilationRunner:
                     destination=apktool_output,
                     log_path=output_root / "apktool.log",
                     label="Apktool",
+                    allow_partial=True,
                 )
             except (DecompilationError, OSError) as exc:
                 errors.append(str(exc))
                 # A failed forced refresh never destroys previous usable output.
-                stage_status = "success" if apktool_had_usable_output else "failed"
+                stage_status = previous.get("apktool_status", "success") if apktool_had_usable_output else "failed"
 
+            if stage_status == "partial" and not errors:
+                errors.append(
+                    "Apktool produced usable partial output after a non-zero exit or interruption; "
+                    "the saved output is eligible for TruffleHog. "
+                    f"See {output_root / 'apktool.log'}"
+                )
             self._status_update(
                 row,
                 apktool_status=stage_status,
@@ -507,6 +543,13 @@ class DecompilationRunner:
             if stage_status == "success" and not errors:
                 completed += 1
                 self.logger.info("Apktool decoding completed for %s", package_id)
+            elif stage_status == "partial":
+                partial += 1
+                self.logger.warning(
+                    "Apktool produced partial but usable output for %s: %s",
+                    package_id,
+                    "; ".join(errors),
+                )
             else:
                 failed += 1
                 self.logger.error(
@@ -515,4 +558,4 @@ class DecompilationRunner:
                     "; ".join(errors) or "usable Apktool output is unavailable",
                 )
 
-        return DecompilationSummary(examined, completed, failed, skipped, 0)
+        return DecompilationSummary(examined, completed, failed, skipped, partial)
