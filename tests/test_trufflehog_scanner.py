@@ -41,7 +41,7 @@ def result_json(raw=RAW_SECRET):
         "SourceMetadata": {
             "Data": {
                 "Filesystem": {
-                    "file": "/workspace/results/org.example.app/7/jadx/sources/Config.java",
+                    "file": "/workspace/results/org.example.app/7/apktool/res/values/config.xml",
                     "line": 23,
                 }
             }
@@ -82,7 +82,7 @@ def make_workspace(tmp_path: Path):
             "index_sha256": "f" * 64,
         }
     )
-    for tool in ("jadx", "apktool"):
+    for tool in ("apktool",):
         directory = tmp_path / "results/org.example.app/7" / digest / tool
         directory.mkdir(parents=True)
         (directory / "placeholder.txt").write_text("source code", encoding="utf-8")
@@ -161,8 +161,8 @@ def test_scanner_selects_verified_results_and_persists_complete_original_objects
     assert "--json" in command
     assert "--concurrency=1" in command
     assert "--fail-on-scan-errors" in command
-    assert command[-2].endswith("/jadx")
     assert command[-1].endswith("/apktool")
+    assert not any(arg.endswith("/jadx") for arg in command)
 
     output = tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings.json"
     records = json.loads(output.read_text(encoding="utf-8"))
@@ -463,7 +463,7 @@ def test_scanner_only_processes_artifacts_listed_in_the_selected_run_manifest(mo
             "index_sha256": "f" * 64,
         }
     )
-    for tool in ("jadx", "apktool"):
+    for tool in ("apktool",):
         output = tmp_path / "results/org.example.old/2" / old_digest / tool
         output.mkdir(parents=True)
         (output / "placeholder.txt").write_text("older source", encoding="utf-8")
@@ -516,7 +516,7 @@ def test_scanner_only_processes_artifacts_listed_in_the_selected_run_manifest(mo
 def test_scanner_refuses_empty_decompilation_directories(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
     base = tmp_path / "results/org.example.app/7" / digest
-    for tool in ("jadx", "apktool"):
+    for tool in ("apktool",):
         shutil.rmtree(base / tool)
         (base / tool).mkdir()
     calls, _ = install_fakes(monkeypatch, b"")
@@ -532,10 +532,10 @@ def test_scanner_refuses_empty_decompilation_directories(monkeypatch, tmp_path):
 
 def test_scanner_rejects_symlinks_inside_decompilation_output(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
-    jadx = tmp_path / "results/org.example.app/7" / digest / "jadx"
+    apktool = tmp_path / "results/org.example.app/7" / digest / "apktool"
     outside = tmp_path / "outside-secret.txt"
     outside.write_text("not part of the decompilation", encoding="utf-8")
-    (jadx / "outside.txt").symlink_to(outside)
+    (apktool / "outside.txt").symlink_to(outside)
     calls, _ = install_fakes(monkeypatch, b"")
     scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
 
@@ -578,17 +578,17 @@ def test_scanner_rejects_symlinked_parent_of_decompilation_directories(monkeypat
     ]["error"]
 
 
-def test_scanner_accepts_usable_partial_jadx_output(monkeypatch, tmp_path):
+def test_scanner_ignores_legacy_jadx_status_when_apktool_output_is_usable(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
     database.update_processing_status(
         {
             "sha256": digest,
             "package_id": "org.example.app",
             "version_code": "7",
-            "jadx_status": "partial",
+            "jadx_status": "failed",
             "apktool_status": "success",
             "scan_status": "pending",
-            "error": "JADX completed with decompilation errors (exit code 3).",
+            "error": "Legacy JADX failure does not block Apktool analysis.",
         }
     )
     line = json.dumps(result_json()).encode() + b"\n"
