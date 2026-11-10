@@ -13,18 +13,19 @@ active.
 
 ## Decompilation
 
-JADX and Apktool are launched in separate process groups. Their combined output
-is streamed to per-artifact log files under:
+Each verified APK component is passed to Apktool only. Its combined output is
+streamed to `apktool.log` under:
 
 `results/<package>/<version>/<sha256>/`
 
-- `jadx.log`
-- `apktool.log`
+Apktool writes into a staging directory and publishes output only after a zero
+exit status and validation that usable files exist. A failed forced refresh
+leaves the previous successful `apktool/` output in place. Timeouts, shutdown
+signals and interruptions terminate the process group.
 
-A timeout or shutdown signal terminates the process group. Output is written to
-staging directories and published only after the tool exits successfully and
-produces usable files. A failed forced refresh leaves the previous successful
-output in place.
+The legacy `jadx_status` CSV field remains for existing workspace compatibility;
+new runs set it to `not_used`. Old JADX output directories and logs are left
+untouched but are not required or scanned by the current pipeline.
 
 ## Acquisition retries
 
@@ -87,7 +88,7 @@ manifest or claim that such an item was downloaded.
 ## Verification boundary
 
 The automated test suite includes a local end-to-end test that launches real
-subprocesses using synthetic JADX, Apktool, and TruffleHog executables, then
+subprocesses using synthetic Apktool and TruffleHog executables, then
 generates a report and reconciles the manifest. This verifies subprocess
 wiring and stage integration without external network access or real Android
 tool binaries.
@@ -98,7 +99,7 @@ required before treating the toolchain as production-validated.
 
 ## Google Play bundle acquisition
 
-Google Play deliveries may contain `base.apk`, multiple `split_*.apk` files, and OBB expansion files. The acquisition adapter retains the complete delivery directory and writes `google-play-bundle.json` with component names, sizes, local SHA-256 digests, Play-hash verification status, package/version metadata, and signing-certificate digests. Every APK component is recorded separately in the acquisition history and run manifest so each is independently re-hashed before JADX/Apktool and TruffleHog. OBBs are retained and integrity-checked but are not passed to APK decompilers.
+Google Play deliveries may contain `base.apk`, multiple `split_*.apk` files, and OBB expansion files. The acquisition adapter retains the complete delivery directory and writes `google-play-bundle.json` with component names, sizes, local SHA-256 digests, Play-hash verification status, package/version metadata, and signing-certificate digests. Every APK component is recorded separately in the acquisition history and run manifest so each is independently re-hashed before Apktool and TruffleHog. OBBs are retained and integrity-checked but are not passed to APK decompilers.
 
 The Play client is an unofficial client for Google's internal Play API. Use a dedicated research Google account. The account token remains in the upstream client's private local configuration directory and must never be copied into the workbench, committed, or shared.
 
