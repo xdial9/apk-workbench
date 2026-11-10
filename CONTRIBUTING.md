@@ -39,7 +39,7 @@ python -m pytest
 ruff check .
 ~~~
 
-Tests should use temporary workspaces and mocked HTTP/subprocess boundaries. They must not depend on live Google Play Store access, external APK downloads, or local installations of JADX, Apktool, or TruffleHog.
+Tests should use temporary workspaces and mocked HTTP/subprocess boundaries. They must not depend on live Google Play Store access, external APK downloads, or local installations of Apktool or TruffleHog.
 
 ## Regression-test expectations
 
@@ -52,7 +52,7 @@ Add or update tests for changed behavior. Security-sensitive changes require exp
 - Manifest-scoped processing and cross-run isolation.
 - Filesystem path validation and symlink handling.
 - Subprocess timeouts and sequential execution.
-- TruffleHog no-verification behavior and output limits.
+- TruffleHog verified-result selection, complete original-finding preservation, and output limits.
 - Secret sanitization and report generation.
 
 A run-scoped operation must use its immutable manifest. It must not silently broaden a batch by falling back to unrelated workspace records.
