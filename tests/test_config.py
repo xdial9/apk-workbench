@@ -6,8 +6,9 @@ from apkworkbench.core.config import Config
 def test_unsupported_source_and_tool_overrides_are_discarded(tmp_path):
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
-        "sources:\n  obsolete_source:\n    endpoint: https://invalid.example\n"
-        "tools:\n  obsolete_tool: old-tool\n  jadx: /opt/jadx\n",
+        "sources:\\n  obsolete_source:\\n    endpoint: https://invalid.example\\n"
+        "tools:\\n  obsolete_tool: old-tool\\n  jadx: /opt/jadx\\n"
+        "  apktool: /opt/apktool-wrapper\\n",
         encoding="utf-8",
     )
 
@@ -15,7 +16,8 @@ def test_unsupported_source_and_tool_overrides_are_discarded(tmp_path):
 
     assert config.get("sources") == {"google_play": {"retry_backoff_seconds": 1.0}}
     assert config.get("tools.obsolete_tool") is None
-    assert config.get("tools.jadx") == "/opt/jadx"
+    assert config.get("tools.jadx") is None
+    assert config.get("tools.apktool") == "/opt/apktool-wrapper"
 
 
 def test_default_workspace_is_separate_from_legacy_workspace(tmp_path):
