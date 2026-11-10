@@ -447,7 +447,7 @@ def test_apktool_runs_even_when_legacy_jadx_status_is_failed(monkeypatch, tmp_pa
     )
     calls = []
 
-    def spawn(command, kwargs):
+    def spawn(command, **kwargs):
         calls.append(command[0])
         successful_tool(command, kwargs, "fresh Apktool output")
         return FakeProcess()
