@@ -1,63 +1,38 @@
-# Retry-safe decompilation
+# Retry-safe Apktool decoding
 
 ## Purpose
 
-JADX and Apktool are independent stages for each acquired APK. A failure in one stage must not erase or unnecessarily repeat a successful result from the other stage.
+The active workbench pipeline uses one decompiler for each acquired APK component: Apktool. JADX is not invoked by the current runner or TruffleHog scan stage.
 
 ## Normal retry behavior
 
-The runner reuses a tool result only when both conditions hold:
+The runner reuses an Apktool result only when both conditions hold:
 
-1. The processing database records that tool's status as `success`.
-2. The corresponding output directory exists, is a real directory rather than a symlink, and contains at least one regular file.
+1. The processing database records `apktool_status=success`.
+2. The `apktool/` output directory exists, is a real directory rather than a symlink, and contains at least one regular file.
 
-When both tools satisfy those checks, the artifact is skipped. When only one does, the runner invokes only the other tool. A recorded success with a missing or empty output directory is not trusted; that tool is attempted again.
+When both conditions hold, the artifact is skipped unless `--force` is supplied. A recorded success with a missing or empty output directory is not trusted; Apktool is invoked again.
 
-This makes the two partial states resumable:
-
-| Existing state | Next normal attempt |
-|---|---|
-| JADX succeeded; Apktool failed | Keep JADX output; retry Apktool only |
-| Apktool succeeded; JADX failed | Keep Apktool output; retry JADX only |
-| Both succeeded and both outputs contain files | Skip the artifact |
-| Status says success but output is missing/empty | Retry that tool |
-| Neither tool succeeded | Attempt both sequentially |
+The legacy `jadx_status` CSV column remains in the workspace schema so existing processing databases continue to load. New runs set this field to `not_used`. Historical JADX status values are ignored by the Apktool runner, TruffleHog eligibility check and run reconciliation.
 
 ## Staged output publication
 
-A tool never writes directly over its published output. Each invocation receives a unique temporary sibling directory under the APK's result directory.
+Apktool writes to a unique staging directory beside the final `apktool/` output. The existing published output is retained until the new process exits successfully and the staged directory contains usable files. Publication then replaces the prior directory.
 
-After the tool exits with code zero, the runner verifies that the staging directory contains at least one regular file. Only then does it move the previous published output to a uniquely named backup and atomically move the staged output into place.
+If the process exits nonzero, times out, is interrupted or produces no usable output, the staging directory is removed and a previously successful `apktool/` directory remains untouched. A failed forced refresh is reported as requiring attention without destroying the previous result.
 
-If the tool fails, exits successfully without producing files, or publication fails, the existing published output is retained. If publication fails after the old output has been moved aside, the runner attempts to restore it. A backup is retained and its path reported if rollback itself fails.
+## Files
 
-Temporary staging output is removed after a failed attempt where possible. A backup that cannot be cleaned after a successful publication is logged as a warning; the new output remains published.
+For an artifact at `results/<package>/<version>/<sha256>/`:
 
-## Forced retries
+- `apktool/` — decoded manifest, resources and Smali output.
+- `apktool.log` — combined Apktool stdout/stderr and process exit status.
+- `.apktool.staging-<random-id>/` — transient staged output, removed after completion or failure cleanup.
 
-`apkworkbench decompile --force` intentionally invokes both tools again, even if their current outputs are usable.
+Historical `jadx/` directories and logs are not deleted. They are not read or scanned by the current pipeline.
 
-Forced runs use the same staging and publication process. A failed forced refresh does not invalidate the previously successful output or its `success` status. The command still reports the failed refresh and exits non-zero, so the failure is visible without discarding the last known-good result.
+## Input and process integrity
 
-## Logs and status
+Before invoking Apktool, the runner validates that the acquired APK is a regular non-symlink file inside the configured `downloads/` workspace and independently verifies its recorded size and SHA-256 digest.
 
-JADX and Apktool retain separate logs:
-
-- `<artifact result directory>/jadx.log`
-- `<artifact result directory>/apktool.log`
-
-The processing status represents the last known usable published output for each tool. A failed forced refresh can therefore leave a tool marked `success` while the error field records the unsuccessful refresh; inspect the tool log and command summary when a forced run reports a failure.
-
-The output check is deliberately a basic integrity check (a real directory containing at least one regular file). It does not parse JADX source trees or validate Apktool's decoded manifest/resources semantically.
-
-## Regression coverage
-
-The decompilation test suite covers:
-
-- retrying Apktool without repeating a successful JADX stage;
-- retrying JADX without repeating a successful Apktool stage;
-- retaining the last successful output after a failed forced refresh;
-- refusing to record success when a tool exits zero but creates no output;
-- continuing to enforce the frozen manifest scope and APK digest verification.
-
-The separate subprocess streaming, process-group timeout, and memory-control improvements remain out of scope for this retry-safety change.
+Output roots, staging paths and log targets are checked against symlink and workspace-escape conditions. The runner retains bounded process execution, streamed logs, process-group termination on timeout or interruption, transactional output publication and retry semantics.
