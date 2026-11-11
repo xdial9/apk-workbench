@@ -107,6 +107,34 @@ DOMAIN_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
     r"[A-Za-z]{2,63}(?![A-Za-z0-9_])"
 )
+HTTP_METHOD_RE = re.compile(
+    r"""(?:@|->)?(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\(?\s*["']([^"']+)["']""",
+    re.IGNORECASE,
+)
+ROUTE_RE = re.compile(
+    r"""["']((?:/)(?:api(?:/|$)|v[0-9]+(?:/|$)|graphql(?:/|$)|oauth(?:/|$)|auth(?:/|$)|users?(?:/|$)|accounts?(?:/|$)|tokens?(?:/|$)|payments?(?:/|$)|(?:health|status|login|register)(?:/|$))[^"']*)["']""",
+    re.IGNORECASE,
+)
+RATE_LIMIT_RE = re.compile(
+    r"rate.?limit|retry-after|x-ratelimit|ratelimit-|backoff|exponential.?backoff|too many requests|http.?429|token.?bucket|quota.?exceeded",
+    re.IGNORECASE,
+)
+API_CLIENT_MARKERS = {
+    "OkHttp": (r"okhttp3\.", r"Lokhttp3/", r"OkHttpClient"),
+    "Retrofit": (r"retrofit2\.", r"Lretrofit2/", r"@GET", r"@POST"),
+    "HttpURLConnection": (r"HttpURLConnection", r"openConnection\("),
+    "java.net.URL": (r"Ljava/net/URL;", r"new URL\("),
+    "Volley": (r"com\.android\.volley", r"Lcom/android/volley/"),
+    "WebView": (r"android\.webkit\.WebView", r"Landroid/webkit/WebView;->loadUrl"),
+    "Apache HttpClient": (r"org\.apache\.http", r"Lorg/apache/http/"),
+    "Ktor": (r"io\.ktor\.client", r"Lio/ktor/client/"),
+    "gRPC": (r"io\.grpc", r"Lio/grpc/"),
+    "WebSocket": (r"WebSocket", r"newWebSocket"),
+    "Cronet": (r"org\.chromium\.net", r"Lorg/chromium/net/"),
+}
+API_HEADER_RE = re.compile(
+    r"(?i)\b(accept|content-type|authorization|www-authenticate|x-api-key|x-auth-token|x-request-id|retry-after|x-ratelimit-[a-z0-9-]+|ratelimit-[a-z0-9-]+)\b"
+)
 
 
 def _local_name(tag: str) -> str:
@@ -323,7 +351,11 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
             coverage["network_security_config"] = "referenced_but_not_found"
 
     dependency_evidence: dict[str, list[str]] = {name: [] for name in DEPENDENCY_MARKERS}
-    endpoints: dict[str, dict[str, Any]] = {}
+    api_clients: dict[str, list[dict[str, Any]]] = {name: [] for name in API_CLIENT_MARKERS}
+    api_endpoints: dict[str, dict[str, Any]] = {}
+    api_routes: dict[str, dict[str, Any]] = {}
+    api_headers: dict[str, list[dict[str, Any]]] = {}
+    rate_limit_indicators: list[dict[str, Any]] = []
     scanned_text_bytes = 0
     code_scanned = 0
     for path in files:
@@ -351,19 +383,54 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
             if any(marker.lower() in lowered_path or marker.lower() in lowered_text for marker in markers):
                 dependency_evidence[dependency].append(relative)
 
-        for match in URL_RE.finditer(text):
-            value = match.group(0).rstrip(".,);]}:")
-            if value:
-                endpoints.setdefault(value, {"path": relative, "count": 0, "kind": "url"})
-                endpoints[value]["count"] += 1
-        for match in DOMAIN_RE.finditer(text):
-            value = match.group(0).lower().rstrip(".")
-            if value and not value.endswith((".xml", ".json", ".png", ".jpg", ".smali")):
-                endpoints.setdefault(value, {"path": relative, "count": 0, "kind": "domain"})
-                endpoints[value]["count"] += 1
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            for match in URL_RE.finditer(line):
+                value = match.group(0).rstrip(".,);]}:")
+                if value:
+                    record = api_endpoints.setdefault(value, {
+                        "value": value, "kind": "url", "evidence": [], "occurrences": 0,
+                    })
+                    record["occurrences"] += 1
+                    record["evidence"].append({"path": relative, "line": line_number})
+            for match in HTTP_METHOD_RE.finditer(line):
+                method, route = match.group(1).upper(), match.group(2)
+                record = api_routes.setdefault(route, {
+                    "path": route, "http_method": method, "evidence": [], "occurrences": 0,
+                })
+                record["occurrences"] += 1
+                record["evidence"].append({"path": relative, "line": line_number})
+            for match in ROUTE_RE.finditer(line):
+                route = match.group(1)
+                record = api_routes.setdefault(route, {
+                    "path": route, "http_method": None, "evidence": [], "occurrences": 0,
+                })
+                record["occurrences"] += 1
+                record["evidence"].append({"path": relative, "line": line_number})
+            for match in DOMAIN_RE.finditer(line):
+                value = match.group(0).lower().rstrip(".")
+                if value and not value.endswith((".xml", ".json", ".png", ".jpg", ".smali")):
+                    if not any(value in endpoint for endpoint in api_endpoints):
+                        record = api_endpoints.setdefault(value, {
+                            "value": value, "kind": "domain_candidate", "evidence": [], "occurrences": 0,
+                        })
+                        record["occurrences"] += 1
+                        record["evidence"].append({"path": relative, "line": line_number})
+            for client, patterns in API_CLIENT_MARKERS.items():
+                if any(re.search(pattern, line, re.IGNORECASE) for pattern in patterns):
+                    api_clients[client].append({
+                        "path": relative, "line": line_number, "snippet": line.strip(),
+                    })
+            for header_match in API_HEADER_RE.finditer(line):
+                header = header_match.group(1)
+                api_headers.setdefault(header.lower(), []).append({
+                    "path": relative, "line": line_number,
+                })
+            if RATE_LIMIT_RE.search(line):
+                rate_limit_indicators.append({
+                    "path": relative, "line": line_number, "snippet": line.strip(),
+                })
 
-        if path.suffix.lower() in {".smali", ".xml", ".js", ".java", ".kt", ".json", ".properties", ".html", ".htm"}:
-            for line_number, line in enumerate(text.splitlines(), start=1):
+            if path.suffix.lower() in {".smali", ".xml", ".js", ".java", ".kt", ".json", ".properties", ".html", ".htm"}:
                 for rule_id, category, severity, title, pattern, confidence, rationale in CODE_RULES:
                     if re.search(pattern, line, flags=re.IGNORECASE):
                         findings.append(_finding(
@@ -385,12 +452,21 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
     coverage["dependency_fingerprints"] = "success" if code_scanned else "not_scanned"
     coverage["native_libraries"] = "success" if native_libraries else "not_found"
 
-    for endpoint, metadata in sorted(endpoints.items()):
+    for endpoint, metadata in sorted(api_endpoints.items()):
+        first = metadata["evidence"][0] if metadata["evidence"] else {}
         findings.append(_finding(
-            "endpoint_inventory", "endpoints", "info",
-            f"Network endpoint discovered: {endpoint}",
-            f"Endpoint string appeared {metadata['count']} time(s); no network request was made.",
-            metadata["path"], None, endpoint, 0.99,
+            "api_endpoint_inventory", "api_inventory", "info",
+            f"API/network endpoint candidate: {endpoint}",
+            f"String occurrence count: {metadata['occurrences']}. This endpoint was discovered statically; no request was sent.",
+            str(first.get("path", "")), first.get("line"), endpoint, 0.99,
+        ))
+    for route, metadata in sorted(api_routes.items()):
+        first = metadata["evidence"][0] if metadata["evidence"] else {}
+        findings.append(_finding(
+            "api_route_inventory", "api_inventory", "info",
+            f"API route candidate: {metadata['http_method'] or 'METHOD UNKNOWN'} {route}",
+            f"Route occurrence count: {metadata['occurrences']}. HTTP behavior was not exercised.",
+            str(first.get("path", "")), first.get("line"), route, 0.88,
         ))
     dependencies = [
         {"name": name, "evidence_paths": sorted(set(paths))}
@@ -411,10 +487,22 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
             "resource_and_asset_file_count": len(resource_files),
             "native_libraries": native_libraries,
             "dependencies": dependencies,
-            "endpoints": [
-                {"value": value, **metadata}
-                for value, metadata in sorted(endpoints.items())
+            "endpoints": [metadata for _value, metadata in sorted(api_endpoints.items())],
+            "api_routes": [metadata for _route, metadata in sorted(api_routes.items())],
+            "api_clients": [
+                {"name": name, "call_sites": calls, "call_site_count": len(calls)}
+                for name, calls in sorted(api_clients.items()) if calls
             ],
+            "api_headers": [
+                {"name": name, "evidence": locations}
+                for name, locations in sorted(api_headers.items())
+            ],
+            "rate_limit_indicators": rate_limit_indicators,
+            "server_rate_limit_assessment": {
+                "status": "not_determined_from_static_apk",
+                "meaning": "Client-side strings or retry code cannot establish a server-side API quota or rate limit.",
+                "client_side_indicators_found": bool(rate_limit_indicators),
+            },
         },
         "findings": findings,
         "diagnostics": diagnostics,
@@ -426,7 +514,7 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
         ],
         "metrics": {
             "finding_count": len(findings),
-            "endpoint_count": len(endpoints),
+            "endpoint_count": len(api_endpoints),\n            "api_route_count": len(api_routes),\n            "api_call_site_count": sum(len(items) for items in api_clients.values()),\n            "rate_limit_indicator_count": len(rate_limit_indicators),
             "dependency_fingerprint_count": len(dependencies),
             "native_library_count": len(native_libraries),
         },
@@ -512,7 +600,7 @@ def run_static_surface_analysis(
         package_id = row.get("package_id", "")
         version_code = str(row.get("version_code", ""))
         digest = row.get("sha256", "").lower()
-        if not re.fullmatch(r"[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+", package_id) or not version_code.isdigit():
+        if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id) or not version_code.isdigit():
             summary["failed"] += 1
             summary["artifacts"].append({
                 "package_id": package_id, "version_code": version_code,
