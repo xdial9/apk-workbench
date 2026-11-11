@@ -272,8 +272,17 @@ def test_full_run_continues_to_trufflehog_when_some_apktool_output_exists(monkey
     def fake_analyze(limit, force, run_id):
         calls.append("analyze")
 
-    def fake_report():
+    def fake_surface(database, workspace, *, run_id=None, force=False, progress=None):
+        calls.append("surface")
+        assert run_id == "test-run"
+        return {
+            "completed": 1, "failed": 0, "skipped": 0,
+            "finding_count": 0,
+        }
+
+    def fake_report(run_id=None):
         calls.append("report")
+        assert run_id == "test-run"
 
     def fake_verify(workspace, run_id):
         calls.append("verify")
@@ -295,6 +304,7 @@ def test_full_run_continues_to_trufflehog_when_some_apktool_output_exists(monkey
     monkeypatch.setattr(cli, "download", fake_download)
     monkeypatch.setattr(cli, "decompile", fake_decompile)
     monkeypatch.setattr(cli, "analyze", fake_analyze)
+    monkeypatch.setattr(cli, "run_static_surface_analysis", fake_surface)
     monkeypatch.setattr(cli, "report", fake_report)
     monkeypatch.setattr(cli, "verify_google_play_run", fake_verify)
     monkeypatch.setattr(cli, "_count_usable_apktool_outputs", fake_count)
@@ -311,6 +321,6 @@ def test_full_run_continues_to_trufflehog_when_some_apktool_output_exists(monkey
     result = CliRunner().invoke(cli.main, ["run", "--apk-count", "1"])
 
     assert result.exit_code == 1, result.output
-    assert calls == ["download", "verify", "decompile", "count", "count", "analyze", "report"]
+    assert calls == ["download", "verify", "decompile", "count", "surface", "count", "analyze", "report"]
     assert "Continuing to TruffleHog for those artifacts" in result.output
     assert "Starting TruffleHog for 1 APK(s) with saved Apktool output" in result.output
