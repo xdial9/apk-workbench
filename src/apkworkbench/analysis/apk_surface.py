@@ -693,6 +693,27 @@ def run_static_surface_analysis(
     results_root = results_root.resolve(strict=True)
     results_root.relative_to(root)
 
+    marker_path = None
+    if run_id is not None:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,63}", run_id):
+            raise ValueError("Run ID contains invalid characters.")
+        marker_dir = results_root / "runs" / run_id
+        if any(part.is_symlink() for part in (results_root / "runs", marker_dir)):
+            raise ValueError("Static-analysis run marker path contains a symlink.")
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        marker_dir.resolve(strict=True).relative_to(results_root)
+        marker_path = marker_dir / "static-analysis-run.json"
+        _atomic_write_json(marker_path, {
+            "schema_version": 1,
+            "run_id": run_id,
+            "status": "running",
+            "eligible": 0,
+            "completed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "artifacts": [],
+        })
+
     history = database.read_download_history()
     statuses = database.read_processing_status()
     if run_id is None:
@@ -821,4 +842,21 @@ def run_static_surface_analysis(
             })
             if progress:
                 progress(f"  FAILED: {package_id}: {exc}")
+    if marker_path is not None:
+        marker_status = (
+            "failed" if summary["failed"]
+            else "partial" if summary["skipped"]
+            else "success"
+        )
+        _atomic_write_json(marker_path, {
+            "schema_version": 1,
+            "run_id": run_id,
+            "status": marker_status,
+            "eligible": summary["eligible"],
+            "completed": summary["completed"],
+            "failed": summary["failed"],
+            "skipped": summary["skipped"],
+            "finding_count": summary["finding_count"],
+            "artifacts": summary["artifacts"],
+        })
     return summary
