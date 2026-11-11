@@ -13,8 +13,9 @@ import subprocess
 import time
 import tempfile
 from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from ..database.workspace import WorkspaceDatabase, utc_now
 
