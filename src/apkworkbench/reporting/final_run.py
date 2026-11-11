@@ -127,6 +127,7 @@ def _html_document(payload: dict[str, Any]) -> str:
         parts.append("</tbody></table>")
     dex_methods = api_catalog.get("androguard_external_method_references", [])
     dex_strings = api_catalog.get("androguard_api_related_strings", [])
+    dex_call_graph = api_catalog.get("androguard_internal_call_graph", [])
     permission_usage = api_catalog.get("androguard_permission_api_usage", [])
     parts.append(
         f"<h3>Androguard DEX cross-reference inventory</h3>"
@@ -160,7 +161,7 @@ def _html_document(payload: dict[str, Any]) -> str:
             )
         parts.append("</tbody></table></details>")
     if dex_strings:
-        parts.append("<details><summary>All DEX API-related strings with caller references</summary><table><thead><tr><th>String</th><th>URLs/domains/IPs</th><th>Route</th><th>Rate-limit/header clue</th><th>DEX references</th></tr></thead><tbody>")
+        parts.append("<details><summary>All DEX API-related strings with caller references</summary><table><thead><tr><th>String</th><th>URLs/domains/IPs</th><th>Route</th><th>Relative path</th><th>Network-call context</th><th>Rate-limit/header clue</th><th>DEX references</th></tr></thead><tbody>")
         for item in dex_strings:
             addresses = ", ".join(
                 [*item.get("urls", []), *item.get("domains", []), *item.get("ip_addresses", [])]
@@ -175,6 +176,8 @@ def _html_document(payload: dict[str, Any]) -> str:
                 f"<td><code>{html.escape(str(item.get('value', '')))}</code></td>"
                 f"<td>{html.escape(addresses)}</td>"
                 f"<td>{html.escape(str(item.get('route_candidate', False)))}</td>"
+                f"<td>{html.escape(str(item.get('relative_path_candidate', False)))}</td>"
+                f"<td>{html.escape(str(item.get('network_call_context', False)))}</td>"
                 f"<td>{html.escape(str(clue))}</td>"
                 f"<td>{refs}</td></tr>"
             )
@@ -560,6 +563,12 @@ def generate_final_run_report(
                 "api_smali_call_sites": len(api_call_sites),
                 "androguard_external_method_references": len(dex_external_methods),
                 "androguard_api_related_strings": len(dex_api_strings),
+                "androguard_dex_route_candidates": sum(
+                    bool(item.get("route_candidate")) for item in dex_api_strings
+                ),
+                "androguard_relative_path_candidates": sum(
+                    bool(item.get("relative_path_candidate")) for item in dex_api_strings
+                ),
                 "androguard_permission_api_usage": len(dex_permission_api_usage),
                 "androguard_internal_call_graph_edges": len(dex_internal_call_graph),
                 "androguard_dex_rate_limit_indicators": len(dex_rate_limit_indicators),
@@ -606,6 +615,12 @@ def generate_final_run_report(
             "api_smali_call_sites": len(api_call_sites),
             "androguard_external_method_references": len(dex_external_methods),
             "androguard_api_related_strings": len(dex_api_strings),
+            "androguard_dex_route_candidates": sum(
+                bool(item.get("route_candidate")) for item in dex_api_strings
+            ),
+            "androguard_relative_path_candidates": sum(
+                bool(item.get("relative_path_candidate")) for item in dex_api_strings
+            ),
             "androguard_permission_api_usage": len(dex_permission_api_usage),
             "androguard_internal_call_graph_edges": len(dex_internal_call_graph),
             "androguard_dex_rate_limit_indicators": len(dex_rate_limit_indicators),
