@@ -230,6 +230,8 @@ def generate_final_run_report(
 
     verification_path = reports_root / f"phase_one_verification_{run_id}.json"
     verification = _read_json(verification_path, reports_root)
+    surface_run_path = results_root / "runs" / run_id / "static-analysis-run.json"
+    surface_run_record = _read_json(surface_run_path, results_root)
 
     reconciliation = database.reconcile_run(run_id)
     artifacts: list[dict[str, Any]] = []
@@ -440,6 +442,7 @@ def generate_final_run_report(
                 "api_route_candidates": api_route_count,
                 "api_smali_call_sites": len(api_call_sites),
                 "client_rate_limit_retry_indicators": len(rate_limit_indicators),
+                "run_record": surface_run_record or {"status": "missing_or_legacy"},
             },
             "trufflehog_verified_secret_scan": {
                 "scanned": sum(item["processing"]["trufflehog_status"] == "success" for item in artifacts),
