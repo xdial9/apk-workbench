@@ -37,7 +37,10 @@ def test_apk_surface_analyzer_inventories_manifest_code_endpoints_and_libraries(
         '@GET("/v1/accounts")\n'
         'const-string v0, "X-RateLimit-Limit"\n'
         'const-string v0, "Retry-After"\n'
-        'invoke-virtual {v1}, Lokhttp3/Call;->execute()Lokhttp3/Response;\n',
+        'invoke-virtual {v1}, Lokhttp3/Call;->execute()Lokhttp3/Response;\n'
+        '.annotation runtime Lretrofit2/http/POST;\n'
+        '    value = "/v3/orders"\n'
+        '.end annotation\n',
         encoding="utf-8",
     )
     (root / "smali/com/example/Dependency.smali").write_text(
@@ -59,6 +62,7 @@ def test_apk_surface_analyzer_inventories_manifest_code_endpoints_and_libraries(
     assert any(item["category"] == "api_inventory" for item in result["findings"])
     inventory = result["inventory"]
     assert any(item["path"] == "/v1/accounts" and item["http_method"] == "GET" for item in inventory["api_routes"])
+    assert any(item["path"] == "/v3/orders" and item["http_method"] == "POST" for item in inventory["api_routes"])
     assert any(
         item["owner"] == "Lokhttp3/Call;" and item["method"] == "execute"
         for item in inventory["api_call_sites"]
