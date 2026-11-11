@@ -12,11 +12,12 @@ import json
 import os
 import re
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from playstore_cli import download as play_download
 from apkworkbench.sources.google_play_anonymous import (
@@ -117,10 +118,12 @@ class GooglePlaySource:
         profile: str | None = None,
         dispenser_url: str | None = None,
         anonymous_session: AnonymousGooglePlaySession | None = None,
+        progress: Callable[[str], None] | None = None,
     ):
         if retry_backoff_seconds < 0:
             raise ValueError("retry_backoff_seconds cannot be negative")
         self.retry_backoff_seconds = retry_backoff_seconds
+        self.progress = progress
         self._api: PlayApi | None = None
         self._anonymous_session = anonymous_session or AnonymousGooglePlaySession(
             country=country,
@@ -159,8 +162,17 @@ class GooglePlaySource:
         except Exception as exc:
             raise GooglePlayError(f"Google Play request failed: {exc}") from exc
 
+    def _emit_progress(self, message: str) -> None:
+        if self.progress is not None:
+            try:
+                self.progress(message)
+            except Exception:
+                # Display feedback must never interrupt acquisition or verification.
+                pass
+
     def categories(self) -> list[tuple[str, str]]:
         """Return the two Play roots and all available app/game subcategories."""
+        self._emit_progress("[Google Play] Fetching category catalogue")
         def fetch(api):
             values = [("APPLICATION", "Apps"), ("GAME", "Games")]
             for parent in ("APPLICATION", "GAME"):
@@ -177,16 +189,22 @@ class GooglePlaySource:
             raise ValueError("Search query cannot be empty")
         if limit < 1:
             raise ValueError("Search limit must be positive")
+        self._emit_progress(f"[Google Play] Searching {query!r} (limit {limit})")
         docs = self._call(lambda api: api.search(query, limit))
-        return [_app_from_doc(doc) for doc in docs if getattr(doc, "docid", "")]
+        apps = [_app_from_doc(doc) for doc in docs if getattr(doc, "docid", "")]
+        self._emit_progress(f"[Google Play] Search returned {len(apps)} app(s)")
+        return apps
 
     def top(self, category_id: str, *, limit: int = 200) -> list[PlayApp]:
         if not re.fullmatch(r"[A-Za-z0-9_]+", category_id):
             raise ValueError(f"Invalid Google Play category ID: {category_id!r}")
         if limit < 1:
             raise ValueError("Chart limit must be positive")
+        self._emit_progress(f"[Google Play] Reading free chart {category_id} (limit {limit})")
         docs = self._call(lambda api: api.top_chart(category_id, "free", limit))
-        return [_app_from_doc(doc) for doc in docs if getattr(doc, "docid", "")]
+        apps = [_app_from_doc(doc) for doc in docs if getattr(doc, "docid", "")]
+        self._emit_progress(f"[Google Play] Category {category_id}: {len(apps)} app(s)")
+        return apps
 
     def discover(
         self,
@@ -205,11 +223,13 @@ class GooglePlaySource:
         ]
         found: dict[str, PlayApp] = {}
         for query in queries:
+            self._emit_progress(f"[Google Play] Discovery query {query!r}")
             for app in self.search(query, limit=per_query_limit):
                 found.setdefault(app.package_id, app)
                 if len(found) >= total_limit:
                     return list(found.values())
-        for category_id in categories:
+        for category_index, category_id in enumerate(categories, start=1):
+            self._emit_progress(f"[Google Play] Discovery category {category_index}/{len(categories)}: {category_id}")
             for app in self.top(category_id, limit=per_category_limit):
                 found.setdefault(app.package_id, app)
                 if len(found) >= total_limit:
@@ -300,7 +320,51 @@ class GooglePlaySource:
                             plan.app.package_id, plan._delivery
                         ) if candidate.name == item.name
                     )
-                    downloader.fetch(upstream_file, directory)
+                    self._emit_progress(
+                        f"[Download] {plan.app.package_id}/{item.name}: starting "
+                        f"({item.size:,} expected bytes)"
+                    )
+                    monitor_stop = threading.Event()
+
+                    def monitor_transfer() -> None:
+                        last_size = -1
+                        last_notice = time.monotonic()
+                        while not monitor_stop.wait(0.5):
+                            observed = partial_path if partial_path.is_file() else component_path
+                            try:
+                                received = observed.stat().st_size if observed.is_file() else 0
+                            except OSError:
+                                received = 0
+                            now = time.monotonic()
+                            if received != last_size:
+                                percentage = (
+                                    f" ({min(100.0, received * 100.0 / item.size):.1f}%)"
+                                    if item.size > 0 else ""
+                                )
+                                self._emit_progress(
+                                    f"[Download] {item.name}: {received:,}/{item.size:,} bytes{percentage}"
+                                )
+                                last_size = received
+                                last_notice = now
+                            elif now - last_notice >= 5.0:
+                                self._emit_progress(
+                                    f"[Download] {item.name}: transfer active; "
+                                    f"{received:,}/{item.size:,} bytes observed"
+                                )
+                                last_notice = now
+
+                    monitor = threading.Thread(
+                        target=monitor_transfer, name="apkworkbench-download-progress", daemon=True
+                    )
+                    monitor.start()
+                    try:
+                        downloader.fetch(upstream_file, directory)
+                    finally:
+                        monitor_stop.set()
+                        monitor.join(timeout=1)
+                    self._emit_progress(
+                        f"[Download] {plan.app.package_id}/{item.name}: transfer finished; checking Play digest"
+                    )
                     break
                 except Exception as exc:
                     if attempt >= _MAX_RETRIES:
@@ -324,6 +388,9 @@ class GooglePlaySource:
                     size += len(chunk)
             if size != item.size or digest.hexdigest() != item.expected_digest:
                 raise GooglePlayError(f"Post-download integrity verification failed: {item.name}")
+            self._emit_progress(
+                f"[Download] VERIFIED {item.name}: {size:,} bytes; Play {item.expected_algorithm.upper()} digest matches"
+            )
             sha256 = _sha256_file(path)
             file_rows.append(
                 {
