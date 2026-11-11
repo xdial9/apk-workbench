@@ -111,6 +111,31 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
                 "call_sites": [],
             }],
         },
+        "dex_analysis": {
+            "status": "success",
+            "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
+            "metrics": {"dex_files": 1, "classes": 12, "external_methods_referenced": 1},
+            "external_method_references": [{
+                "full_name": "Lokhttp3/Call; execute ()Lokhttp3/Response;",
+                "category": "network",
+                "android_api": False,
+                "call_sites": [{"caller": "Lcom/example/Main; load ()V", "offset": 24}],
+            }],
+            "dex_api_strings": [{
+                "value": "https://api.example.test/v1",
+                "urls": ["https://api.example.test/v1"],
+                "domains": ["api.example.test"],
+                "route_candidate": False,
+                "rate_limit_or_retry_indicator": False,
+                "http_header_candidates": [],
+                "references": [{"caller": "Lcom/example/Main; load ()V", "offset": 12}],
+            }],
+            "permission_api_usage": [{
+                "api_method": "Landroid/location/LocationManager; getLastKnownLocation",
+                "permissions": ["android.permission.ACCESS_FINE_LOCATION"],
+                "call_sites": [],
+            }],
+        },
         "findings": [{"rule_id": "exported_component", "verification_state": "static_unverified"}],
     }
     (artifact_root / "static-analysis.json").write_text(
