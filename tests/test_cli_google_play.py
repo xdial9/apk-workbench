@@ -284,7 +284,7 @@ def test_full_run_continues_to_trufflehog_when_some_apktool_output_exists(monkey
         calls.append("report")
         assert run_id == "test-run"
 
-    def fake_verify(workspace, run_id):
+    def fake_verify(workspace, run_id, progress=None):
         calls.append("verify")
         assert run_id == "test-run"
         return {
