@@ -260,3 +260,62 @@ def test_reconcile_counts_scanned_partial_apktool_output_as_complete_with_warnin
     assert result["complete"] == 1
     assert result["counts"] == {"complete_with_warnings": 1}
     assert "non-zero" in result["items"][0]["detail"]
+
+
+
+def test_reconcile_requires_static_surface_result_for_new_pipeline_runs(tmp_path):
+    import json
+
+    database = WorkspaceDatabase(tmp_path)
+    selected = manifest_row(30)
+    database.write_manifest(RUN_ID, [selected])
+    add_history(database, selected)
+    add_processing(database, selected, apktool="success", scan="success")
+    findings = (
+        tmp_path / "results" / selected["package_id"] / "1"
+        / selected["sha256"] / "trufflehog" / "findings.json"
+    )
+    findings.parent.mkdir(parents=True, exist_ok=True)
+    findings.write_text("[]", encoding="utf-8")
+    marker = tmp_path / "results" / "runs" / RUN_ID / "static-analysis-run.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({"run_id": RUN_ID, "status": "success"}), encoding="utf-8")
+
+    result = database.reconcile_run(RUN_ID)
+
+    assert result["complete"] == 0
+    assert result["counts"] == {"static_analysis_failed": 1}
+    assert result["items"][0]["static_analysis_status"] == "failed"
+
+
+def test_reconcile_accepts_terminal_static_surface_result(tmp_path):
+    import json
+
+    database = WorkspaceDatabase(tmp_path)
+    selected = manifest_row(31)
+    database.write_manifest(RUN_ID, [selected])
+    add_history(database, selected)
+    add_processing(database, selected, apktool="success", scan="success")
+    artifact_root = (
+        tmp_path / "results" / selected["package_id"] / "1" / selected["sha256"]
+    )
+    findings = artifact_root / "trufflehog" / "findings.json"
+    findings.parent.mkdir(parents=True, exist_ok=True)
+    findings.write_text("[]", encoding="utf-8")
+    static_result = artifact_root / "static-analysis.json"
+    static_result.write_text(
+        json.dumps({"schema_version": 1, "status": "success", "findings": []}),
+        encoding="utf-8",
+    )
+    marker = tmp_path / "results" / "runs" / RUN_ID / "static-analysis-run.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps({"run_id": RUN_ID, "status": "success", "completed": 1}),
+        encoding="utf-8",
+    )
+
+    result = database.reconcile_run(RUN_ID)
+
+    assert result["complete"] == 1
+    assert result["counts"] == {"complete": 1}
+    assert result["items"][0]["static_analysis_status"] == "success"
