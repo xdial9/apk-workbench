@@ -598,7 +598,7 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
     ]
     return {
         "schema_version": 1,
-        "analyzer": {"id": "apk-surface", "version": "0.1.0"},
+        "analyzer": {"id": "apk-surface", "version": "0.2.0"},
         "status": (
             "success"
             if manifest_facts.get("status") == "success"
@@ -805,7 +805,14 @@ def run_static_surface_analysis(
                 prior = json.loads(target.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 prior = {}
-            if isinstance(prior, dict) and prior.get("status") in {"success", "partial"}:
+            prior_dex = prior.get("dex_analysis") if isinstance(prior, dict) else None
+            if (
+                isinstance(prior, dict)
+                and prior.get("status") in {"success", "partial"}
+                and prior.get("analyzer", {}).get("version") == "0.2.0"
+                and isinstance(prior_dex, dict)
+                and prior_dex.get("status") in {"success", "partial", "timed_out", "failed"}
+            ):
                 summary["skipped"] += 1
                 summary["finding_count"] += len(prior.get("findings", []))
                 summary["artifacts"].append({
@@ -885,7 +892,7 @@ def run_static_surface_analysis(
             summary["failed"] += 1
             failure = {
                 "schema_version": 1,
-                "analyzer": {"id": "apk-surface", "version": "0.1.0"},
+                "analyzer": {"id": "apk-surface", "version": "0.2.0"},
                 "status": "failed",
                 "artifact": {
                     "package_id": package_id, "version_code": version_code,
