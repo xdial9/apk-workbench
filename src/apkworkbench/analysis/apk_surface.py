@@ -128,7 +128,7 @@ CODE_RULES = (
      "Review whether JavaScript is enabled for untrusted or remote content."),
 )
 
-URL_RE = re.compile(r"""https?://[^\s"'<>\\]+""", re.IGNORECASE)
+URL_RE = re.compile(r"""(?:https?|wss?|ftp|grpc)://[^\s"'<>\\]+""", re.IGNORECASE)
 DOMAIN_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
     r"[A-Za-z]{2,63}(?![A-Za-z0-9_])"
@@ -168,9 +168,14 @@ SMALI_INVOKE_RE = re.compile(
     r"^\s*invoke-\S+\s+\{[^}]*\},\s*(L[^;]+;)->([^\s(]+)\(([^)]*)\)(\S+)"
 )
 API_INVOKE_OWNER_RE = re.compile(
-    r"^L(?:okhttp3/|retrofit2/|java/net/|javax/net/|com/android/volley/|"
-    r"org/apache/http/|io/ktor/|io/grpc/|org/chromium/net/|android/webkit/)"
+    r"^L(?:okhttp3/|retrofit2/|java/net/|javax/net/|javax/ws/rs/|com/android/volley/|"
+    r"org/apache/http/|io/ktor/|io/grpc/|org/chromium/net/|android/webkit/|"
+    r"com/google/api/client/|com/squareup/okhttp/|com/loopj/android/http/)"
 )
+RETROFIT_ANNOTATION_RE = re.compile(
+    r"\\.annotation\\s+\\S+\\s+Lretrofit2/http/(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS);"
+)
+ANNOTATION_VALUE_RE = re.compile(r"""\\bvalue\\s*=\\s*["']([^"']+)["']""")
 
 
 def _local_name(tag: str) -> str:
@@ -384,6 +389,8 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
                 diagnostics.append({"code": "network_config_parse_failed", "message": f"{config_path}: {exc}"})
         else:
             coverage["network_security_config"] = "referenced_but_not_found"
+    elif manifest_facts.get("status") == "success":
+        coverage["network_security_config"] = "not_configured"
 
     dependency_evidence: dict[str, list[str]] = {name: [] for name in DEPENDENCY_MARKERS}
     api_clients: dict[str, list[dict[str, Any]]] = {name: [] for name in API_CLIENT_MARKERS}
@@ -410,7 +417,6 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
         scanned_text_bytes += size
         code_scanned += 1
         coverage["endpoints_and_domains"] = "success"
-        coverage["resource_inventory"] = "success"
         if path.suffix.lower() == ".smali":
             coverage["smali_security_indicators"] = "success"
         lowered_path = relative.lower()
@@ -419,15 +425,42 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
             if any(marker.lower() in lowered_path or marker.lower() in lowered_text for marker in markers):
                 dependency_evidence[dependency].append(relative)
 
+        retrofit_annotation_method: str | None = None
         for line_number, line in enumerate(text.splitlines(), start=1):
+            retrofit_annotation = RETROFIT_ANNOTATION_RE.search(line)
+            if retrofit_annotation:
+                retrofit_annotation_method = retrofit_annotation.group(1).upper()
+            if retrofit_annotation_method:
+                annotation_value = ANNOTATION_VALUE_RE.search(line)
+                if annotation_value:
+                    route = annotation_value.group(1)
+                    record = api_routes.setdefault(route, {
+                        "path": route, "http_method": retrofit_annotation_method,
+                        "evidence": [], "occurrences": 0,
+                    })
+                    record["occurrences"] += 1
+                    record["evidence"].append({
+                        "path": relative, "line": line_number,
+                        "source": "retrofit_annotation",
+                    })
+                if ".end annotation" in line:
+                    retrofit_annotation_method = None
             for match in URL_RE.finditer(line):
                 value = match.group(0).rstrip(".,);]}:")
                 if value:
-                    parsed = urlsplit(value)
+                    try:
+                        parsed = urlsplit(value)
+                        parsed_host = parsed.hostname
+                        parsed_port = parsed.port
+                        parsed_path = parsed.path
+                        parsed_query = bool(parsed.query)
+                    except ValueError:
+                        parsed_host = parsed_port = parsed_path = None
+                        parsed_query = None
                     record = api_endpoints.setdefault(value, {
-                        "value": value, "kind": "url", "scheme": parsed.scheme,
-                        "host": parsed.hostname, "port": parsed.port, "path": parsed.path,
-                        "query_present": bool(parsed.query), "evidence": [], "occurrences": 0,
+                        "value": value, "kind": "url", "scheme": value.split(":", 1)[0].lower(),
+                        "host": parsed_host, "port": parsed_port, "path": parsed_path,
+                        "query_present": parsed_query, "evidence": [], "occurrences": 0,
                     })
                     record["occurrences"] += 1
                     record["evidence"].append({"path": relative, "line": line_number})
@@ -504,7 +537,16 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
     if not smali_files:
         coverage["smali_security_indicators"] = "not_found"
     coverage["dependency_fingerprints"] = "success" if code_scanned else "not_scanned"
-    coverage["native_libraries"] = "success" if native_libraries else "not_found"
+    coverage["native_libraries"] = "inventory_only" if native_libraries else "not_found"
+    partial_diagnostics = {
+        "symlink_entries_skipped", "text_file_limit", "text_read_failed",
+        "manifest_parse_failed", "network_config_parse_failed",
+        "finding_limit",
+    }
+    if symlink_count or any(item["code"] in partial_diagnostics for item in diagnostics):
+        for area in ("endpoints_and_domains", "smali_security_indicators", "dependency_fingerprints"):
+            if coverage[area] == "success":
+                coverage[area] = "partial"
 
     for endpoint, metadata in sorted(api_endpoints.items()):
         first = metadata["evidence"][0] if metadata["evidence"] else {}
@@ -540,7 +582,12 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "analyzer": {"id": "apk-surface", "version": "0.1.0"},
-        "status": "success" if manifest_facts.get("status") == "success" else "partial",
+        "status": (
+            "success"
+            if manifest_facts.get("status") == "success"
+            and not any(item["code"] in partial_diagnostics for item in diagnostics)
+            else "partial"
+        ),
         "coverage": coverage,
         "manifest": manifest_facts,
         "inventory": {
