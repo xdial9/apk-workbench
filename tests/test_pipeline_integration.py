@@ -5,6 +5,7 @@ import hashlib
 import textwrap
 from pathlib import Path
 
+from apkworkbench.analysis.apk_surface import run_static_surface_analysis
 from apkworkbench.analysis.trufflehog import TruffleHogScanner
 from apkworkbench.database.workspace import WorkspaceDatabase
 from apkworkbench.decompilation.runner import DecompilationRunner
@@ -113,6 +114,11 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(tmp_path
     assert decompilation.completed == 1
     assert decompilation.failed == 0
     assert database.read_processing_status()[digest]["jadx_status"] == "not_used"
+
+    surface = run_static_surface_analysis(database, workspace, run_id=run_id)
+    assert surface["completed"] == 1
+    assert surface["failed"] == 0
+    assert (workspace / "results/org.example.integration/1" / digest / "static-analysis.json").is_file()
 
     analysis = TruffleHogScanner(
         database,
