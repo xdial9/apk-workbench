@@ -789,6 +789,7 @@ def run(
                     WorkspaceDatabase(Config().get("workspace")),
                     Config().get("workspace"),
                     run_id=run_id,
+                    dex_timeout_seconds=int(Config().get("analysis.androguard_timeout_seconds", 1800)),
                     progress=click.echo,
                 )
             except (DatabaseError, OSError, ValueError, RuntimeError) as exc:
@@ -797,7 +798,8 @@ def run(
             else:
                 click.echo(
                     f"Static surface analysis: {surface_summary['completed']} completed, "
-                    f"{surface_summary['failed']} failed, {surface_summary['skipped']} skipped; "
+                    f"{surface_summary['partial']} partial, {surface_summary['failed']} failed, "
+                    f"{surface_summary['skipped']} skipped; "
                     f"{surface_summary['finding_count']} indicators."
                 )
                 if surface_summary["failed"]:
