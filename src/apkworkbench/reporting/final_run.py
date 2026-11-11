@@ -125,9 +125,68 @@ def _html_document(payload: dict[str, Any]) -> str:
                 f"<td><code>{html.escape(str(item.get('snippet', '')))}</code></td></tr>"
             )
         parts.append("</tbody></table>")
+    dex_methods = api_catalog.get("androguard_external_method_references", [])
+    dex_strings = api_catalog.get("androguard_api_related_strings", [])
+    permission_usage = api_catalog.get("androguard_permission_api_usage", [])
+    parts.append(
+        f"<h3>Androguard DEX cross-reference inventory</h3>"
+        f"<p>External API/library methods: {len(dex_methods)} · "
+        f"DEX API/config strings: {len(dex_strings)} · "
+        f"Permission-to-API call groups: {len(permission_usage)}</p>"
+    )
+    if dex_methods:
+        parts.append("<details><summary>All external DEX method references and callers</summary><table><thead><tr><th>External method</th><th>Category</th><th>Android API</th><th>Call sites</th></tr></thead><tbody>")
+        for item in dex_methods:
+            callers = "; ".join(
+                f"{html.escape(str(call.get('caller', '')))} @ {html.escape(str(call.get('offset', '')))}"
+                for call in item.get("call_sites", [])
+            )
+            parts.append(
+                "<tr>"
+                f"<td><code>{html.escape(str(item.get('full_name', '')))}</code></td>"
+                f"<td>{html.escape(str(item.get('category', '')))}</td>"
+                f"<td>{html.escape(str(item.get('android_api', '')))}</td>"
+                f"<td>{callers}</td></tr>"
+            )
+        parts.append("</tbody></table></details>")
+    if dex_strings:
+        parts.append("<details><summary>All DEX API-related strings with caller references</summary><table><thead><tr><th>String</th><th>URLs/domains/IPs</th><th>Route</th><th>Rate-limit/header clue</th><th>DEX references</th></tr></thead><tbody>")
+        for item in dex_strings:
+            addresses = ", ".join(
+                [*item.get("urls", []), *item.get("domains", []), *item.get("ip_addresses", [])]
+            )
+            refs = "; ".join(
+                f"{html.escape(str(ref.get('caller', '')))} @ {html.escape(str(ref.get('offset', '')))}"
+                for ref in item.get("references", [])
+            )
+            clue = bool(item.get("rate_limit_or_retry_indicator") or item.get("http_header_candidates"))
+            parts.append(
+                "<tr>"
+                f"<td><code>{html.escape(str(item.get('value', '')))}</code></td>"
+                f"<td>{html.escape(addresses)}</td>"
+                f"<td>{html.escape(str(item.get('route_candidate', False)))}</td>"
+                f"<td>{html.escape(str(clue))}</td>"
+                f"<td>{refs}</td></tr>"
+            )
+        parts.append("</tbody></table></details>")
+    if permission_usage:
+        parts.append("<details><summary>Android permission-sensitive API usage and callers</summary><table><thead><tr><th>Android API method</th><th>Permissions mapped</th><th>Callers</th></tr></thead><tbody>")
+        for item in permission_usage:
+            callers = "; ".join(
+                f"{html.escape(str(call.get('caller', '')))} @ {html.escape(str(call.get('offset', '')))}"
+                for call in item.get("call_sites", [])
+            )
+            parts.append(
+                "<tr>"
+                f"<td><code>{html.escape(str(item.get('api_method', '')))}</code></td>"
+                f"<td>{html.escape(', '.join(item.get('permissions', [])))}</td>"
+                f"<td>{callers}</td></tr>"
+            )
+        parts.append("</tbody></table></details>")
     parts.append(
         "<p class='muted'>Rate-limit note: static APK evidence can reveal client retry/backoff behavior and header use, "
-        "but cannot establish server-side quotas. A missing client-side clue does not mean an API is unthrottled.</p>"
+        "but cannot establish server-side quotas. A missing client-side clue does not mean an API is unthrottled. "
+        "Androguard permission mappings are version-specific and may be incomplete.</p>"
     )
 
     parts.append("<h2>Artifact analysis and findings</h2>")
@@ -142,6 +201,21 @@ def _html_document(payload: dict[str, Any]) -> str:
             f"v{html.escape(str(metadata.get('version_code', 'unknown')))} "
             f"— {html.escape(str(metadata.get('sha256', '')))}</h3>"
         )
+        dex = static.get("dex_analysis", {})
+        if isinstance(dex, dict):
+            metrics = dex.get("metrics", {})
+            parts.append(
+                "<h4>Androguard DEX analysis</h4>"
+                f"<p>Status: {html.escape(str(dex.get('status', 'not_run')))} · "
+                f"DEX files: {html.escape(str(metrics.get('dex_files', 0)))} · "
+                f"Classes: {html.escape(str(metrics.get('classes', 0)))} · "
+                f"Internal methods: {html.escape(str(metrics.get('internal_methods', 0)))} · "
+                f"External methods: {html.escape(str(metrics.get('external_methods_referenced', 0)))}</p>"
+            )
+            if dex.get("diagnostics"):
+                parts.append("<details><summary>Androguard diagnostics</summary><pre>")
+                parts.append(html.escape(json.dumps(dex.get("diagnostics"), ensure_ascii=False, indent=2)))
+                parts.append("</pre></details>")
         parts.append("<h4>Static-analysis coverage</h4>")
         coverage = static.get("coverage", {})
         if coverage:
