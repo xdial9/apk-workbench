@@ -241,6 +241,9 @@ def generate_final_run_report(
     api_call_sites: list[dict[str, Any]] = []
     api_headers: list[dict[str, Any]] = []
     rate_limit_indicators: list[dict[str, Any]] = []
+    dex_external_methods: list[dict[str, Any]] = []
+    dex_api_strings: list[dict[str, Any]] = []
+    dex_permission_api_usage: list[dict[str, Any]] = []
     verified_findings = 0
     static_findings = 0
     api_endpoint_count = 0
@@ -340,6 +343,20 @@ def generate_final_run_report(
                     "package_id": package_id, "version_code": version_code,
                     "sha256": digest, **entry,
                 } for entry in routes if isinstance(entry, dict))
+            dex_analysis = static_analysis.get("dex_analysis", {})
+            if not isinstance(dex_analysis, dict):
+                dex_analysis = {}
+            for source_key, target_list in (
+                ("external_method_references", dex_external_methods),
+                ("dex_api_strings", dex_api_strings),
+                ("permission_api_usage", dex_permission_api_usage),
+            ):
+                values = dex_analysis.get(source_key, [])
+                if isinstance(values, list):
+                    target_list.extend({
+                        "package_id": package_id, "version_code": version_code,
+                        "sha256": digest, **entry,
+                    } for entry in values if isinstance(entry, dict))
             if static_analysis.get("status") == "failed":
                 static_failed += 1
         else:
@@ -441,6 +458,9 @@ def generate_final_run_report(
                 "api_endpoint_candidates": api_endpoint_count,
                 "api_route_candidates": api_route_count,
                 "api_smali_call_sites": len(api_call_sites),
+                "androguard_external_method_references": len(dex_external_methods),
+                "androguard_api_related_strings": len(dex_api_strings),
+                "androguard_permission_api_usage": len(dex_permission_api_usage),
                 "client_rate_limit_retry_indicators": len(rate_limit_indicators),
                 "run_record": surface_run_record or {"status": "missing_or_legacy"},
             },
@@ -458,6 +478,9 @@ def generate_final_run_report(
             "route_candidates": api_routes,
             "client_library_evidence": api_clients,
             "smali_api_call_sites": api_call_sites,
+            "androguard_external_method_references": dex_external_methods,
+            "androguard_api_related_strings": dex_api_strings,
+            "androguard_permission_api_usage": dex_permission_api_usage,
             "header_names": api_headers,
             "client_rate_limit_and_retry_indicators": rate_limit_indicators,
             "rate_limit_evidence_status": (
@@ -476,6 +499,9 @@ def generate_final_run_report(
             "api_endpoint_candidates": api_endpoint_count,
             "api_route_candidates": api_route_count,
             "api_smali_call_sites": len(api_call_sites),
+            "androguard_external_method_references": len(dex_external_methods),
+            "androguard_api_related_strings": len(dex_api_strings),
+            "androguard_permission_api_usage": len(dex_permission_api_usage),
             "client_rate_limit_retry_indicators": len(rate_limit_indicators),
             "reconciliation_complete": reconciliation.get("complete", 0),
             "reconciliation_total": reconciliation.get("total", 0),
@@ -507,5 +533,8 @@ def generate_final_run_report(
         "api_endpoint_count": api_endpoint_count,
         "api_route_count": api_route_count,
         "api_call_site_count": len(api_call_sites),
+        "androguard_external_method_count": len(dex_external_methods),
+        "androguard_api_string_count": len(dex_api_strings),
+        "permission_api_usage_count": len(dex_permission_api_usage),
         "rate_limit_indicator_count": len(rate_limit_indicators),
     }
