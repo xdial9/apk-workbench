@@ -169,8 +169,8 @@ class DecompilationRunner:
                                     chunk = reader.read(64 * 1024)
                                     if chunk:
                                         pending += chunk
-                                        while b"\\n" in pending:
-                                            raw_line, pending = pending.split(b"\\n", 1)
+                                        while b"\n" in pending:
+                                            raw_line, pending = pending.split(b"\n", 1)
                                             try:
                                                 self.progress(raw_line.decode("utf-8", errors="replace"))
                                             except Exception:  # progress UI must not interrupt evidence collection
@@ -182,8 +182,8 @@ class DecompilationRunner:
                                     if not chunk:
                                         break
                                     pending += chunk
-                                    while b"\\n" in pending:
-                                        raw_line, pending = pending.split(b"\\n", 1)
+                                    while b"\n" in pending:
+                                        raw_line, pending = pending.split(b"\n", 1)
                                         try:
                                             self.progress(raw_line.decode("utf-8", errors="replace"))
                                         except Exception:
