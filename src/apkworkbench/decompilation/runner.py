@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,7 +42,7 @@ class DecompilationRunner:
         apktool_executable: str = "apktool",
         timeout_seconds: int = 3600,
         logger: logging.Logger | None = None,
-        progress=None,
+        progress: Callable[[str], None] | None = None,
     ):
         if timeout_seconds < 1:
             raise ValueError("timeout_seconds must be positive")
