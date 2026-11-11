@@ -225,7 +225,7 @@ def test_verify_downloads_command_reports_verified_files(monkeypatch, tmp_path):
     config = _config(tmp_path)
     called = {}
 
-    def fake_verify(workspace, run_id):
+    def fake_verify(workspace, run_id, progress=None):
         called["workspace"] = workspace
         called["run_id"] = run_id
         return {
