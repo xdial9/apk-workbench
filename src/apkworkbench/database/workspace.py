@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import fcntl
+import json
 import os
 import re
 import tempfile
@@ -298,6 +299,39 @@ class WorkspaceDatabase:
             else:
                 apktool = state.get("apktool_status", "pending")
                 scan = state.get("scan_status", "pending")
+                static_path = (
+                    self.root / "results" / selected["package_id"]
+                    / str(selected["version_code"]) / digest / "static-analysis.json"
+                )
+                static_components = (
+                    self.root / "results",
+                    self.root / "results" / selected["package_id"],
+                    self.root / "results" / selected["package_id"]
+                    / str(selected["version_code"]),
+                    self.root / "results" / selected["package_id"]
+                    / str(selected["version_code"]) / digest,
+                    static_path,
+                )
+                static_status = "not_run"
+                if any(part.is_symlink() for part in static_components):
+                    static_status = "failed"
+                    detail = "Static-analysis evidence path contains a symlink."
+                elif static_path.is_file():
+                    try:
+                        static_payload = json.loads(static_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        static_status = "failed"
+                        detail = "Static-analysis result is missing, unreadable, or malformed."
+                    else:
+                        if isinstance(static_payload, dict) and static_payload.get("status") in {"success", "partial"}:
+                            static_status = static_payload["status"]
+                        else:
+                            static_status = "failed"
+                            detail = "Static-analysis result does not contain a successful terminal status."
+                elif static_path.exists():
+                    static_status = "failed"
+                    detail = "Static-analysis result path is not a regular file."
+
                 if apktool == "failed":
                     outcome = "decompilation_failed"
                 elif "running" in {apktool, scan}:
@@ -329,8 +363,13 @@ class WorkspaceDatabase:
                                 "Processing status says scan succeeded, but the complete "
                                 "findings file is missing or unsafe."
                             )
+                        elif static_status == "failed":
+                            outcome = "static_analysis_failed"
+                        elif apktool == "partial" or static_status == "partial":
+                            outcome = "complete_with_warnings"
                         else:
-                            outcome = "complete_with_warnings" if apktool == "partial" else "complete"
+                            # Missing static analysis is accepted only for legacy/manual runs.
+                            outcome = "complete_with_warnings" if static_status == "not_run" else "complete"
                     else:
                         outcome = (
                             "awaiting_analysis_partial_decompilation"
@@ -348,6 +387,7 @@ class WorkspaceDatabase:
                     "package_id": selected.get("package_id", ""),
                     "version_code": str(selected.get("version_code", "")),
                     "status": outcome,
+                    "static_analysis_status": static_status if acquired is not None else "not_run",
                     "detail": detail,
                 }
             )
