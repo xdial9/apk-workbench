@@ -5,6 +5,7 @@ not execute APK code, contact discovered endpoints, or claim runtime verificatio
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import tempfile
@@ -14,6 +15,8 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Any
+
+from apkworkbench.analysis.androguard_dex import analyze_apk_dex
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
 TEXT_SUFFIXES = {
@@ -306,6 +309,7 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
     findings: list[dict[str, Any]] = []
     diagnostics: list[dict[str, str]] = []
     coverage = {
+        "dex_semantic_analysis": "not_run",
         "manifest_and_components": "not_found",
         "permissions": "not_found",
         "network_security_config": "not_found",
@@ -682,6 +686,7 @@ def run_static_surface_analysis(
     *,
     run_id: str | None = None,
     force: bool = False,
+    dex_timeout_seconds: int = 1800,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Run surface analysis for every eligible APK in a run and persist per-APK output."""
@@ -698,7 +703,7 @@ def run_static_surface_analysis(
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,63}", run_id):
             raise ValueError("Run ID contains invalid characters.")
         marker_dir = results_root / "runs" / run_id
-        if any(part.is_symlink() for part in (results_root / "runs", marker_dir)):
+        if any(part.is_symlink() for part in (results_root / "runs", marker_dir, marker_dir / "static-analysis-run.json")):
             raise ValueError("Static-analysis run marker path contains a symlink.")
         marker_dir.mkdir(parents=True, exist_ok=True)
         marker_dir.resolve(strict=True).relative_to(results_root)
@@ -744,6 +749,7 @@ def run_static_surface_analysis(
         "eligible": len(eligible),
         "completed": 0,
         "failed": 0,
+        "partial": 0,
         "skipped": len(selected_rows) - len(eligible),
         "finding_count": 0,
         "artifacts": [],
@@ -803,22 +809,67 @@ def run_static_surface_analysis(
             progress(f"[surface {index}/{len(eligible)}] Inspecting {package_id} v{version_code}")
         try:
             result = analyze_apk_surface(decoded)
+            source_value = row.get("local_path", "")
+            source_candidate = Path(source_value).expanduser()
+            downloads_root = root / "downloads"
+            if not source_value or source_candidate.is_symlink() or downloads_root.is_symlink():
+                raise ValueError("Original acquired APK path is missing or symlinked.")
+            source_apk = source_candidate.resolve(strict=True)
+            source_apk.relative_to(downloads_root.resolve(strict=True))
+            if not source_apk.is_file() or source_apk.suffix.lower() != ".apk":
+                raise ValueError("Original acquired artifact is not a regular APK file.")
+            expected_hash = digest
+            expected_size = int(row.get("size") or 0)
+            hash_obj = hashlib.sha256()
+            actual_size = 0
+            with source_apk.open("rb") as source_handle:
+                for chunk in iter(lambda: source_handle.read(1024 * 1024), b""):
+                    hash_obj.update(chunk)
+                    actual_size += len(chunk)
+            if hash_obj.hexdigest() != expected_hash or (
+                expected_size and actual_size != expected_size
+            ):
+                raise ValueError(
+                    "Original APK changed after acquisition; refusing DEX analysis "
+                    "against bytes that no longer match the manifest."
+                )
+            if progress:
+                progress(f"  Source APK integrity rechecked: SHA-256 matches ({actual_size:,} bytes)")
+                progress(f"  [Androguard] Parsing DEX, method references and API usage for {package_id}")
+            dex_result = analyze_apk_dex(
+                source_apk,
+                timeout_seconds=dex_timeout_seconds,
+                progress=progress,
+            )
+            result["dex_analysis"] = dex_result
+            result["coverage"]["dex_semantic_analysis"] = dex_result.get("status", "failed")
+            if dex_result.get("status") != "success":
+                result["status"] = "partial"
+                result.setdefault("diagnostics", []).extend(dex_result.get("diagnostics", []))
+                result.setdefault("limitations", []).extend(dex_result.get("limitations", []))
             result["artifact"] = {
                 "package_id": package_id, "version_code": version_code,
-                "sha256": digest, "source_apk": row.get("local_path", ""),
+                "sha256": digest, "source_apk": str(source_apk),
             }
             _atomic_write_json(target, result)
             count = len(result.get("findings", []))
             summary["completed"] += 1
+            if result.get("status") != "success":
+                summary["partial"] += 1
             summary["finding_count"] += count
             summary["artifacts"].append({
                 "package_id": package_id, "version_code": version_code,
                 "sha256": digest, "status": result["status"],
                 "path": str(target), "finding_count": count,
+                "dex_metrics": dex_result.get("metrics", {}),
                 "coverage": result.get("coverage", {}),
             })
             if progress:
-                progress(f"  Complete: {count} static indicators; report saved to {target}")
+                progress(
+                    f"  Complete: {count} static indicators; "
+                    f"{dex_result.get('metrics', {}).get('external_methods_referenced', 0)} "
+                    f"external DEX API references; report saved to {target}"
+                )
         except (OSError, ValueError, RuntimeError) as exc:
             summary["failed"] += 1
             failure = {
@@ -845,7 +896,7 @@ def run_static_surface_analysis(
     if marker_path is not None:
         marker_status = (
             "failed" if summary["failed"]
-            else "partial" if summary["skipped"]
+            else "partial" if summary["skipped"] or summary["partial"]
             else "success"
         )
         _atomic_write_json(marker_path, {
@@ -854,6 +905,7 @@ def run_static_surface_analysis(
             "status": marker_status,
             "eligible": summary["eligible"],
             "completed": summary["completed"],
+            "partial": summary["partial"],
             "failed": summary["failed"],
             "skipped": summary["skipped"],
             "finding_count": summary["finding_count"],
