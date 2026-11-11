@@ -32,6 +32,17 @@ ROUTE_RE = re.compile(
     r"""(?:health|status|login|register)(?:/|$))""",
     re.IGNORECASE,
 )
+RELATIVE_PATH_RE = re.compile(
+    r"""^/?[A-Za-z0-9][A-Za-z0-9._~%{}:-]*(?:/[A-Za-z0-9][A-Za-z0-9._~%{}:-]*)+"""
+    r"""(?:[?#][A-Za-z0-9._~%{}=&:+,;@/?-]*)?$"""
+)
+STATIC_PATH_PREFIXES = (
+    "assets/", "res/", "smali/", "META-INF/", "android/", "kotlin/",
+)
+STATIC_FILE_SUFFIXES = (
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".xml", ".ttf", ".otf",
+    ".so", ".dex", ".arsc", ".db", ".sqlite", ".html", ".css",
+)
 RATE_LIMIT_RE = re.compile(
     r"rate.?limit|retry-after|x-ratelimit|ratelimit-|backoff|exponential.?backoff|"
     r"too many requests|http.?429|token.?bucket|quota.?exceeded",
@@ -85,6 +96,27 @@ def _api_category(class_name: str) -> str:
     if class_name.startswith(("Ljava/", "Ljavax/", "Landroid/", "Lorg/")):
         return "platform_or_framework"
     return "external_library"
+
+
+def _looks_like_relative_api_path(value: str) -> bool:
+    """Return whether a DEX string has a conservative relative-path shape.
+
+    This helper is only used when the string is cross-referenced from a method
+    that also calls a recognized network/WebView API. It deliberately avoids
+    classifying ordinary resource paths and common static asset filenames.
+    """
+    if not 2 <= len(value) <= 512 or value != value.strip():
+        return False
+    if any(character.isspace() or ord(character) < 32 for character in value):
+        return False
+    if "://" in value or value.startswith("//") or "\\" in value:
+        return False
+    normalized = value.lstrip("/").lower()
+    if normalized.startswith(STATIC_PATH_PREFIXES):
+        return False
+    if normalized.endswith(STATIC_FILE_SUFFIXES):
+        return False
+    return bool(RELATIVE_PATH_RE.fullmatch(value))
 
 
 def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
@@ -149,17 +181,21 @@ def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
 
     external_references: list[dict[str, Any]] = []
     truncated_external = False
+    network_caller_names: set[str] = set()
     for method in external_methods:
         callers = _safe_xrefs(method)
         if not callers:
             continue
         class_name = str(getattr(method, "class_name", ""))
+        category = _api_category(class_name)
+        if category in {"network", "webview"}:
+            network_caller_names.update(_method_name(caller) for _class_obj, caller, _offset in callers)
         entry = {
             "owner": class_name,
             "method": str(getattr(method, "name", "")),
             "descriptor": str(getattr(method, "descriptor", "")),
             "full_name": _method_name(method),
-            "category": _api_category(class_name),
+            "category": category,
             "android_api": bool(method.is_android_api()),
             "call_sites": [],
         }
@@ -187,16 +223,24 @@ def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
         url_matches = [match.group(0).rstrip(".,);]}:") for match in URL_RE.finditer(value)]
         domain_matches = [match.group(0).lower().rstrip(".") for match in DOMAIN_RE.finditer(value)]
         ip_matches = [match.group(0) for match in IPV4_RE.finditer(value)]
-        is_route = bool(ROUTE_RE.search(value))
+        string_xrefs = list(string_item.get_xref_from(with_offset=True))
+        caller_names = {_method_name(caller) for _class_obj, caller, _offset in string_xrefs}
+        network_call_context = bool(caller_names & network_caller_names)
+        relative_path_candidate = (
+            network_call_context and _looks_like_relative_api_path(value)
+        )
+        is_route = bool(ROUTE_RE.search(value)) or relative_path_candidate
         is_limit = bool(RATE_LIMIT_RE.search(value))
         headers = sorted({match.group(1).lower() for match in HEADER_RE.finditer(value)})
-        if not (url_matches or domain_matches or ip_matches or is_route or is_limit or headers):
+        if not (
+            url_matches or domain_matches or ip_matches or is_route or is_limit or headers
+        ):
             continue
         if value in seen_strings:
             continue
         seen_strings.add(value)
         references = []
-        for class_obj, caller, offset in list(string_item.get_xref_from(with_offset=True))[:100]:
+        for class_obj, caller, offset in string_xrefs[:100]:
             references.append({
                 "caller": _method_name(caller),
                 "caller_class": str(getattr(caller, "class_name", "")),
@@ -208,10 +252,12 @@ def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
             "domains": sorted(set(domain_matches)),
             "ip_addresses": sorted(set(ip_matches)),
             "route_candidate": is_route,
+            "relative_path_candidate": relative_path_candidate,
+            "network_call_context": network_call_context,
             "rate_limit_or_retry_indicator": is_limit,
             "http_header_candidates": headers,
             "references": references,
-            "reference_count": len(string_item.get_xref_from(with_offset=True)),
+            "reference_count": len(string_xrefs),
         })
         if len(dex_api_strings) >= MAX_STRING_CANDIDATES:
             truncated_strings = True
