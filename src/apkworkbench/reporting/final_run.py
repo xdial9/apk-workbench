@@ -127,6 +127,7 @@ def _html_document(payload: dict[str, Any]) -> str:
         parts.append("</tbody></table>")
     dex_methods = api_catalog.get("androguard_external_method_references", [])
     dex_strings = api_catalog.get("androguard_api_related_strings", [])
+    dex_call_graph = api_catalog.get("androguard_internal_call_graph", [])
     permission_usage = api_catalog.get("androguard_permission_api_usage", [])
     parts.append(
         f"<h3>Androguard DEX cross-reference inventory</h3>"
