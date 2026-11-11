@@ -112,6 +112,7 @@ def generate_final_run_report(
     api_endpoints: list[dict[str, Any]] = []
     api_routes: list[dict[str, Any]] = []
     api_clients: list[dict[str, Any]] = []
+    api_call_sites: list[dict[str, Any]] = []
     api_headers: list[dict[str, Any]] = []
     rate_limit_indicators: list[dict[str, Any]] = []
     verified_findings = 0
@@ -178,6 +179,7 @@ def generate_final_run_report(
             endpoints = api_inventory.get("endpoints", [])
             routes = api_inventory.get("api_routes", [])
             clients = api_inventory.get("api_clients", [])
+            call_sites = api_inventory.get("api_call_sites", [])
             headers = api_inventory.get("api_headers", [])
             limit_signals = api_inventory.get("rate_limit_indicators", [])
             if isinstance(clients, list):
@@ -185,6 +187,11 @@ def generate_final_run_report(
                     "package_id": package_id, "version_code": version_code,
                     "sha256": digest, **entry,
                 } for entry in clients if isinstance(entry, dict))
+            if isinstance(call_sites, list):
+                api_call_sites.extend({
+                    "package_id": package_id, "version_code": version_code,
+                    "sha256": digest, **entry,
+                } for entry in call_sites if isinstance(entry, dict))
             if isinstance(headers, list):
                 api_headers.extend({
                     "package_id": package_id, "version_code": version_code,
@@ -320,7 +327,8 @@ def generate_final_run_report(
         "api_catalog": {
             "endpoint_candidates": api_endpoints,
             "route_candidates": api_routes,
-            "client_library_call_sites": api_clients,
+            "client_library_evidence": api_clients,
+            "smali_api_call_sites": api_call_sites,
             "header_names": api_headers,
             "client_rate_limit_and_retry_indicators": rate_limit_indicators,
             "rate_limit_evidence_status": (
