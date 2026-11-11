@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 
 from apkworkbench.analysis.apk_surface import analyze_apk_surface
 
