@@ -63,7 +63,8 @@ def test_uses_anonymous_dispenser_session_and_matches_device_headers(monkeypatch
     api = session.new_api()
 
     assert api.device["gsfId"] == "1234567890"
-    assert api.device["deviceCheckInConsistencyToken"] == "checkin-consistency"
+    assert api.device["deviceCheckinConsistencyToken"] == "checkin-consistency"
+    assert "deviceCheckInConsistencyToken" not in api.device
     assert api.device["locale"] == "en_US"
     assert api.session == {
         "authToken": "anonymous-play-bearer",
