@@ -67,6 +67,14 @@ class TruffleHogScanner:
         self.progress = progress
         self._help_checked = False
 
+    def _emit_progress(self, message: str) -> None:
+        if self.progress is None:
+            return
+        try:
+            self.progress(message)
+        except OSError:
+            self.progress = None
+
     def _check_cli_support(self) -> None:
         if self._help_checked:
             return
@@ -296,7 +304,7 @@ class TruffleHogScanner:
                         now = time.monotonic()
                         if not events:
                             if self.progress is not None and now - last_progress >= 1.0:
-                                self.progress(
+                                self._emit_progress(
                                     f"[TruffleHog] scanning {package_id} — "
                                     f"{int(now - started)}s elapsed, {output_size:,} JSON bytes, "
                                     f"{live_verified_count} verified finding(s)"
@@ -330,12 +338,12 @@ class TruffleHogScanner:
                                     if isinstance(live_item, dict) and live_item.get("Verified") is True:
                                         live_verified_count += 1
                                         detector = live_item.get("DetectorName") or "verified finding"
-                                        self.progress(
+                                        self._emit_progress(
                                             f"[TruffleHog] VERIFIED finding #{live_verified_count}: {detector}"
                                         )
                                 if time.monotonic() - last_progress >= 1.0:
                                     now = time.monotonic()
-                                    self.progress(
+                                    self._emit_progress(
                                         f"[TruffleHog] scanning {package_id} — "
                                         f"{int(now - started)}s elapsed, {output_size:,} JSON bytes, "
                                         f"{live_verified_count} verified finding(s)"
@@ -419,7 +427,7 @@ class TruffleHogScanner:
         self._atomic_bytes(output_dir / "stdout.jsonl", raw_stdout)
         self._atomic_bytes(output_dir / "stderr.log", raw_stderr)
         if self.progress is not None:
-            self.progress(
+            self._emit_progress(
                 f"[TruffleHog] COMPLETE: {package_id}; {len(findings)} verified finding(s); "
                 f"{output_size:,} JSON bytes; exit code {return_code}"
             )
@@ -632,7 +640,7 @@ class TruffleHogScanner:
             directories = [base_dir / "apktool"]
             self._update_status(row, "running")
             if self.progress is not None:
-                self.progress(f"[TruffleHog] starting {package_id} v{version_code} — verified-only selection")
+                self._emit_progress(f"[TruffleHog] starting {package_id} v{version_code} — verified-only selection")
             try:
                 findings = self._run_one(package_id, version_code, digest, directories)
             except AnalysisError as exc:
