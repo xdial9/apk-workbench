@@ -376,7 +376,6 @@ def analyze_apk_dex(
         send_connection.close()
         raise RuntimeError(f"Cannot start Androguard analysis: {exc}") from exc
 
-    deadline = started + timeout_seconds
     payload_bytes: bytes | None = None
     try:
         while True:
