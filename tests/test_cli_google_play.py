@@ -276,7 +276,7 @@ def test_full_run_continues_to_trufflehog_when_some_apktool_output_exists(monkey
         calls.append("surface")
         assert run_id == "test-run"
         return {
-            "completed": 1, "failed": 0, "skipped": 0,
+            "completed": 1, "partial": 0, "failed": 0, "skipped": 0,
             "finding_count": 0,
         }
 
