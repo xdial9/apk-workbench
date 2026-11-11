@@ -11,8 +11,9 @@ import tempfile
 import xml.etree.ElementTree as ET
 from urllib.parse import urlsplit
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
 TEXT_SUFFIXES = {
@@ -274,7 +275,6 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
         "dynamic_network_testing": "not_performed",
     }
     files: list[Path] = []
-    total_bytes = 0
     symlink_count = 0
     for current, directories, names in __import__("os").walk(root):
         base = Path(current)
@@ -412,8 +412,11 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
                 record["evidence"].append({"path": relative, "line": line_number})
             for match in DOMAIN_RE.finditer(line):
                 value = match.group(0).lower().rstrip(".")
-                if value and not value.endswith((".xml", ".json", ".png", ".jpg", ".smali")):
-                    if not any(value in endpoint for endpoint in api_endpoints):
+                if (
+                    value
+                    and not value.endswith((".xml", ".json", ".png", ".jpg", ".smali"))
+                    and not any(value in endpoint for endpoint in api_endpoints)
+                ):
                         record = api_endpoints.setdefault(value, {
                             "value": value, "kind": "domain_candidate", "evidence": [], "occurrences": 0,
                         })
