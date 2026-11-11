@@ -164,6 +164,13 @@ API_HEADER_RE = re.compile(
     r"x-api-key|x-auth-token|x-request-id|retry-after|x-ratelimit-[a-z0-9-]+|"
     r"ratelimit-[a-z0-9-]+|x-[a-z0-9-]{2,60})\b"
 )
+SMALI_INVOKE_RE = re.compile(
+    r"^\s*invoke-\S+\s+\{[^}]*\},\s*(L[^;]+;)->([^\s(]+)\(([^)]*)\)(\S+)"
+)
+API_INVOKE_OWNER_RE = re.compile(
+    r"^L(?:okhttp3/|retrofit2/|java/net/|javax/net/|com/android/volley/|"
+    r"org/apache/http/|io/ktor/|io/grpc/|org/chromium/net/|android/webkit/)"
+)
 
 
 def _local_name(tag: str) -> str:
