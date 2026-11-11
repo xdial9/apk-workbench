@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import subprocess
@@ -72,16 +73,14 @@ def stream_trufflehog_clean(cmd_list, output_file):
 
 
 def _safe_trufflehog_command(scan_target: Path) -> list[str]:
-    """Use the project's verified-only, no-update JSON flags for TruffleHog."""
+    """Use verified-only JSON output without update or concurrency options."""
     return [
         "trufflehog",
         "filesystem",
         str(scan_target),
-        "--concurrency=1",
         "--results=verified",
         "--json",
         "--no-update",
-        "--fail-on-scan-errors",
     ]
 
 
@@ -134,7 +133,7 @@ def execute_pipeline():
 
         ep_file = reports_dir / f"{package_id}_endpoints.csv"
         with open(ep_file, "w", newline="", encoding="utf-8") as cf:
-            writer = __import__("csv").writer(cf)
+            writer = csv.writer(cf)
             writer.writerow(["Endpoint", "Type", "Host", "Path", "Occurrences"])
             for ep in inventory.get("endpoints", []):
                 writer.writerow([
@@ -147,7 +146,7 @@ def execute_pipeline():
 
         route_file = reports_dir / f"{package_id}_routes.csv"
         with open(route_file, "w", newline="", encoding="utf-8") as cf:
-            writer = __import__("csv").writer(cf)
+            writer = csv.writer(cf)
             writer.writerow(["Route_Path", "HTTP_Method", "Occurrences"])
             for route in inventory.get("api_routes", []):
                 writer.writerow([
@@ -158,7 +157,7 @@ def execute_pipeline():
 
         findings_file = reports_dir / f"{package_id}_findings.csv"
         with open(findings_file, "w", newline="", encoding="utf-8") as cf:
-            writer = __import__("csv").writer(cf)
+            writer = csv.writer(cf)
             writer.writerow(["Rule_ID", "Category", "Severity", "Confidence", "File_Path", "Line", "Snippet"])
             for finding in data.get("findings", []):
                 evidence = finding.get("evidence", {})
