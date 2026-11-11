@@ -99,6 +99,8 @@ def generate_final_run_report(
     if not manifest:
         raise FinalRunReportError(f"Run {run_id} has no manifest entries.")
     history = database.read_download_history()
+    attempts = database.read_download_attempts()
+    run_attempts = [item for item in attempts if item.get("run_id") == run_id]
     statuses = database.read_processing_status()
     history_by_hash = {row.get("sha256", "").lower(): row for row in history if row.get("sha256")}
 
@@ -273,6 +275,8 @@ def generate_final_run_report(
             "run_id": run_id,
             "manifest_path": str(root / "database" / "run_manifests" / f"run_{run_id}.csv"),
             "manifest_items": len(manifest),
+            "manifest_entries": manifest,
+            "download_attempts": run_attempts,
             "created_for_report_at": __import__("datetime").datetime.now(
                 __import__("datetime").timezone.utc
             ).isoformat(timespec="seconds"),
@@ -313,6 +317,10 @@ def generate_final_run_report(
             "client_library_call_sites": api_clients,
             "header_names": api_headers,
             "client_rate_limit_and_retry_indicators": rate_limit_indicators,
+            "rate_limit_evidence_status": (
+                "client_side_indicators_found" if rate_limit_indicators
+                else "no_client_side_rate_limit_indicator_found"
+            ),
             "rate_limit_assessment": {
                 "server_side_rate_limits": "not_determined_from_static_apk",
                 "explanation": "The APK can reveal client retry/backoff logic and rate-limit headers, but cannot establish server-side quotas or whether a provider enforces a limit.",
