@@ -3,3 +3,4 @@ requests>=2.31,<3
 PyYAML>=6.0,<7
 playstore-cli==0.1.1
 goopdl==2.0.0
+androguard==4.1.4
