@@ -54,27 +54,151 @@ def _html_document(payload: dict[str, Any]) -> str:
     title = f"APK Workbench — Run {payload['run']['run_id']}"
     summary_json = html.escape(json.dumps(summary, ensure_ascii=False, indent=2))
     full_json = html.escape(json.dumps(payload, ensure_ascii=False, indent=2))
-    return "\n".join([
+    parts = [
         "<!doctype html>",
         '<html lang="en"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         f"<title>{html.escape(title)}</title>",
         "<style>",
-        "body{font:15px system-ui,sans-serif;max-width:1200px;margin:2rem auto;padding:0 1rem;color:#222}",
-        "pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f5f5;padding:1rem;border-radius:8px}",
-        "summary{cursor:pointer;font-weight:650;margin:1rem 0}code{overflow-wrap:anywhere}",
+        "body{font:15px system-ui,sans-serif;max-width:1250px;margin:2rem auto;padding:0 1rem;color:#222}",
+        "table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{text-align:left;vertical-align:top;border:1px solid #ccc;padding:.5rem;overflow-wrap:anywhere}",
+        "th{background:#f0f0f0}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f5f5;padding:1rem;border-radius:8px}",
+        "summary{cursor:pointer;font-weight:650;margin:.8rem 0}code{overflow-wrap:anywhere}.muted{color:#555}",
+        ".finding{border:1px solid #ddd;border-radius:8px;padding:.8rem;margin:.6rem 0}",
         "</style></head><body>",
         f"<h1>{html.escape(title)}</h1>",
-        ("<p>Complete consolidated acquisition, verification, decompilation, static analysis, "
-         "verified-secret scan, findings, report and reconciliation evidence.</p>"),
+        "<p>Consolidated acquisition, independent verification, Apktool, APK surface analysis, verified-secret scan, API inventory, reports and reconciliation.</p>",
         "<h2>Run summary</h2>",
         f"<pre>{summary_json}</pre>",
+        "<h2>API inventory</h2>",
+    ]
+
+    api_catalog = payload.get("api_catalog", {})
+    endpoints = api_catalog.get("endpoint_candidates", [])
+    routes = api_catalog.get("route_candidates", [])
+    call_sites = api_catalog.get("smali_api_call_sites", [])
+    parts.append(f"<p>Endpoint/domain candidates: {len(endpoints)} · Route candidates: {len(routes)} · Smali API call sites: {len(call_sites)}</p>")
+    if endpoints:
+        parts.append("<h3>Endpoint and domain candidates</h3><table><thead><tr><th>Endpoint</th><th>Kind</th><th>Occurrences</th><th>Evidence</th><th>Nearby client rate-limit clues</th></tr></thead><tbody>")
+        for item in endpoints:
+            locations = item.get("evidence", [])
+            evidence = "; ".join(
+                f"{html.escape(str(loc.get('path', '')))}:{html.escape(str(loc.get('line', '')))}"
+                for loc in locations
+            )
+            nearby = item.get("nearby_rate_limit_indicators", [])
+            signal_text = "; ".join(
+                f"{html.escape(str(sig.get('path', '')))}:{html.escape(str(sig.get('line', '')))}"
+                for sig in nearby
+            ) or "No nearby client-side clue found"
+            parts.append(
+                "<tr>"
+                f"<td><code>{html.escape(str(item.get('value', '')))}</code></td>"
+                f"<td>{html.escape(str(item.get('kind', '')))}</td>"
+                f"<td>{html.escape(str(item.get('occurrences', 0)))}</td>"
+                f"<td>{evidence}</td><td>{signal_text}</td></tr>"
+            )
+        parts.append("</tbody></table>")
+    if routes:
+        parts.append("<h3>API route candidates</h3><table><thead><tr><th>Method</th><th>Route</th><th>Occurrences</th><th>Evidence</th></tr></thead><tbody>")
+        for item in routes:
+            evidence = "; ".join(
+                f"{html.escape(str(loc.get('path', '')))}:{html.escape(str(loc.get('line', '')))}"
+                for loc in item.get("evidence", [])
+            )
+            parts.append(
+                "<tr>"
+                f"<td>{html.escape(str(item.get('http_method') or 'UNKNOWN'))}</td>"
+                f"<td><code>{html.escape(str(item.get('path', '')))}</code></td>"
+                f"<td>{html.escape(str(item.get('occurrences', 0)))}</td>"
+                f"<td>{evidence}</td></tr>"
+            )
+        parts.append("</tbody></table>")
+    if call_sites:
+        parts.append("<h3>Smali network/API call sites</h3><table><thead><tr><th>Owner</th><th>Method</th><th>Evidence</th><th>Invocation</th></tr></thead><tbody>")
+        for item in call_sites:
+            parts.append(
+                "<tr>"
+                f"<td><code>{html.escape(str(item.get('owner', '')))}</code></td>"
+                f"<td>{html.escape(str(item.get('method', '')))}</td>"
+                f"<td>{html.escape(str(item.get('path', '')))}:{html.escape(str(item.get('line', '')))}</td>"
+                f"<td><code>{html.escape(str(item.get('snippet', '')))}</code></td></tr>"
+            )
+        parts.append("</tbody></table>")
+    parts.append(
+        "<p class='muted'>Rate-limit note: static APK evidence can reveal client retry/backoff behavior and header use, "
+        "but cannot establish server-side quotas. A missing client-side clue does not mean an API is unthrottled.</p>"
+    )
+
+    parts.append("<h2>Artifact analysis and findings</h2>")
+    for artifact in payload.get("artifacts", []):
+        metadata = artifact.get("artifact", {})
+        static = artifact.get("static_analysis", {})
+        findings = artifact.get("findings", {})
+        static_items = findings.get("static_indicators", [])
+        verified_items = findings.get("trufflehog_verified_original_objects", [])
+        parts.append(
+            f"<h3>{html.escape(str(metadata.get('package_id', 'unknown')))} "
+            f"v{html.escape(str(metadata.get('version_code', 'unknown')))} "
+            f"— {html.escape(str(metadata.get('sha256', '')))}</h3>"
+        )
+        parts.append("<h4>Static-analysis coverage</h4>")
+        coverage = static.get("coverage", {})
+        if coverage:
+            parts.append("<table><thead><tr><th>Area</th><th>Status</th></tr></thead><tbody>")
+            for area, status in sorted(coverage.items()):
+                parts.append(
+                    f"<tr><td>{html.escape(str(area))}</td><td>{html.escape(str(status))}</td></tr>"
+                )
+            parts.append("</tbody></table>")
+        else:
+            parts.append("<p>Static surface analysis did not complete or was not run.</p>")
+        parts.append(f"<h4>Static indicators ({len(static_items)})</h4>")
+        if static_items:
+            for finding in static_items:
+                evidence = finding.get("evidence", {})
+                parts.append(
+                    "<div class='finding'>"
+                    f"<strong>{html.escape(str(finding.get('severity', 'info')).upper())}: "
+                    f"{html.escape(str(finding.get('title', 'Static indicator')))}</strong>"
+                    f"<p>{html.escape(str(finding.get('message', '')))}</p>"
+                    f"<p class='muted'>Rule: {html.escape(str(finding.get('rule_id', '')))} · "
+                    f"Confidence: {html.escape(str(finding.get('confidence', '')))} · "
+                    f"Verification: {html.escape(str(finding.get('verification_state', 'static_unverified')))}</p>"
+                    f"<p>Evidence: <code>{html.escape(str(evidence.get('path', '')))}"
+                    f":{html.escape(str(evidence.get('line', '')))}</code></p>"
+                    f"<details><summary>Original evidence line</summary><pre>{html.escape(str(evidence.get('snippet', '')))}</pre></details>"
+                    "</div>"
+                )
+        else:
+            parts.append("<p>No static indicators were emitted. Review the coverage and limitations before interpreting this as a clean assessment.</p>")
+        parts.append(f"<h4>TruffleHog verified findings ({len(verified_items)})</h4>")
+        if verified_items:
+            for finding in verified_items:
+                detector = finding.get("DetectorName", "Verified finding")
+                parts.append(
+                    "<details class='finding'><summary>"
+                    f"{html.escape(str(detector))} — complete original finding object"
+                    "</summary><pre>"
+                    f"{html.escape(json.dumps(finding, ensure_ascii=False, indent=2))}"
+                    "</pre></details>"
+                )
+        else:
+            parts.append("<p>No TruffleHog verified findings were emitted for this artifact.</p>")
+        limitations = static.get("limitations", [])
+        if limitations:
+            parts.append("<h4>Analysis limitations</h4><ul>")
+            parts.extend(f"<li>{html.escape(str(item))}</li>" for item in limitations)
+            parts.append("</ul>")
+
+    parts.extend([
         "<h2>Complete machine-readable evidence</h2>",
-        "<details open><summary>Expand all run evidence and complete original findings</summary>",
+        "<details><summary>Expand all raw run evidence, manifest entries, stage results and original findings JSON</summary>",
         f"<pre>{full_json}</pre></details>",
         "</body></html>",
         "",
     ])
+    return "\n".join(parts)
 
 
 def generate_final_run_report(
