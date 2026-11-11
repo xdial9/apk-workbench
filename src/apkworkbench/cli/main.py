@@ -753,7 +753,7 @@ def run(
         ("report", report, {}),
     ):
         click.echo(f"\n=== {stage_name.upper()} ===")
-        if stage_name in {"decompile", "analyze"}:
+        if stage_name in {"decompile", "surface", "analyze"}:
             run_id = context.meta.get("apkworkbench_run_id")
             if not run_id:
                 click.echo(
@@ -777,7 +777,7 @@ def run(
                 "(complete or partial)."
             )
         if stage_name == "surface":
-            click.echo("\\n=== STATIC APK SURFACE ANALYSIS ===")
+            click.echo("\n=== STATIC APK SURFACE ANALYSIS ===")
             click.echo("Cataloguing manifest, components, permissions, API endpoints/routes, network, code, dependencies and native libraries.")
             try:
                 surface_summary = run_static_surface_analysis(
