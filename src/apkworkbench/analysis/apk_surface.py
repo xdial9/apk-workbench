@@ -173,9 +173,9 @@ API_INVOKE_OWNER_RE = re.compile(
     r"com/google/api/client/|com/squareup/okhttp/|com/loopj/android/http/)"
 )
 RETROFIT_ANNOTATION_RE = re.compile(
-    r"\\.annotation\\s+\\S+\\s+Lretrofit2/http/(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS);"
+    r"\.annotation\s+\S+\s+Lretrofit2/http/(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS);"
 )
-ANNOTATION_VALUE_RE = re.compile(r"""\\bvalue\\s*=\\s*["']([^"']+)["']""")
+ANNOTATION_VALUE_RE = re.compile(r"""\bvalue\s*=\s*["']([^"']+)["']""")
 
 
 def _local_name(tag: str) -> str:
