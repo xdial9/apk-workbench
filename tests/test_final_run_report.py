@@ -121,15 +121,30 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
                 "android_api": False,
                 "call_sites": [{"caller": "Lcom/example/Main; load ()V", "offset": 24}],
             }],
-            "dex_api_strings": [{
-                "value": "https://api.example.test/v1",
-                "urls": ["https://api.example.test/v1"],
-                "domains": ["api.example.test"],
-                "route_candidate": False,
-                "rate_limit_or_retry_indicator": False,
-                "http_header_candidates": [],
-                "references": [{"caller": "Lcom/example/Main; load ()V", "offset": 12}],
-            }],
+            "dex_api_strings": [
+                {
+                    "value": "https://api.example.test/v1",
+                    "urls": ["https://api.example.test/v1"],
+                    "domains": ["api.example.test"],
+                    "route_candidate": False,
+                    "relative_path_candidate": False,
+                    "network_call_context": True,
+                    "rate_limit_or_retry_indicator": False,
+                    "http_header_candidates": [],
+                    "references": [{"caller": "Lcom/example/Main; load ()V", "offset": 12}],
+                },
+                {
+                    "value": "/catalog/products",
+                    "urls": [],
+                    "domains": [],
+                    "route_candidate": True,
+                    "relative_path_candidate": True,
+                    "network_call_context": True,
+                    "rate_limit_or_retry_indicator": False,
+                    "http_header_candidates": [],
+                    "references": [{"caller": "Lcom/example/Main; load ()V", "offset": 44}],
+                },
+            ],
             "permission_api_usage": [{
                 "api_method": "Landroid/location/LocationManager; getLastKnownLocation",
                 "permissions": ["android.permission.ACCESS_FINE_LOCATION"],
@@ -172,12 +187,17 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
     assert payload["api_catalog"]["androguard_api_related_strings"][0]["value"] == "https://api.example.test/v1"
     assert payload["api_catalog"]["androguard_permission_api_usage"][0]["permissions"][0] == "android.permission.ACCESS_FINE_LOCATION"
     assert payload["summary"]["androguard_external_method_references"] == 1
+    assert payload["summary"]["androguard_dex_route_candidates"] == 1
+    assert payload["summary"]["androguard_relative_path_candidates"] == 1
+    assert payload["stages"]["static_apk_surface_analysis"]["androguard_dex_route_candidates"] == 1
     assert payload["summary"]["api_smali_call_sites"] == 1
     html_text = Path(result["html_path"]).read_text(encoding="utf-8")
     assert "API inventory" in html_text
     assert "Smali network/API call sites" in html_text
     assert "TruffleHog verified findings (1)" in html_text
     assert "Androguard DEX cross-reference inventory" in html_text
+    assert "Network-call context" in html_text
+    assert "/catalog/products" in html_text
     assert "Lokhttp3/Call; execute ()Lokhttp3/Response;" in html_text
     assert payload["artifacts"][0]["findings"]["trufflehog_verified_original_objects"][0] == original_finding
     assert Path(result["html_path"]).is_file()
