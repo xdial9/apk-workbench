@@ -8,6 +8,8 @@ import re
 import shutil
 import signal
 import subprocess
+import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +41,7 @@ class DecompilationRunner:
         apktool_executable: str = "apktool",
         timeout_seconds: int = 3600,
         logger: logging.Logger | None = None,
+        progress=None,
     ):
         if timeout_seconds < 1:
             raise ValueError("timeout_seconds must be positive")
@@ -49,6 +52,7 @@ class DecompilationRunner:
         self.apktool_executable = apktool_executable
         self.timeout_seconds = timeout_seconds
         self.logger = logger or logging.getLogger("apkworkbench.decompilation")
+        self.progress = progress
 
     @staticmethod
     def _sha256(path: Path) -> tuple[str, int]:
@@ -146,12 +150,56 @@ class DecompilationRunner:
                     )
                 )
                 log_file.flush()
+                log_offset = log_file.tell()
                 process = subprocess.Popen(
                     command,
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
+                stop_tailer = threading.Event()
+                tailer = None
+                if self.progress is not None:
+                    def stream_log() -> None:
+                        pending = b""
+                        try:
+                            with log_path.open("rb") as reader:
+                                reader.seek(log_offset)
+                                while not stop_tailer.is_set():
+                                    chunk = reader.read(64 * 1024)
+                                    if chunk:
+                                        pending += chunk
+                                        while b"\\n" in pending:
+                                            raw_line, pending = pending.split(b"\\n", 1)
+                                            try:
+                                                self.progress(raw_line.decode("utf-8", errors="replace"))
+                                            except Exception:  # progress UI must not interrupt evidence collection
+                                                pass
+                                    else:
+                                        stop_tailer.wait(0.15)
+                                while True:
+                                    chunk = reader.read(64 * 1024)
+                                    if not chunk:
+                                        break
+                                    pending += chunk
+                                    while b"\\n" in pending:
+                                        raw_line, pending = pending.split(b"\\n", 1)
+                                        try:
+                                            self.progress(raw_line.decode("utf-8", errors="replace"))
+                                        except Exception:
+                                            pass
+                                if pending:
+                                    try:
+                                        self.progress(pending.decode("utf-8", errors="replace"))
+                                    except Exception:
+                                        pass
+                        except OSError as exc:
+                            try:
+                                self.progress(f"[{label}] live log stream unavailable: {exc}")
+                            except Exception:
+                                pass
+                    tailer = threading.Thread(target=stream_log, name="apkworkbench-log-tail", daemon=True)
+                    tailer.start()
                 previous_sigterm = None
 
                 def handle_sigterm(signum, _frame):
@@ -163,7 +211,19 @@ class DecompilationRunner:
                     except ValueError:
                         # Signal handlers can only be installed from the main thread.
                         pass
-                    returncode = process.wait(timeout=self.timeout_seconds)
+                    deadline = time.monotonic() + self.timeout_seconds
+                    started = time.monotonic()
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(command, self.timeout_seconds)
+                        try:
+                            returncode = process.wait(timeout=min(1.0, remaining))
+                            break
+                        except subprocess.TimeoutExpired:
+                            if self.progress is not None:
+                                elapsed = int(time.monotonic() - started)
+                                self.progress(f"[{label}] still running — {elapsed}s elapsed")
                 except subprocess.TimeoutExpired:
                     self._terminate_process_tree(process)
                     log_file.write(
@@ -182,6 +242,9 @@ class DecompilationRunner:
                     log_file.flush()
                     raise
                 finally:
+                    stop_tailer.set()
+                    if tailer is not None:
+                        tailer.join(timeout=2)
                     if previous_sigterm is not None:
                         signal.signal(signal.SIGTERM, previous_sigterm)
                 log_file.write(
@@ -414,7 +477,8 @@ class DecompilationRunner:
                     continue
                 candidate_rows.append(acquired)
 
-        for row in candidate_rows:
+        total_candidates = len(candidate_rows)
+        for item_index, row in enumerate(candidate_rows, start=1):
             digest = row.get("sha256", "").lower()
             if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
                 failed += 1
@@ -498,6 +562,8 @@ class DecompilationRunner:
                 break
             examined += 1
 
+            if self.progress is not None:
+                self.progress(f"[Apktool {item_index}/{total_candidates}] {package_id} v{version_code}: SHA-256 verified; starting decode")
             self._status_update(
                 row,
                 apktool_status="running",
@@ -547,6 +613,8 @@ class DecompilationRunner:
             if stage_status == "success" and not errors:
                 completed += 1
                 self.logger.info("Apktool decoding completed for %s", package_id)
+                if self.progress is not None:
+                    self.progress(f"[Apktool {item_index}/{total_candidates}] COMPLETE: {package_id}")
             elif stage_status == "partial":
                 partial += 1
                 self.logger.warning(
