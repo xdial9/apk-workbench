@@ -806,12 +806,14 @@ def run_static_surface_analysis(
             except (OSError, ValueError):
                 prior = {}
             prior_dex = prior.get("dex_analysis") if isinstance(prior, dict) else None
+            prior_analyzer = prior.get("analyzer", {}) if isinstance(prior, dict) else {}
             if (
                 isinstance(prior, dict)
                 and prior.get("status") in {"success", "partial"}
-                and prior.get("analyzer", {}).get("version") == "0.2.0"
+                and isinstance(prior_analyzer, dict)
+                and prior_analyzer.get("version") == "0.2.0"
                 and isinstance(prior_dex, dict)
-                and prior_dex.get("status") in {"success", "partial", "timed_out", "failed"}
+                and prior_dex.get("status") in {"success", "partial"}
             ):
                 summary["skipped"] += 1
                 summary["finding_count"] += len(prior.get("findings", []))
