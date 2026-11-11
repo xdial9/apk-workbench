@@ -84,6 +84,10 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
                 "evidence": [{"path": "smali/Main.smali", "line": 13}],
             }],
             "api_clients": [{"name": "Retrofit", "call_sites": [], "call_site_count": 1}],
+            "api_call_sites": [{
+                "owner": "Lokhttp3/Call;", "method": "execute",
+                "path": "smali/Main.smali", "line": 15,
+            }],
             "api_headers": [{"name": "retry-after", "evidence": []}],
             "rate_limit_indicators": [{"path": "smali/Main.smali", "line": 14}],
         },
@@ -116,7 +120,8 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
     assert payload["stages"]["reconciliation"]["complete"] == 1
     assert payload["api_catalog"]["endpoint_candidates"][0]["value"] == "https://api.example.test/v1"
     assert payload["api_catalog"]["route_candidates"][0]["path"] == "/v1/accounts"
-    assert payload["api_catalog"]["client_library_call_sites"][0]["name"] == "Retrofit"
+    assert payload["api_catalog"]["client_library_evidence"][0]["name"] == "Retrofit"
+    assert payload["api_catalog"]["smali_api_call_sites"][0]["method"] == "execute"
     assert payload["api_catalog"]["client_rate_limit_and_retry_indicators"]
     assert payload["artifacts"][0]["findings"]["trufflehog_verified_original_objects"][0] == original_finding
     assert Path(result["html_path"]).is_file()
