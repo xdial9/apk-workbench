@@ -123,5 +123,10 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
     assert payload["api_catalog"]["client_library_evidence"][0]["name"] == "Retrofit"
     assert payload["api_catalog"]["smali_api_call_sites"][0]["method"] == "execute"
     assert payload["api_catalog"]["client_rate_limit_and_retry_indicators"]
+    assert payload["summary"]["api_smali_call_sites"] == 1
+    html_text = Path(result["html_path"]).read_text(encoding="utf-8")
+    assert "API inventory" in html_text
+    assert "Smali network/API call sites" in html_text
+    assert "TruffleHog verified findings (1)" in html_text
     assert payload["artifacts"][0]["findings"]["trufflehog_verified_original_objects"][0] == original_finding
     assert Path(result["html_path"]).is_file()
