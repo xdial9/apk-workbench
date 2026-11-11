@@ -91,6 +91,26 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
             "api_headers": [{"name": "retry-after", "evidence": []}],
             "rate_limit_indicators": [{"path": "smali/Main.smali", "line": 14}],
         },
+        "dex_analysis": {
+            "status": "success",
+            "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
+            "metrics": {"dex_files": 1, "classes": 12, "external_methods_referenced": 1},
+            "external_method_references": [{
+                "full_name": "Lokhttp3/Call; execute ()Lokhttp3/Response;",
+                "category": "network",
+                "call_sites": [{"caller": "Lcom/example/Main; load ()V", "offset": 24}],
+            }],
+            "dex_api_strings": [{
+                "value": "https://api.example.test/v1",
+                "urls": ["https://api.example.test/v1"],
+                "references": [{"caller": "Lcom/example/Main; load ()V", "offset": 12}],
+            }],
+            "permission_api_usage": [{
+                "api_method": "Landroid/location/LocationManager; getLastKnownLocation",
+                "permissions": ["android.permission.ACCESS_FINE_LOCATION"],
+                "call_sites": [],
+            }],
+        },
         "findings": [{"rule_id": "exported_component", "verification_state": "static_unverified"}],
     }
     (artifact_root / "static-analysis.json").write_text(
@@ -123,10 +143,16 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
     assert payload["api_catalog"]["client_library_evidence"][0]["name"] == "Retrofit"
     assert payload["api_catalog"]["smali_api_call_sites"][0]["method"] == "execute"
     assert payload["api_catalog"]["client_rate_limit_and_retry_indicators"]
+    assert payload["api_catalog"]["androguard_external_method_references"][0]["category"] == "network"
+    assert payload["api_catalog"]["androguard_api_related_strings"][0]["value"] == "https://api.example.test/v1"
+    assert payload["api_catalog"]["androguard_permission_api_usage"][0]["permissions"][0] == "android.permission.ACCESS_FINE_LOCATION"
+    assert payload["summary"]["androguard_external_method_references"] == 1
     assert payload["summary"]["api_smali_call_sites"] == 1
     html_text = Path(result["html_path"]).read_text(encoding="utf-8")
     assert "API inventory" in html_text
     assert "Smali network/API call sites" in html_text
     assert "TruffleHog verified findings (1)" in html_text
+    assert "Androguard DEX cross-reference inventory" in html_text
+    assert "Lokhttp3/Call; execute ()Lokhttp3/Response;" in html_text
     assert payload["artifacts"][0]["findings"]["trufflehog_verified_original_objects"][0] == original_finding
     assert Path(result["html_path"]).is_file()
