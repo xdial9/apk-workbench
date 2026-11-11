@@ -149,6 +149,16 @@ def _html_document(payload: dict[str, Any]) -> str:
                 f"<td>{callers}</td></tr>"
             )
         parts.append("</tbody></table></details>")
+    if dex_call_graph:
+        parts.append("<details><summary>All internal DEX call-graph edges</summary><table><thead><tr><th>Caller</th><th>Callee</th><th>Offset</th></tr></thead><tbody>")
+        for item in dex_call_graph:
+            parts.append(
+                "<tr>"
+                f"<td><code>{html.escape(str(item.get('caller', '')))}</code></td>"
+                f"<td><code>{html.escape(str(item.get('callee', '')))}</code></td>"
+                f"<td>{html.escape(str(item.get('offset', '')))}</td></tr>"
+            )
+        parts.append("</tbody></table></details>")
     if dex_strings:
         parts.append("<details><summary>All DEX API-related strings with caller references</summary><table><thead><tr><th>String</th><th>URLs/domains/IPs</th><th>Route</th><th>Rate-limit/header clue</th><th>DEX references</th></tr></thead><tbody>")
         for item in dex_strings:
@@ -316,8 +326,10 @@ def generate_final_run_report(
     api_headers: list[dict[str, Any]] = []
     rate_limit_indicators: list[dict[str, Any]] = []
     dex_external_methods: list[dict[str, Any]] = []
+    dex_internal_call_graph: list[dict[str, Any]] = []
     dex_api_strings: list[dict[str, Any]] = []
     dex_permission_api_usage: list[dict[str, Any]] = []
+    dex_rate_limit_indicators: list[dict[str, Any]] = []
     verified_findings = 0
     static_findings = 0
     api_endpoint_count = 0
@@ -422,6 +434,7 @@ def generate_final_run_report(
                 dex_analysis = {}
             for source_key, target_list in (
                 ("external_method_references", dex_external_methods),
+                ("internal_call_graph", dex_internal_call_graph),
                 ("dex_api_strings", dex_api_strings),
                 ("permission_api_usage", dex_permission_api_usage),
             ):
@@ -431,6 +444,19 @@ def generate_final_run_report(
                         "package_id": package_id, "version_code": version_code,
                         "sha256": digest, **entry,
                     } for entry in values if isinstance(entry, dict))
+            dex_rate_limit_indicators.extend({
+                "package_id": package_id,
+                "version_code": version_code,
+                "sha256": digest,
+                **entry,
+            } for entry in dex_analysis.get("dex_api_strings", [])
+                if isinstance(entry, dict) and (
+                    entry.get("rate_limit_or_retry_indicator")
+                    or any(
+                        "ratelimit" in header.lower() or header.lower() == "retry-after"
+                        for header in entry.get("http_header_candidates", [])
+                    )
+                ))
             if static_analysis.get("status") == "failed":
                 static_failed += 1
         else:
@@ -535,6 +561,8 @@ def generate_final_run_report(
                 "androguard_external_method_references": len(dex_external_methods),
                 "androguard_api_related_strings": len(dex_api_strings),
                 "androguard_permission_api_usage": len(dex_permission_api_usage),
+                "androguard_internal_call_graph_edges": len(dex_internal_call_graph),
+                "androguard_dex_rate_limit_indicators": len(dex_rate_limit_indicators),
                 "client_rate_limit_retry_indicators": len(rate_limit_indicators),
                 "run_record": surface_run_record or {"status": "missing_or_legacy"},
             },
@@ -554,11 +582,14 @@ def generate_final_run_report(
             "smali_api_call_sites": api_call_sites,
             "androguard_external_method_references": dex_external_methods,
             "androguard_api_related_strings": dex_api_strings,
+            "androguard_internal_call_graph": dex_internal_call_graph,
             "androguard_permission_api_usage": dex_permission_api_usage,
+            "androguard_dex_rate_limit_indicators": dex_rate_limit_indicators,
             "header_names": api_headers,
             "client_rate_limit_and_retry_indicators": rate_limit_indicators,
             "rate_limit_evidence_status": (
-                "client_side_indicators_found" if rate_limit_indicators
+                "client_side_indicators_found"
+                if rate_limit_indicators or dex_rate_limit_indicators
                 else "no_client_side_rate_limit_indicator_found"
             ),
             "rate_limit_assessment": {
@@ -576,6 +607,8 @@ def generate_final_run_report(
             "androguard_external_method_references": len(dex_external_methods),
             "androguard_api_related_strings": len(dex_api_strings),
             "androguard_permission_api_usage": len(dex_permission_api_usage),
+            "androguard_internal_call_graph_edges": len(dex_internal_call_graph),
+            "androguard_dex_rate_limit_indicators": len(dex_rate_limit_indicators),
             "client_rate_limit_retry_indicators": len(rate_limit_indicators),
             "reconciliation_complete": reconciliation.get("complete", 0),
             "reconciliation_total": reconciliation.get("total", 0),
@@ -610,5 +643,6 @@ def generate_final_run_report(
         "androguard_external_method_count": len(dex_external_methods),
         "androguard_api_string_count": len(dex_api_strings),
         "permission_api_usage_count": len(dex_permission_api_usage),
-        "rate_limit_indicator_count": len(rate_limit_indicators),
+        "internal_call_graph_edge_count": len(dex_internal_call_graph),
+        "rate_limit_indicator_count": len(rate_limit_indicators) + len(dex_rate_limit_indicators),
     }
