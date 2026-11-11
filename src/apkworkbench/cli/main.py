@@ -233,6 +233,7 @@ def discover(
     logger = setup_logging(config)
     source = GooglePlaySource(
         retry_backoff_seconds=float(config.get("sources.google_play.retry_backoff_seconds", 1)),
+        progress=click.echo,
     )
     click.echo(BANNER)
     click.echo("Discovering applications from Google Play Store...")
