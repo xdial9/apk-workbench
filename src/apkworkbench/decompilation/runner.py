@@ -464,7 +464,23 @@ class DecompilationRunner:
             apktool_output = output_root / "apktool"
             output_root.mkdir(parents=True, exist_ok=True)
 
-            # Ignore historical JADX status. Reuse Apktool only when its output is usable.
+            # Verify the acquired APK on every pass, including when existing output
+            # would otherwise be reused. A stale Apktool result must not bypass
+            # verification of the source APK against its recorded SHA-256.
+            try:
+                apk_path = self._validated_apk_path(row)
+            except (DecompilationError, OSError, ValueError) as exc:
+                self._status_update(
+                    row,
+                    apktool_status="failed",
+                    scan_status=scan_status,
+                    error=str(exc),
+                )
+                failed += 1
+                continue
+
+            # Ignore historical JADX status. Reuse Apktool only after the source
+            # APK has passed SHA-256 and size verification.
             apktool_had_usable_output = (
                 previous.get("apktool_status") in {"success", "partial"}
                 and self._has_usable_output(apktool_output)
@@ -481,18 +497,6 @@ class DecompilationRunner:
             if limit is not None and examined >= limit:
                 break
             examined += 1
-
-            try:
-                apk_path = self._validated_apk_path(row)
-            except (DecompilationError, OSError, ValueError) as exc:
-                self._status_update(
-                    row,
-                    apktool_status="success" if apktool_had_usable_output else "failed",
-                    scan_status=scan_status,
-                    error=str(exc),
-                )
-                failed += 1
-                continue
 
             self._status_update(
                 row,
