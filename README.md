@@ -2,7 +2,7 @@
 
 **Google Play Store discovery · verified APK bundle acquisition · decompilation · static analysis · reporting**
 
-APK Workbench is a Linux-native Python CLI for discovering Android apps on Google Play, acquiring their complete Play-delivered APK bundles, verifying each component against hashes supplied by Google Play, and decoding APK components with Apktool and scanning the decoded output with TruffleHog.
+APK Workbench is a Linux-native Python CLI for discovering Android apps on Google Play, acquiring their complete Play-delivered APK bundles, verifying each component against hashes supplied by Google Play, decoding APK components with Apktool, performing broad static surface inspection, scanning for verified secrets with TruffleHog, generating a consolidated evidence report, and reconciling every item in the run manifest.
 
 **Acquisition source policy: Google Play Store only.** There is no alternate repository, mirror, or source fallback.
 
@@ -68,7 +68,11 @@ Discovery results are de-duplicated by Android package ID and stored in `databas
 # First 100 newly catalogued Google Play apps.
 apkworkbench download --apk-count 100
 
-# Or run acquisition, decompilation, analysis, reporting, and reconciliation.
+# One-command full workflow: discover, acquire, verify, decode, inspect,
+# scan verified secrets, report, and reconcile.
+bash scripts/full_google_play_pipeline.sh
+
+# Or process a catalogue that has already been discovered.
 apkworkbench run --apk-count 100
 
 # Resumable 15,000-app target: 150 sequential batches of 100.
@@ -80,13 +84,26 @@ apkworkbench reconcile --run-id YOUR-RUN-ID
 
 The run manifest is frozen after Play delivery metadata and expected hashes have been retrieved, but before the first APK download. Each Google Play app may contain `base.apk`, multiple `split_*.apk` files, and OBB expansion files. All are retained in the app's bundle directory. APK components are recorded separately and independently processed; OBB files are preserved and integrity-checked but are not passed to APK decompilers.
 
+## One-command output
+
+The full pipeline prints live stage feedback and finishes with a single consolidated report pair:
+
+```text
+reports/runs/<RUN_ID>/final-report.json
+reports/runs/<RUN_ID>/final-report.html
+```
+
+The final report contains the frozen manifest and download attempts, Play bundle metadata and independent verification, Apktool status/log references, the static surface inventory and findings, the complete original `Verified=true` TruffleHog objects, the API/route catalog, client-library and header evidence, rate-limit/retry indicators, and run reconciliation. Per-APK reports and raw scanner evidence remain alongside it under `results/` and `reports/`.
+
+The static surface pass inventories manifest/components/permissions, network-security configuration, API endpoints/domains/routes and HTTP client call sites, common headers, retry/backoff/rate-limit hints, WebView, dynamic loading, process execution, TLS/cryptography indicators, storage/query APIs, dependency fingerprints, resources and native libraries. It does not duplicate TruffleHog's generic secret scanning. Server-side API rate limits cannot be determined from static APK strings; the report says so explicitly. Static findings remain leads until independently confirmed.
+
 ## Commands
 
 - `apkworkbench discover --help`
 - `apkworkbench download --help`
 - `apkworkbench decompile --help`
 - `apkworkbench analyze --help`
-- `apkworkbench report`
+- `apkworkbench report --run-id RUN_ID`
 - `apkworkbench status`
 - `apkworkbench reconcile --run-id RUN_ID`
 - `apkworkbench doctor`
