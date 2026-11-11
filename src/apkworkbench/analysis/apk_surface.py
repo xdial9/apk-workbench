@@ -9,6 +9,7 @@ import os
 import re
 import tempfile
 import xml.etree.ElementTree as ET
+from urllib.parse import urlsplit
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
@@ -387,8 +388,11 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
             for match in URL_RE.finditer(line):
                 value = match.group(0).rstrip(".,);]}:")
                 if value:
+                    parsed = urlsplit(value)
                     record = api_endpoints.setdefault(value, {
-                        "value": value, "kind": "url", "evidence": [], "occurrences": 0,
+                        "value": value, "kind": "url", "scheme": parsed.scheme,
+                        "host": parsed.hostname, "port": parsed.port, "path": parsed.path,
+                        "query_present": bool(parsed.query), "evidence": [], "occurrences": 0,
                     })
                     record["occurrences"] += 1
                     record["evidence"].append({"path": relative, "line": line_number})
@@ -514,7 +518,10 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
         ],
         "metrics": {
             "finding_count": len(findings),
-            "endpoint_count": len(api_endpoints),\n            "api_route_count": len(api_routes),\n            "api_call_site_count": sum(len(items) for items in api_clients.values()),\n            "rate_limit_indicator_count": len(rate_limit_indicators),
+            "endpoint_count": len(api_endpoints),
+            "api_route_count": len(api_routes),
+            "api_call_site_count": sum(len(items) for items in api_clients.values()),
+            "rate_limit_indicator_count": len(rate_limit_indicators),
             "dependency_fingerprint_count": len(dependencies),
             "native_library_count": len(native_libraries),
         },
@@ -531,7 +538,7 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             import json
             json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.write("\\n")
+            handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary, 0o600)
