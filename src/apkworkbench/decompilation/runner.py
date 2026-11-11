@@ -55,6 +55,14 @@ class DecompilationRunner:
         self.logger = logger or logging.getLogger("apkworkbench.decompilation")
         self.progress = progress
 
+    def _emit_progress(self, message: str) -> None:
+        if self.progress is None:
+            return
+        try:
+            self.progress(message)
+        except OSError as exc:
+            self.logger.debug("Progress output unavailable: %s", exc)
+
     @staticmethod
     def _sha256(path: Path) -> tuple[str, int]:
         digest = hashlib.sha256()
@@ -174,21 +182,15 @@ class DecompilationRunner:
                                         pending += chunk
                                         while b"\n" in pending:
                                             raw_line, pending = pending.split(b"\n", 1)
-                                            try:
-                                                self.progress(raw_line.decode("utf-8", errors="replace"))
-                                            except Exception:  # progress UI must not interrupt evidence collection
-                                                pass
+                                            self._emit_progress(raw_line.decode("utf-8", errors="replace"))
                                     else:
                                         stop_tailer.wait(0.15)
                                         now = time.monotonic()
                                         if now - last_heartbeat >= 1.0 and not stop_tailer.is_set():
-                                            try:
-                                                self.progress(
-                                                    f"[{label}] still running — "
-                                                    f"{int(now - started)}s elapsed"
-                                                )
-                                            except Exception:
-                                                pass
+                                            self._emit_progress(
+                                                f"[{label}] still running — "
+                                                f"{int(now - started)}s elapsed"
+                                            )
                                             last_heartbeat = now
                                 while True:
                                     chunk = reader.read(64 * 1024)
@@ -197,20 +199,11 @@ class DecompilationRunner:
                                     pending += chunk
                                     while b"\n" in pending:
                                         raw_line, pending = pending.split(b"\n", 1)
-                                        try:
-                                            self.progress(raw_line.decode("utf-8", errors="replace"))
-                                        except Exception:
-                                            pass
+                                        self._emit_progress(raw_line.decode("utf-8", errors="replace"))
                                 if pending:
-                                    try:
-                                        self.progress(pending.decode("utf-8", errors="replace"))
-                                    except Exception:
-                                        pass
+                                    self._emit_progress(pending.decode("utf-8", errors="replace"))
                         except OSError as exc:
-                            try:
-                                self.progress(f"[{label}] live log stream unavailable: {exc}")
-                            except Exception:
-                                pass
+                            self._emit_progress(f"[{label}] live log stream unavailable: {exc}")
                     tailer = threading.Thread(target=stream_log, name="apkworkbench-log-tail", daemon=True)
                     tailer.start()
                 previous_sigterm = None
