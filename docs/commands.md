@@ -91,12 +91,13 @@ The runner executes these stages strictly in order:
 2. Download complete APK bundles from Google Play.
 3. Independently verify the immutable run manifest, APK/OBB files, file sizes, local SHA-256 values, Play-provided digests, and bundle identity.
 4. Run Apktool to completion for every APK component in the run and persist decoded output.
-5. Only after the Apktool stage returns successfully, run TruffleHog against the saved Apktool output.
-6. Generate reports and reconcile every artifact in the acquisition run.
+5. Run the built-in APK surface analyzer over Apktool output: manifest, components, permissions, API endpoints/routes/client call sites, headers, retry/rate-limit indicators, WebView, TLS/crypto, storage, dependencies, resources, and native-library inventory.
+6. Run TruffleHog separately with `--results=verified`; the surface analyzer does not repeat TruffleHog's secret-detection job.
+7. Generate per-APK reports plus one consolidated JSON/HTML run report, then reconcile every manifest item.
 
-A failed download or verification stops processing because the acquired inputs are not trusted. Apktool is evaluated per APK: successful outputs and non-zero/terminated runs that leave usable decoded files are saved transactionally; the latter are marked `partial`. TruffleHog scans every saved `success` or `partial` Apktool output and skips APKs with no usable decoded files. If no usable output exists in the run, TruffleHog is skipped. Per-APK failures remain visible in processing status and run reconciliation; reports and reconciliation still run after partial Apktool or TruffleHog failures. The exact run ID is carried into each processing stage; unrelated workspace downloads are not swept into the run. Logs, decoded output, verification evidence, and reports remain in the configured workspace.
+A failed download or verification stops processing because the acquired inputs are not trusted. Apktool is evaluated per APK: successful outputs and non-zero/terminated runs that leave usable decoded files are saved transactionally; the latter are marked `partial`. The built-in static surface analyzer and TruffleHog operate as separate analysis passes over saved Apktool output. TruffleHog scans every saved `success` or `partial` Apktool output and skips APKs with no usable decoded files. If no usable output exists in the run, analysis is recorded as skipped. Per-APK failures remain visible in the final report and run reconciliation. The consolidated report is written to `reports/runs/RUN_ID/final-report.json` and `final-report.html`. The exact run ID is carried into each processing stage; unrelated workspace downloads are not swept into the run. Live terminal feedback includes measured transfer/hash byte progress, Apktool output and elapsed-time activity, TruffleHog scan activity/verified-finding counters, and stage summaries.
 
-For a manual staged run, the equivalent commands are `apkworkbench discover`, `apkworkbench download`, `apkworkbench verify-downloads --run-id RUN_ID`, `apkworkbench decompile --run-id RUN_ID`, `apkworkbench analyze --run-id RUN_ID`, `apkworkbench report`, and finally `apkworkbench reconcile --run-id RUN_ID`.
+For a manual staged run, the individual commands remain available. The full wrapper is preferred for normal use because it performs discovery, verification, both analysis passes, report generation and reconciliation automatically.
 
 The older 15,000-app acquisition helper remains separate and does not replace this end-to-end workflow.
 
