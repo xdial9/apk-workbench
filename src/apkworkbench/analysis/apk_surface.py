@@ -133,6 +133,10 @@ DOMAIN_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
     r"[A-Za-z]{2,63}(?![A-Za-z0-9_])"
 )
+IPV4_RE = re.compile(
+    r"(?<![0-9.])(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})"
+    r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})){3}(?![0-9.])"
+)
 HTTP_METHOD_RE = re.compile(
     r"""(?:@|->)?(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\(?\s*["']([^"']+)["']""",
     re.IGNORECASE,
@@ -490,6 +494,14 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
                     })
                     record["occurrences"] += 1
                     record["evidence"].append({"path": relative, "line": line_number})
+            for match in IPV4_RE.finditer(line):
+                value = match.group(0)
+                record = api_endpoints.setdefault(value, {
+                    "value": value, "kind": "ip_candidate", "scheme": None,
+                    "host": value, "port": None, "path": None, "evidence": [], "occurrences": 0,
+                })
+                record["occurrences"] += 1
+                record["evidence"].append({"path": relative, "line": line_number})
             if path.suffix.lower() == ".smali":
                 invoke = SMALI_INVOKE_RE.search(line)
                 if invoke and API_INVOKE_OWNER_RE.match(invoke.group(1)):
@@ -541,6 +553,7 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
     partial_diagnostics = {
         "symlink_entries_skipped", "text_file_limit", "text_read_failed",
         "manifest_parse_failed", "network_config_parse_failed",
+        "network_config_referenced_not_found",
         "finding_limit",
     }
     if symlink_count or any(item["code"] in partial_diagnostics for item in diagnostics):
