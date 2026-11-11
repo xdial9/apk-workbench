@@ -656,6 +656,15 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
     }
 
 
+def _emit_progress(progress: Callable[[str], None] | None, message: str) -> None:
+    if progress is None:
+        return
+    try:
+        progress(message)
+    except OSError:
+        return
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(
@@ -818,7 +827,6 @@ def run_static_surface_analysis(
             source_apk.relative_to(downloads_root.resolve(strict=True))
             if not source_apk.is_file() or source_apk.suffix.lower() != ".apk":
                 raise ValueError("Original acquired artifact is not a regular APK file.")
-            expected_hash = digest
             expected_size = int(row.get("size") or 0)
             hash_obj = hashlib.sha256()
             actual_size = 0
@@ -826,16 +834,19 @@ def run_static_surface_analysis(
                 for chunk in iter(lambda: source_handle.read(1024 * 1024), b""):
                     hash_obj.update(chunk)
                     actual_size += len(chunk)
-            if hash_obj.hexdigest() != expected_hash or (
-                expected_size and actual_size != expected_size
-            ):
+            if hash_obj.hexdigest() != digest or (expected_size and actual_size != expected_size):
                 raise ValueError(
                     "Original APK changed after acquisition; refusing DEX analysis "
                     "against bytes that no longer match the manifest."
                 )
-            if progress:
-                progress(f"  Source APK integrity rechecked: SHA-256 matches ({actual_size:,} bytes)")
-                progress(f"  [Androguard] Parsing DEX, method references and API usage for {package_id}")
+            _emit_progress(
+                progress,
+                f"  Source APK integrity rechecked: SHA-256 matches ({actual_size:,} bytes)",
+            )
+            _emit_progress(
+                progress,
+                f"  [Androguard] Parsing DEX, method references and API usage for {package_id}",
+            )
             dex_result = analyze_apk_dex(
                 source_apk,
                 timeout_seconds=dex_timeout_seconds,
@@ -864,12 +875,12 @@ def run_static_surface_analysis(
                 "dex_metrics": dex_result.get("metrics", {}),
                 "coverage": result.get("coverage", {}),
             })
-            if progress:
-                progress(
-                    f"  Complete: {count} static indicators; "
-                    f"{dex_result.get('metrics', {}).get('external_methods_referenced', 0)} "
-                    f"external DEX API references; report saved to {target}"
-                )
+            _emit_progress(
+                progress,
+                f"  Complete: {count} static indicators; "
+                f"{dex_result.get('metrics', {}).get('external_methods_referenced', 0)} "
+                f"external DEX API references; report saved to {target}",
+            )
         except (OSError, ValueError, RuntimeError) as exc:
             summary["failed"] += 1
             failure = {
@@ -891,8 +902,7 @@ def run_static_surface_analysis(
                 "sha256": digest, "status": "failed", "path": str(target),
                 "error": str(exc),
             })
-            if progress:
-                progress(f"  FAILED: {package_id}: {exc}")
+            _emit_progress(progress, f"  FAILED: {package_id}: {exc}")
     if marker_path is not None:
         marker_status = (
             "failed" if summary["failed"]
