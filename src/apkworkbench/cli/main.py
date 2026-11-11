@@ -561,6 +561,7 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
         apktool_executable=str(config.get("tools.apktool", "apktool")),
         timeout_seconds=int(config.get("decompilation.timeout_seconds", 3600)),
         logger=logger,
+        progress=click.echo,
     )
     click.echo(BANNER)
     click.echo("Starting Apktool decoding; each APK is SHA-256 checked first.")
@@ -615,6 +616,7 @@ def analyze(limit: int, force: bool, run_id: str | None) -> None:
         timeout_seconds=int(config.get("analysis.timeout_seconds", 7200)),
         max_output_bytes=int(config.get("analysis.max_output_bytes", 512 * 1024 * 1024)),
         logger=logger,
+        progress=click.echo,
     )
     click.echo(BANNER)
     click.echo("Starting TruffleHog analysis with verified-result selection (--results=verified).")
