@@ -5,11 +5,13 @@ not execute APK code, contact discovered endpoints, or claim runtime verificatio
 """
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
 TEXT_SUFFIXES = {
@@ -275,6 +277,8 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
     )
     smali_files = [path for path in files if path.suffix.lower() == ".smali"]
     resource_files = [path for path in files if path.relative_to(root).parts[:1] in {("res",), ("assets",)}]
+    if resource_files:
+        coverage["resource_inventory"] = "success"
     manifest = next((path for path in files if path.name == "AndroidManifest.xml"), None)
     manifest_facts: dict[str, Any] = {"status": "not_found"}
     if manifest:
@@ -342,8 +346,9 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
         if path.suffix.lower() == ".smali":
             coverage["smali_security_indicators"] = "success"
         lowered_path = relative.lower()
+        lowered_text = text.lower()
         for dependency, markers in DEPENDENCY_MARKERS.items():
-            if any(marker.lower() in lowered_path or marker.lower() in text.lower() for marker in markers):
+            if any(marker.lower() in lowered_path or marker.lower() in lowered_text for marker in markers):
                 dependency_evidence[dependency].append(relative)
 
         for match in URL_RE.finditer(text):
@@ -421,3 +426,165 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
             "native_library_count": len(native_libraries),
         },
     }
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            import json
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def run_static_surface_analysis(
+    database,
+    workspace: str | Path,
+    *,
+    run_id: str | None = None,
+    force: bool = False,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Run surface analysis for every eligible APK in a run and persist per-APK output."""
+    root = Path(workspace).expanduser().resolve()
+    results_root = root / "results"
+    if results_root.is_symlink():
+        raise ValueError("Results directory must not be a symlink.")
+    results_root.mkdir(parents=True, exist_ok=True)
+    results_root = results_root.resolve(strict=True)
+    results_root.relative_to(root)
+
+    history = database.read_download_history()
+    statuses = database.read_processing_status()
+    if run_id is None:
+        selected_rows = history
+    else:
+        selected_rows = []
+        history_by_hash = {
+            row.get("sha256", "").lower(): row for row in history if row.get("sha256")
+        }
+        for selected in database.read_manifest(run_id):
+            acquired = history_by_hash.get(selected.get("sha256", "").lower())
+            if (
+                acquired is not None
+                and acquired.get("run_id") == run_id
+                and acquired.get("package_id") == selected.get("package_id")
+                and str(acquired.get("version_code", "")) == str(selected.get("version_code", ""))
+                and acquired.get("source") == selected.get("source")
+            ):
+                selected_rows.append(acquired)
+
+    eligible = [
+        row for row in selected_rows
+        if statuses.get(row.get("sha256", "").lower(), {}).get("apktool_status")
+        in {"success", "partial"}
+    ]
+    summary: dict[str, Any] = {
+        "run_id": run_id,
+        "eligible": len(eligible),
+        "completed": 0,
+        "failed": 0,
+        "skipped": len(selected_rows) - len(eligible),
+        "finding_count": 0,
+        "artifacts": [],
+    }
+    for index, row in enumerate(eligible, start=1):
+        package_id = row.get("package_id", "")
+        version_code = str(row.get("version_code", ""))
+        digest = row.get("sha256", "").lower()
+        if not re.fullmatch(r"[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+", package_id) or not version_code.isdigit():
+            summary["failed"] += 1
+            summary["artifacts"].append({
+                "package_id": package_id, "version_code": version_code,
+                "sha256": digest, "status": "failed",
+                "error": "Malformed package identity in acquisition history.",
+            })
+            continue
+        output_root = results_root / package_id / version_code / digest
+        decoded = output_root / "apktool"
+        target = output_root / "static-analysis.json"
+        if any(path.is_symlink() for path in (output_root, decoded, target)):
+            summary["failed"] += 1
+            summary["artifacts"].append({
+                "package_id": package_id, "version_code": version_code,
+                "sha256": digest, "status": "failed",
+                "error": "Refusing symlinked static-analysis path.",
+            })
+            continue
+        if not decoded.is_dir():
+            summary["skipped"] += 1
+            continue
+        if not force and target.is_file():
+            try:
+                import json
+                prior = json.loads(target.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                prior = {}
+            if isinstance(prior, dict) and prior.get("status") in {"success", "partial"}:
+                summary["skipped"] += 1
+                summary["finding_count"] += len(prior.get("findings", []))
+                summary["artifacts"].append({
+                    "package_id": package_id, "version_code": version_code,
+                    "sha256": digest, "status": "skipped_reused",
+                    "path": str(target), "finding_count": len(prior.get("findings", [])),
+                })
+                continue
+        if progress:
+            progress(f"[surface {index}/{len(eligible)}] Inspecting {package_id} v{version_code}")
+        try:
+            result = analyze_apk_surface(decoded)
+            result["artifact"] = {
+                "package_id": package_id, "version_code": version_code,
+                "sha256": digest, "source_apk": row.get("local_path", ""),
+            }
+            _atomic_write_json(target, result)
+            count = len(result.get("findings", []))
+            summary["completed"] += 1
+            summary["finding_count"] += count
+            summary["artifacts"].append({
+                "package_id": package_id, "version_code": version_code,
+                "sha256": digest, "status": result["status"],
+                "path": str(target), "finding_count": count,
+                "coverage": result.get("coverage", {}),
+            })
+            if progress:
+                progress(f"  Complete: {count} static indicators; report saved to {target}")
+        except (OSError, ValueError, RuntimeError) as exc:
+            summary["failed"] += 1
+            failure = {
+                "schema_version": 1,
+                "analyzer": {"id": "apk-surface", "version": "0.1.0"},
+                "status": "failed",
+                "artifact": {
+                    "package_id": package_id, "version_code": version_code,
+                    "sha256": digest, "source_apk": row.get("local_path", ""),
+                },
+                "coverage": {},
+                "findings": [],
+                "diagnostics": [{"code": "surface_analysis_failed", "message": f"{type(exc).__name__}: {exc}"}],
+                "limitations": ["Static analysis did not complete for this artifact."],
+            }
+            _atomic_write_json(target, failure)
+            summary["artifacts"].append({
+                "package_id": package_id, "version_code": version_code,
+                "sha256": digest, "status": "failed", "path": str(target),
+                "error": str(exc),
+            })
+            if progress:
+                progress(f"  FAILED: {package_id}: {exc}")
+    return summary
