@@ -33,7 +33,10 @@ def test_apk_surface_analyzer_inventories_manifest_code_endpoints_and_libraries(
         'const-string v0, "http://api.example.test/v1"\n'
         'invoke-virtual {v1, v2}, Landroid/webkit/WebView;->addJavascriptInterface(Ljava/lang/Object;Ljava/lang/String;)V\n'
         'invoke-virtual {v1, v2}, Ljava/lang/Runtime;->exec(Ljava/lang/String;)Ljava/lang/Process;\n'
-        'const-string v0, "DES"\n',
+        'const-string v0, "DES"\n'
+        '@GET("/v1/accounts")\n'
+        'const-string v0, "X-RateLimit-Limit"\n'
+        'const-string v0, "Retry-After"\n',
         encoding="utf-8",
     )
     (root / "smali/com/example/Dependency.smali").write_text(
@@ -52,7 +55,13 @@ def test_apk_surface_analyzer_inventories_manifest_code_endpoints_and_libraries(
     assert any(item["rule_id"] == "dynamic_code_loading" for item in result["findings"]) is False
     assert any(item["rule_id"] == "process_execution" for item in result["findings"])
     assert any(item["rule_id"] == "weak_cipher" for item in result["findings"])
-    assert any(item["category"] == "endpoints" for item in result["findings"])
+    assert any(item["category"] == "api_inventory" for item in result["findings"])
+    inventory = result["inventory"]
+    assert any(item["path"] == "/v1/accounts" and item["http_method"] == "GET" for item in inventory["api_routes"])
+    assert "Retrofit" in {item["name"] for item in inventory["api_clients"]}
+    assert {"x-ratelimit-limit", "retry-after"} <= {item["name"] for item in inventory["api_headers"]}
+    assert inventory["server_rate_limit_assessment"]["status"] == "not_determined_from_static_apk"
+    assert len(inventory["rate_limit_indicators"]) == 2
     assert "OkHttp" in {item["name"] for item in result["inventory"]["dependencies"]}
     assert result["coverage"]["runtime_behavior"] == "not_performed"
 
