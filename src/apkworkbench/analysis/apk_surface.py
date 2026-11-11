@@ -53,6 +53,18 @@ DEPENDENCY_MARKERS = {
     "Adjust": ("com/adjust/", "com.adjust."),
     "Branch": ("io/branch/", "io.branch."),
     "OneSignal": ("com/onesignal/", "com.onesignal."),
+    "AWS SDK / Amplify": ("com/amazonaws/", "com.amazonaws.", "com/amplifyframework/", "com.amplifyframework."),
+    "Azure / MSAL": ("com/microsoft/azure/", "com.microsoft.azure.", "com/microsoft/identity/", "com.microsoft.identity."),
+    "Supabase": ("io/supabase/", "io.supabase."),
+    "Appwrite": ("io/appwrite/", "io.appwrite."),
+    "Auth0": ("com/auth0/", "com.auth0."),
+    "Okta": ("com/okta/", "com.okta."),
+    "Stripe": ("com/stripe/", "com.stripe."),
+    "Adyen": ("com/adyen/", "com.adyen."),
+    "Braintree": ("com/braintreepayments/", "com.braintreepayments."),
+    "Twilio": ("com/twilio/", "com.twilio."),
+    "RevenueCat": ("com/revenuecat/", "com.revenuecat."),
+    "SendGrid": ("com/sendgrid/", "com.sendgrid."),
 }
 
 # These are review leads, not automatic vulnerability verdicts.
@@ -81,6 +93,18 @@ CODE_RULES = (
     ("custom_tls_trust", "network_security", "info", "Custom TLS trust implementation referenced",
      r"X509TrustManager|checkServerTrusted|HostnameVerifier", 0.75,
      "A custom certificate/hostname verification implementation may exist; inspect its behavior."),
+    ("ssl_error_proceed", "network_security", "high", "WebView SSL error handler may proceed past certificate error",
+     r"SslErrorHandler;->proceed|\\.proceed\\(\\)", 0.88,
+     "Review whether this call proceeds after a TLS certificate error and under which conditions."),
+    ("trust_all_certificates", "network_security", "high", "Trust-all certificate implementation indicator",
+     r"TrustAllCerts|ALLOW_ALL_HOSTNAME_VERIFIER|AllowAllHostnameVerifier", 0.92,
+     "A trust-all or allow-all verifier marker is present; inspect the implementation and call path."),
+    ("mutable_pending_intent", "components", "medium", "Mutable PendingIntent flag referenced",
+     r"FLAG_MUTABLE|0x02000000", 0.72,
+     "Review whether the mutable PendingIntent is necessary and whether its creator is exposed."),
+    ("world_accessible_file_mode", "data_storage", "high", "Legacy world-readable/writable file mode referenced",
+     r"MODE_WORLD_READABLE|MODE_WORLD_WRITEABLE", 0.90,
+     "A deprecated world-accessible file mode is referenced; check whether it can be reached on supported Android versions."),
     ("weak_tls_protocol", "cryptography", "high", "Legacy TLS/SSL protocol string present",
      r"""["'](?:SSL|SSLv3|TLSv1|TLSv1\.0|TLSv1\.1)["']""", 0.90,
      "A legacy protocol identifier is present. Confirm whether it is used by an active TLS context."),
@@ -353,6 +377,7 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
 
     dependency_evidence: dict[str, list[str]] = {name: [] for name in DEPENDENCY_MARKERS}
     api_clients: dict[str, list[dict[str, Any]]] = {name: [] for name in API_CLIENT_MARKERS}
+    api_call_sites: list[dict[str, Any]] = []
     api_endpoints: dict[str, dict[str, Any]] = {}
     api_routes: dict[str, dict[str, Any]] = {}
     api_headers: dict[str, list[dict[str, Any]]] = {}
@@ -422,6 +447,18 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
                         })
                         record["occurrences"] += 1
                         record["evidence"].append({"path": relative, "line": line_number})
+            if path.suffix.lower() == ".smali":
+                invoke = SMALI_INVOKE_RE.search(line)
+                if invoke and API_INVOKE_OWNER_RE.match(invoke.group(1)):
+                    api_call_sites.append({
+                        "owner": invoke.group(1),
+                        "method": invoke.group(2),
+                        "arguments": invoke.group(3),
+                        "return_type": invoke.group(4),
+                        "path": relative,
+                        "line": line_number,
+                        "snippet": line.strip(),
+                    })
             for client, patterns in API_CLIENT_MARKERS.items():
                 if any(re.search(pattern, line, re.IGNORECASE) for pattern in patterns):
                     api_clients[client].append({
@@ -461,6 +498,17 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
 
     for endpoint, metadata in sorted(api_endpoints.items()):
         first = metadata["evidence"][0] if metadata["evidence"] else {}
+        nearby_limit_signals = [
+            signal for signal in rate_limit_indicators
+            if signal["path"] == first.get("path")
+            and first.get("line") is not None
+            and abs(signal["line"] - first["line"]) <= 30
+        ]
+        metadata["nearby_rate_limit_indicators"] = nearby_limit_signals
+        metadata["client_rate_limit_status"] = (
+            "indicators_near_endpoint" if nearby_limit_signals
+            else "no_nearby_client_indicator_found"
+        )
         findings.append(_finding(
             "api_endpoint_inventory", "api_inventory", "info",
             f"API/network endpoint candidate: {endpoint}",
@@ -492,10 +540,12 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
             "extension_counts": dict(sorted(extensions.items())),
             "smali_file_count": len(smali_files),
             "resource_and_asset_file_count": len(resource_files),
+            "resource_and_asset_paths": [path.relative_to(root).as_posix() for path in resource_files],
             "native_libraries": native_libraries,
             "dependencies": dependencies,
             "endpoints": [metadata for _value, metadata in sorted(api_endpoints.items())],
             "api_routes": [metadata for _route, metadata in sorted(api_routes.items())],
+            "api_call_sites": api_call_sites,
             "api_clients": [
                 {"name": name, "call_sites": calls, "call_site_count": len(calls)}
                 for name, calls in sorted(api_clients.items()) if calls
@@ -523,7 +573,8 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
             "finding_count": len(findings),
             "endpoint_count": len(api_endpoints),
             "api_route_count": len(api_routes),
-            "api_call_site_count": sum(len(items) for items in api_clients.values()),
+            "api_call_site_count": len(api_call_sites),
+            "api_client_library_evidence_count": sum(len(items) for items in api_clients.values()),
             "rate_limit_indicator_count": len(rate_limit_indicators),
             "dependency_fingerprint_count": len(dependencies),
             "native_library_count": len(native_libraries),
