@@ -354,7 +354,12 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
         for match in URL_RE.finditer(text):
             value = match.group(0).rstrip(".,);]}:")
             if value:
-                endpoints.setdefault(value, {"path": relative, "count": 0})
+                endpoints.setdefault(value, {"path": relative, "count": 0, "kind": "url"})
+                endpoints[value]["count"] += 1
+        for match in DOMAIN_RE.finditer(text):
+            value = match.group(0).lower().rstrip(".")
+            if value and not value.endswith((".xml", ".json", ".png", ".jpg", ".smali")):
+                endpoints.setdefault(value, {"path": relative, "count": 0, "kind": "domain"})
                 endpoints[value]["count"] += 1
 
         if path.suffix.lower() in {".smali", ".xml", ".js", ".java", ".kt", ".json", ".properties", ".html", ".htm"}:
@@ -515,10 +520,20 @@ def run_static_surface_analysis(
                 "error": "Malformed package identity in acquisition history.",
             })
             continue
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            summary["failed"] += 1
+            summary["artifacts"].append({
+                "package_id": package_id, "version_code": version_code,
+                "sha256": digest, "status": "failed",
+                "error": "Malformed SHA-256 in acquisition history.",
+            })
+            continue
         output_root = results_root / package_id / version_code / digest
         decoded = output_root / "apktool"
         target = output_root / "static-analysis.json"
-        if any(path.is_symlink() for path in (output_root, decoded, target)):
+        package_root = results_root / package_id
+        version_root = package_root / version_code
+        if any(path.is_symlink() for path in (package_root, version_root, output_root, decoded, target)):
             summary["failed"] += 1
             summary["artifacts"].append({
                 "package_id": package_id, "version_code": version_code,
