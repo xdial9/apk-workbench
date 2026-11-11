@@ -157,6 +157,41 @@ def test_modified_apk_is_rejected_before_tool_execution(monkeypatch, tmp_path):
     assert "SHA-256 changed" in state["error"]
 
 
+def test_modified_apk_is_rejected_even_when_apktool_output_can_be_reused(
+    monkeypatch, tmp_path
+):
+    runner, database, digest, apk_path = make_runner(tmp_path)
+    output = tmp_path / "results/org.example.app/7" / digest / "apktool"
+    output.mkdir(parents=True)
+    (output / "AndroidManifest.xml").write_text("previous decoded output", encoding="utf-8")
+    database.update_processing_status(
+        {
+            "sha256": digest,
+            "package_id": "org.example.app",
+            "version_code": "7",
+            "apktool_status": "success",
+            "scan_status": "pending",
+        }
+    )
+    apk_path.write_bytes(b"modified after previous successful decode")
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda *a, **k: pytest.fail("modified APK reached Apktool"),
+    )
+
+    summary = runner.run()
+
+    assert summary.failed == 1
+    assert summary.skipped == 0
+    state = database.read_processing_status()[digest]
+    assert state["apktool_status"] == "failed"
+    assert "SHA-256 changed" in state["error"]
+    assert (output / "AndroidManifest.xml").read_text(encoding="utf-8") == (
+        "previous decoded output"
+    )
+
+
 def test_apktool_failure_is_recorded_and_no_other_decompiler_is_called(monkeypatch, tmp_path):
     runner, database, digest, _ = make_runner(tmp_path)
     calls = []
