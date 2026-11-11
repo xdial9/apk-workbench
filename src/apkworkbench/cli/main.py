@@ -17,11 +17,13 @@ from apkworkbench.acquisition.verification import (
     verify_google_play_run,
 )
 from apkworkbench.analysis.trufflehog import AnalysisError, TruffleHogScanner
+from apkworkbench.analysis.apk_surface import run_static_surface_analysis
 from apkworkbench.core.config import Config
 from apkworkbench.core.logging import setup_logging
 from apkworkbench.database.workspace import DatabaseError, WorkspaceDatabase, utc_now
 from apkworkbench.decompilation.runner import DecompilationRunner
 from apkworkbench.reporting.generator import ReportGenerator, ReportingError
+from apkworkbench.reporting.final_run import FinalRunReportError, generate_final_run_report
 from apkworkbench.dependencies.detector import DependencyDetector
 from apkworkbench.sources.google_play import (
     GooglePlayError,
@@ -643,9 +645,11 @@ def analyze(limit: int, force: bool, run_id: str | None) -> None:
 
 
 @main.command()
+@click.option("--run-id", type=str, default=None, help="Also generate a consolidated report for this frozen run.")
 @_workspace_locked
-def report() -> None:
-    """Generate per-APK JSON and HTML reports with complete finding objects."""
+def report(run_id: str | None) -> None:
+    """Generate per-APK reports and, when scoped, one complete run evidence package."""
+
     config = Config()
     logger = setup_logging(config)
     generator = ReportGenerator(
@@ -655,7 +659,11 @@ def report() -> None:
     click.echo(BANNER)
     try:
         summary = generator.run()
-    except (ReportingError, DatabaseError, OSError, ValueError) as exc:
+        final_report = (
+            generate_final_run_report(WorkspaceDatabase(config.get("workspace")), config.get("workspace"), run_id)
+            if run_id else None
+        )
+    except (ReportingError, FinalRunReportError, DatabaseError, OSError, ValueError) as exc:
         logger.error("Report generation failed: %s", exc)
         click.echo(f"Report generation failed: {exc}", err=True)
         raise click.exceptions.Exit(1) from exc
@@ -665,6 +673,14 @@ def report() -> None:
     click.echo(f"  APKs with findings: {summary.with_findings}")
     click.echo(f"  Total candidate findings: {summary.total_findings}")
     click.echo(f"  Output directory: {Path(config.get('workspace')) / 'reports'}")
+    if final_report:
+        click.echo("CONSOLIDATED FINAL RUN REPORT")
+        click.echo(f"  JSON: {final_report['json_path']}")
+        click.echo(f"  HTML: {final_report['html_path']}")
+        click.echo(f"  API endpoint candidates: {final_report['api_endpoint_count']}")
+        click.echo(f"  API route candidates: {final_report['api_route_count']}")
+        click.echo(f"  Static indicators: {final_report['static_findings']}")
+        click.echo(f"  Verified TruffleHog findings: {final_report['verified_findings']}")
 
 
 @main.command()
@@ -732,6 +748,7 @@ def run(
     for stage_name, command, kwargs in (
         ("download", download, {"apk_count": 1 if package_id else apk_count, "package_id": package_id}),
         ("decompile", decompile, {"limit": 0, "force": force_decompile}),
+        ("surface", None, {}),
         ("analyze", analyze, {"limit": 0, "force": force_analyze}),
         ("report", report, {}),
     ):
@@ -759,6 +776,31 @@ def run(
                 f"Starting TruffleHog for {usable_outputs} APK(s) with saved Apktool output "
                 "(complete or partial)."
             )
+        if stage_name == "surface":
+            click.echo("\\n=== STATIC APK SURFACE ANALYSIS ===")
+            click.echo("Cataloguing manifest, components, permissions, API endpoints/routes, network, code, dependencies and native libraries.")
+            try:
+                surface_summary = run_static_surface_analysis(
+                    WorkspaceDatabase(Config().get("workspace")),
+                    Config().get("workspace"),
+                    run_id=run_id,
+                    progress=click.echo,
+                )
+            except (DatabaseError, OSError, ValueError, RuntimeError) as exc:
+                click.echo(f"Static surface analysis failed: {exc}", err=True)
+                stages_with_issues.append("surface")
+            else:
+                click.echo(
+                    f"Static surface analysis: {surface_summary['completed']} completed, "
+                    f"{surface_summary['failed']} failed, {surface_summary['skipped']} skipped; "
+                    f"{surface_summary['finding_count']} indicators."
+                )
+                if surface_summary["failed"]:
+                    stages_with_issues.append("surface")
+            continue
+
+        if stage_name == "report":
+            kwargs["run_id"] = context.meta.get("apkworkbench_run_id")
         try:
             context.invoke(command, **kwargs)
         except click.exceptions.Exit as exc:
@@ -817,8 +859,7 @@ def run(
             click.echo(f"Verification report: {verification['report_path']}")
         if stage_name == "decompile":
             click.echo(
-                "Apktool stage completed successfully. All selected output is saved; "
-                "TruffleHog may now start."
+                "Apktool stage completed. Static surface analysis and TruffleHog will now run independently."
             )
 
     run_id = context.meta.get("apkworkbench_run_id")
