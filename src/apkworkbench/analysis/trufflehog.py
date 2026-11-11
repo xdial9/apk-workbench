@@ -320,8 +320,8 @@ class TruffleHogScanner:
                             stdout_file.write(chunk)
                             if self.progress is not None:
                                 progress_line.extend(chunk)
-                                while b"\\n" in progress_line:
-                                    raw_line, progress_line = progress_line.split(b"\\n", 1)
+                                while b"\n" in progress_line:
+                                    raw_line, progress_line = progress_line.split(b"\n", 1)
                                     try:
                                         live_item = json.loads(raw_line.decode("utf-8"))
                                     except (UnicodeDecodeError, json.JSONDecodeError):
