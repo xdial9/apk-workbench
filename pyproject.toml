@@ -15,6 +15,7 @@ dependencies = [
   "playstore-cli==0.1.1",
   "goopdl==2.0.0",
   "PyYAML>=6.0,<7",
+  "androguard==4.1.4",
 ]
 
 [project.optional-dependencies]
