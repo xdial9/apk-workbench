@@ -65,8 +65,8 @@ def _hash_file(
                         f"[Verify] {label or path.name} {algorithm.upper()}: "
                         f"{processed:,}/{total:,} bytes ({percentage:.1f}%)"
                     )
-                except Exception:
-                    pass
+                except OSError:
+                    progress = None
                 last_notice = processed
     return digest.hexdigest()
 
