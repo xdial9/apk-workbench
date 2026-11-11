@@ -438,6 +438,8 @@ def generate_final_run_report(
                 "findings": static_findings,
                 "api_endpoint_candidates": api_endpoint_count,
                 "api_route_candidates": api_route_count,
+                "api_smali_call_sites": len(api_call_sites),
+                "client_rate_limit_retry_indicators": len(rate_limit_indicators),
             },
             "trufflehog_verified_secret_scan": {
                 "scanned": sum(item["processing"]["trufflehog_status"] == "success" for item in artifacts),
@@ -470,6 +472,8 @@ def generate_final_run_report(
             "static_analysis_indicators": static_findings,
             "api_endpoint_candidates": api_endpoint_count,
             "api_route_candidates": api_route_count,
+            "api_smali_call_sites": len(api_call_sites),
+            "client_rate_limit_retry_indicators": len(rate_limit_indicators),
             "reconciliation_complete": reconciliation.get("complete", 0),
             "reconciliation_total": reconciliation.get("total", 0),
         },
@@ -499,4 +503,6 @@ def generate_final_run_report(
         "static_findings": static_findings,
         "api_endpoint_count": api_endpoint_count,
         "api_route_count": api_route_count,
+        "api_call_site_count": len(api_call_sites),
+        "rate_limit_indicator_count": len(rate_limit_indicators),
     }
