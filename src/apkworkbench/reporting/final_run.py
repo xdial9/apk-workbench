@@ -65,8 +65,8 @@ def _html_document(payload: dict[str, Any]) -> str:
         "summary{cursor:pointer;font-weight:650;margin:1rem 0}code{overflow-wrap:anywhere}",
         "</style></head><body>",
         f"<h1>{html.escape(title)}</h1>",
-        "<p>Complete consolidated acquisition, verification, decompilation, static analysis, "
-        "verified-secret scan, findings, report and reconciliation evidence.</p>",
+        ("<p>Complete consolidated acquisition, verification, decompilation, static analysis, "
+         "verified-secret scan, findings, report and reconciliation evidence.</p>"),
         "<h2>Run summary</h2>",
         f"<pre>{summary_json}</pre>",
         "<h2>Complete machine-readable evidence</h2>",
