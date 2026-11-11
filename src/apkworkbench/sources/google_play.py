@@ -167,9 +167,9 @@ class GooglePlaySource:
         if self.progress is not None:
             try:
                 self.progress(message)
-            except Exception:
-                # Display feedback must never interrupt acquisition or verification.
-                pass
+            except OSError:
+                # A closed terminal must not interrupt acquisition or verification.
+                self.progress = None
 
     def categories(self) -> list[tuple[str, str]]:
         """Return the two Play roots and all available app/game subcategories."""
@@ -327,7 +327,12 @@ class GooglePlaySource:
                     )
                     monitor_stop = threading.Event()
 
-                    def monitor_transfer() -> None:
+                    def monitor_transfer(
+                        item=item,
+                        monitor_stop=monitor_stop,
+                        partial_path=partial_path,
+                        component_path=component_path,
+                    ) -> None:
                         last_size = -1
                         last_notice = time.monotonic()
                         while not monitor_stop.wait(0.5):
