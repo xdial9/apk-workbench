@@ -8,9 +8,9 @@ APK Workbench is a Linux-native Python CLI for discovering Android apps on Googl
 
 ## Important Google Play limitations
 
-The acquisition adapter uses [playstore-cli](https://pypi.org/project/playstore-cli/) 0.1.1, an alpha research client for Google's **unofficial internal Play API**. It is not an official Google API and may violate Google's terms or cause the research account to be restricted. Use a dedicated Google account, not your primary account. The upstream client stores a long-lived AAS token locally; protect its configuration directory and never share or commit it.
+The acquisition adapter keeps [playstore-cli](https://pypi.org/project/playstore-cli/) 0.1.1 for Google's **unofficial internal Play API** protocol and Play delivery operations. [goopdl](https://pypi.org/project/goopdl/2.0.0/) 2.0.0 supplies anonymous device-session credentials from [Aurora Store's public token dispenser](https://auroraoss.com/api/auth). No Google account, AAS token, API key, browser sign-in, or user-supplied bearer token is required. The Play API still receives a short-lived bearer token internally; it is issued anonymously and cached/rotated by goopdl (by default under `~/.config/goopdl`, relocatable with `GOOPDL_CONFIG_DIR` or `XDG_CONFIG_HOME`). A dispenser outage or rate limit can temporarily prevent new sessions. The dispenser is a third-party service, not Google, and the Play API is unofficial. The adapter fails closed when `GOOPDL_ACCOUNT_EMAIL` or `GOOPDL_AAS_TOKEN` is set rather than silently using account credentials.
 
-The upstream client currently downloads free apps. Paid apps, unavailable versions, and apps incompatible with the selected device profile cannot be acquired through this path. A free app that is not already in the research account's Play library may be added to that account as part of delivery acquisition. Review this account-side effect before using the research account. Play may serve different APK variants depending on the device profile.
+The adapter currently targets free apps. Paid apps, unavailable versions, and apps incompatible with the selected device profile may not be downloadable through this path. Play may add a free app to the anonymous device profile's library as part of delivery acquisition. Play may also serve different APK variants depending on the selected device profile.
 
 ## Install
 
@@ -31,18 +31,16 @@ python -m pip install -e ".[dev]"
 
 Install Apktool and TruffleHog using their official installation instructions. APK Workbench checks for `playstore-cli`, Java, Apktool, and TruffleHog with `apkworkbench doctor`.
 
-## Authenticate Google Play locally
+## Configure anonymous Google Play access
 
-The Play client is installed in the same Python environment as APK Workbench.
+No Google login, AAS token, API key, browser sign-in, or manually supplied bearer token is required. On the first Play request, APK Workbench obtains a short-lived anonymous device session from Aurora Store's public token dispenser. goopdl maintains the token pool and refreshes rejected tokens automatically.
 
 ```bash
 source .venv/bin/activate
-playstore-cli login
-playstore-cli checkin
 apkworkbench doctor
 ```
 
-Complete browser sign-in and any two-step verification locally. Do not paste Google credentials, cookies, AAS tokens, or session files into ChatGPT or GitHub. The first check-in registers a virtual device; choose a device profile compatible with the apps you intend to acquire.
+The adapter deliberately refuses to switch to Google-account mode: unset `GOOPDL_ACCOUNT_EMAIL` and `GOOPDL_AAS_TOKEN` if either is present. The anonymous token cache defaults to `~/.config/goopdl`; set `GOOPDL_CONFIG_DIR` to relocate it. These are short-lived anonymous service tokens, not your Google account credentials.
 
 ## Discover a corpus
 
@@ -109,6 +107,6 @@ Airtable is the engineering coordination mirror. Runtime APK data remains local 
 
 ## Verification boundary
 
-The upstream downloader validates every Play delivery component against the size and digest returned by Play (SHA-256 for APK files and SHA-1 for OBB files). APK Workbench independently re-hashes the acquired files and verifies APK SHA-256 values again before decompilation. A successful automated test run verifies mocked adapter and subprocess behavior; it does not prove that a live Google account can authenticate, that a specific app is downloadable for a device profile, or that an overnight 15,000-app acquisition will complete. Those require live validation on the operator's machine.
+The upstream downloader validates every Play delivery component against the size and digest returned by Play (SHA-256 for APK files and SHA-1 for OBB files). APK Workbench independently re-hashes the acquired files and verifies APK SHA-256 values again before decompilation. A successful automated test run verifies mocked adapter, anonymous-session, and subprocess behavior; it does not prove that Aurora's public dispenser is reachable, that a specific app is downloadable for a device profile, or that an overnight 15,000-app acquisition will complete. Those require live validation on the operator's machine.
 
 APK Workbench does not install or execute acquired apps. Treat APKs and all generated output as untrusted input.

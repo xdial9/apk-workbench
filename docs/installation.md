@@ -32,18 +32,18 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-The package pins `playstore-cli==0.1.1`. Its API is alpha and may change; update the pin only with adapter and live-acquisition validation.
+The package pins `playstore-cli==0.1.1` for Play API/delivery operations and `goopdl==2.0.0` for anonymous sessions. Both are used through their Python APIs. `playstore-cli` is an unofficial research client for Google's internal Play API; pin changes require adapter tests and live-acquisition validation.
 
-## 3. Authenticate with Google Play
+## 3. Configure anonymous Google Play access
 
 ```bash
-playstore-cli login
-playstore-cli checkin
+source .venv/bin/activate
+apkworkbench doctor
 ```
 
-Complete sign-in in the browser on your own machine. Use a separate research Google account. Do not paste credentials, cookies, or tokens into chat or source control.
+No Google login, AAS token, API key, browser sign-in, or manually supplied bearer token is required. On the first Play request, goopdl obtains short-lived anonymous credentials from Aurora Store's public token dispenser and maintains a rotating local token pool. The Play API still uses a bearer token internally, but it is issued anonymously rather than from your Google account. The dispenser is a third-party service and may rate-limit or become unavailable; the Play API itself is unofficial. The adapter currently targets free apps, and Play may add a free app to the anonymous device profile's library as part of delivery. Device profile compatibility affects which variants are served.
 
-The upstream client communicates with Google's unofficial internal Play API. Google may restrict the account; this is an explicit operational risk. The client currently supports downloading free apps only. A free app that is not already in the research account's Play library may be added to that account as part of delivery acquisition. Review this account-side effect before using the research account. Device profile compatibility affects which variants Google Play serves.
+Unset `GOOPDL_ACCOUNT_EMAIL` and `GOOPDL_AAS_TOKEN` if either is present. APK Workbench fails closed rather than using Google account credentials.
 
 ## 4. Verify dependencies
 
@@ -76,10 +76,10 @@ python -m pytest
 ruff check .
 ```
 
-Automated tests mock Google Play API and download boundaries. They do not authenticate a real account or download a real app. Before a large corpus run, validate one representative app live and verify the resulting bundle, local hashes, decompilation, TruffleHog scan, and reconciliation.
+Automated tests mock the anonymous dispenser, Google Play API, delivery, and download boundaries. They do not prove the live dispenser is available or download a real app. Before a large corpus run, validate one representative app live and verify the resulting bundle, local hashes, Apktool decoding, TruffleHog scan, and reconciliation.
 
-## Credentials and storage
+## Anonymous token cache and storage
 
-The upstream client stores its account token and device/session state in `~/.config/playstore-cli` by default. Restrict access to that directory. The `PLAYSTORE_HOME` environment variable can relocate it.
+The anonymous goopdl token cache defaults to `~/.config/goopdl`. Set `GOOPDL_CONFIG_DIR` or `XDG_CONFIG_HOME` to relocate it. On POSIX, goopdl creates the directory with mode `0700` and token files with mode `0600`. These are short-lived anonymous bearer/device credentials; keep the directory private and never commit or share it. APK Workbench does not read saved `playstore-cli` account credentials.
 
 The workbench workspace defaults to `~/APK-Workbench-Google-Play/`. Keep it separate from the Git checkout; it contains acquired APKs, OBBs, bundle metadata, processing results, reports, and logs.
