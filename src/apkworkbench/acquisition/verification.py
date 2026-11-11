@@ -7,6 +7,7 @@ import os
 import re
 import stat
 import tempfile
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,16 +38,36 @@ def _contained_regular_file(path: Path, root: Path, description: str) -> Path:
     return resolved
 
 
-def _hash_file(path: Path, algorithm: str) -> str:
+def _hash_file(
+    path: Path,
+    algorithm: str,
+    *,
+    progress: Callable[[str], None] | None = None,
+    label: str | None = None,
+) -> str:
     try:
         digest = hashlib.new(algorithm)
     except (TypeError, ValueError) as exc:
         raise AcquisitionVerificationError(
             f"Unsupported Play digest algorithm: {algorithm!r}"
         ) from exc
+    total = path.stat().st_size
+    processed = 0
+    last_notice = 0
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
+            processed += len(chunk)
+            if progress is not None and (processed - last_notice >= 4 * 1024 * 1024 or processed == total):
+                percentage = processed * 100.0 / total if total else 100.0
+                try:
+                    progress(
+                        f"[Verify] {label or path.name} {algorithm.upper()}: "
+                        f"{processed:,}/{total:,} bytes ({percentage:.1f}%)"
+                    )
+                except Exception:
+                    pass
+                last_notice = processed
     return digest.hexdigest()
 
 
@@ -77,7 +98,12 @@ def _write_report(path: Path, payload: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def verify_google_play_run(workspace: str | Path, run_id: str) -> dict[str, Any]:
+def verify_google_play_run(
+    workspace: str | Path,
+    run_id: str,
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     """Re-hash every APK/OBB on disk and reconcile it with the run and bundle manifests.
 
     The downloader already verifies Play's hashes. This second pass is deliberately
@@ -110,7 +136,12 @@ def verify_google_play_run(workspace: str | Path, run_id: str) -> dict[str, Any]
         )
 
     rows_by_bundle: dict[tuple[str, str], list[dict[str, str]]] = {}
-    for row in rows:
+    for row_index, row in enumerate(rows, start=1):
+        if progress is not None:
+            progress(
+                f"[Verify {row_index}/{len(rows)}] Checking "
+                f"{row.get('package_id', 'unknown')} {row.get('local_path', '')}"
+            )
         if row.get("source") != "google_play":
             raise AcquisitionVerificationError(
                 f"Run {run_id} contains a non-Google-Play manifest item."
@@ -134,7 +165,9 @@ def verify_google_play_run(workspace: str | Path, run_id: str) -> dict[str, Any]
             raise AcquisitionVerificationError(
                 f"Size mismatch for {file_path.name}: expected {expected_size}, got {size}."
             )
-        actual_sha256 = _hash_file(file_path, "sha256")
+        actual_sha256 = _hash_file(
+            file_path, "sha256", progress=progress, label=file_path.name
+        )
         expected_sha256 = (row.get("sha256") or "").lower()
         if actual_sha256 != expected_sha256:
             raise AcquisitionVerificationError(
@@ -262,7 +295,9 @@ def verify_google_play_run(workspace: str | Path, run_id: str) -> dict[str, Any]
                     f"Unsupported Play digest algorithm for {name}: {algorithm!r}"
                 )
             expected_play_hash = str(component.get("play_hash") or "").lower()
-            actual_play_hash = _hash_file(component_path, algorithm)
+            actual_play_hash = _hash_file(
+                component_path, algorithm, progress=progress, label=name
+            )
             if actual_play_hash != expected_play_hash:
                 raise AcquisitionVerificationError(
                     f"Play-provided {algorithm} mismatch for {component_path}."
