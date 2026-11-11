@@ -258,6 +258,28 @@ class WorkspaceDatabase:
         processing = self.read_processing_status()
 
         history_by_hash = {row.get("sha256", "").lower(): row for row in history}
+        results_root = self.root / "results"
+        marker_dir = results_root / "runs" / run_id
+        marker_path = marker_dir / "static-analysis-run.json"
+        marker_components = (results_root, results_root / "runs", marker_dir, marker_path)
+        surface_run_status = "legacy_not_required"
+        if any(part.is_symlink() for part in marker_components):
+            surface_run_status = "failed"
+        elif marker_path.is_file():
+            try:
+                marker_payload = json.loads(marker_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                surface_run_status = "failed"
+            else:
+                candidate_status = marker_payload.get("status") if isinstance(marker_payload, dict) else None
+                surface_run_status = (
+                    candidate_status
+                    if candidate_status in {"running", "success", "partial", "failed"}
+                    else "failed"
+                )
+        elif marker_path.exists():
+            surface_run_status = "failed"
+
         attempts_by_hash: dict[str, dict[str, str]] = {}
         for attempt in attempts:
             if attempt.get("run_id") == run_id and attempt.get("sha256"):
@@ -271,6 +293,7 @@ class WorkspaceDatabase:
             attempt = attempts_by_hash.get(digest)
             state = processing.get(digest, {})
             detail = ""
+            static_status = "not_run"
             if acquired is None:
                 if attempt and attempt.get("status") == "persistence_failed":
                     outcome = "history_commit_failed"
@@ -312,7 +335,11 @@ class WorkspaceDatabase:
                     / str(selected["version_code"]) / digest,
                     static_path,
                 )
-                static_status = "not_run"
+                static_status = (
+                    "legacy_not_required" if surface_run_status == "legacy_not_required"
+                    else "running" if surface_run_status == "running"
+                    else "failed"
+                )
                 if any(part.is_symlink() for part in static_components):
                     static_status = "failed"
                     detail = "Static-analysis evidence path contains a symlink."
@@ -331,6 +358,9 @@ class WorkspaceDatabase:
                 elif static_path.exists():
                     static_status = "failed"
                     detail = "Static-analysis result path is not a regular file."
+                elif surface_run_status in {"success", "partial"}:
+                    static_status = "failed"
+                    detail = "Surface-analysis run completed without a result for this acquired APK."
 
                 if apktool == "failed":
                     outcome = "decompilation_failed"
@@ -365,11 +395,14 @@ class WorkspaceDatabase:
                             )
                         elif static_status == "failed":
                             outcome = "static_analysis_failed"
+                        elif static_status == "running":
+                            outcome = "interrupted_or_running"
+                            detail = detail or "Static APK surface analysis is still running or was interrupted."
                         elif apktool == "partial" or static_status == "partial":
                             outcome = "complete_with_warnings"
                         else:
-                            # Missing static analysis is accepted only for legacy/manual runs.
-                            outcome = "complete_with_warnings" if static_status == "not_run" else "complete"
+                            # Runs predating the built-in surface stage remain compatible.
+                            outcome = "complete"
                     else:
                         outcome = (
                             "awaiting_analysis_partial_decompilation"
