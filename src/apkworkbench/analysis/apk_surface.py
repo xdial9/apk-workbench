@@ -9,10 +9,10 @@ import os
 import re
 import tempfile
 import xml.etree.ElementTree as ET
-from urllib.parse import urlsplit
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Any
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
