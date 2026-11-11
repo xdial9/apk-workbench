@@ -109,6 +109,9 @@ def generate_final_run_report(
     artifacts: list[dict[str, Any]] = []
     api_endpoints: list[dict[str, Any]] = []
     api_routes: list[dict[str, Any]] = []
+    api_clients: list[dict[str, Any]] = []
+    api_headers: list[dict[str, Any]] = []
+    rate_limit_indicators: list[dict[str, Any]] = []
     verified_findings = 0
     static_findings = 0
     api_endpoint_count = 0
@@ -166,6 +169,24 @@ def generate_final_run_report(
                 api_inventory = {}
             endpoints = api_inventory.get("endpoints", [])
             routes = api_inventory.get("api_routes", [])
+            clients = api_inventory.get("api_clients", [])
+            headers = api_inventory.get("api_headers", [])
+            limit_signals = api_inventory.get("rate_limit_indicators", [])
+            if isinstance(clients, list):
+                api_clients.extend({
+                    "package_id": package_id, "version_code": version_code,
+                    "sha256": digest, **entry,
+                } for entry in clients if isinstance(entry, dict))
+            if isinstance(headers, list):
+                api_headers.extend({
+                    "package_id": package_id, "version_code": version_code,
+                    "sha256": digest, **entry,
+                } for entry in headers if isinstance(entry, dict))
+            if isinstance(limit_signals, list):
+                rate_limit_indicators.extend({
+                    "package_id": package_id, "version_code": version_code,
+                    "sha256": digest, **entry,
+                } for entry in limit_signals if isinstance(entry, dict))
             if isinstance(endpoints, list):
                 api_endpoint_count += len(endpoints)
                 api_endpoints.extend({
@@ -289,6 +310,9 @@ def generate_final_run_report(
         "api_catalog": {
             "endpoint_candidates": api_endpoints,
             "route_candidates": api_routes,
+            "client_library_call_sites": api_clients,
+            "header_names": api_headers,
+            "client_rate_limit_and_retry_indicators": rate_limit_indicators,
             "rate_limit_assessment": {
                 "server_side_rate_limits": "not_determined_from_static_apk",
                 "explanation": "The APK can reveal client retry/backoff logic and rate-limit headers, but cannot establish server-side quotas or whether a provider enforces a limit.",
