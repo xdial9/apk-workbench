@@ -1,0 +1,332 @@
+"""One consolidated evidence package for a complete APK Workbench run."""
+from __future__ import annotations
+
+import html
+import json
+import os
+import re
+import tempfile
+from pathlib import Path
+from typing import Any
+
+from apkworkbench.database.workspace import WorkspaceDatabase
+
+
+class FinalRunReportError(RuntimeError):
+    """Raised when a consolidated run report cannot be assembled."""
+
+
+def _read_json(path: Path, root: Path) -> Any | None:
+    if path.is_symlink():
+        raise FinalRunReportError(f"Refusing symlinked report input: {path}")
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root.resolve(strict=True))
+        return json.loads(resolved.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise FinalRunReportError(f"Cannot read run evidence {path}: {exc}") from exc
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _html_document(payload: dict[str, Any]) -> str:
+    summary = payload["summary"]
+    title = f"APK Workbench — Run {payload['run']['run_id']}"
+    summary_json = html.escape(json.dumps(summary, ensure_ascii=False, indent=2))
+    full_json = html.escape(json.dumps(payload, ensure_ascii=False, indent=2))
+    return "\n".join([
+        "<!doctype html>",
+        '<html lang="en"><head><meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        f"<title>{html.escape(title)}</title>",
+        "<style>",
+        "body{font:15px system-ui,sans-serif;max-width:1200px;margin:2rem auto;padding:0 1rem;color:#222}",
+        "pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f5f5;padding:1rem;border-radius:8px}",
+        "summary{cursor:pointer;font-weight:650;margin:1rem 0}code{overflow-wrap:anywhere}",
+        "</style></head><body>",
+        f"<h1>{html.escape(title)}</h1>",
+        "<p>Complete consolidated acquisition, verification, decompilation, static analysis, "
+        "verified-secret scan, findings, report and reconciliation evidence.</p>",
+        "<h2>Run summary</h2>",
+        f"<pre>{summary_json}</pre>",
+        "<h2>Complete machine-readable evidence</h2>",
+        "<details open><summary>Expand all run evidence and complete original findings</summary>",
+        f"<pre>{full_json}</pre></details>",
+        "</body></html>",
+        "",
+    ])
+
+
+def generate_final_run_report(
+    database: WorkspaceDatabase,
+    workspace: str | Path,
+    run_id: str,
+) -> dict[str, Any]:
+    """Collect exact manifest scope, stage outcomes, API catalog and complete findings."""
+    if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,63}", run_id):
+        raise FinalRunReportError("Run ID contains invalid characters.")
+
+    root = Path(workspace).expanduser().resolve()
+    reports_root = root / "reports"
+    results_root = root / "results"
+    for label, path in (("reports", reports_root), ("results", results_root)):
+        if path.is_symlink():
+            raise FinalRunReportError(f"The {label} directory must not be a symlink.")
+        path.mkdir(parents=True, exist_ok=True)
+        path.resolve(strict=True).relative_to(root)
+
+    manifest = database.read_manifest(run_id)
+    if not manifest:
+        raise FinalRunReportError(f"Run {run_id} has no manifest entries.")
+    history = database.read_download_history()
+    statuses = database.read_processing_status()
+    history_by_hash = {row.get("sha256", "").lower(): row for row in history if row.get("sha256")}
+
+    verification_path = reports_root / f"phase_one_verification_{run_id}.json"
+    verification = _read_json(verification_path, reports_root)
+
+    reconciliation = database.reconcile_run(run_id)
+    artifacts: list[dict[str, Any]] = []
+    api_endpoints: list[dict[str, Any]] = []
+    api_routes: list[dict[str, Any]] = []
+    verified_findings = 0
+    static_findings = 0
+    api_endpoint_count = 0
+    api_route_count = 0
+    static_failed = 0
+    trufflehog_failed = 0
+
+    seen: set[tuple[str, str, str]] = set()
+    for selected in manifest:
+        package_id = selected.get("package_id", "")
+        version_code = str(selected.get("version_code", ""))
+        digest = selected.get("sha256", "").lower()
+        identity = (package_id, version_code, digest)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        acquired = history_by_hash.get(digest)
+        if (
+            acquired is None
+            or acquired.get("run_id") != run_id
+            or acquired.get("package_id") != package_id
+            or str(acquired.get("version_code", "")) != version_code
+            or acquired.get("source") != selected.get("source")
+        ):
+            acquired = None
+
+        status = statuses.get(digest, {})
+        bundle_dir = Path(acquired.get("local_path", "")).parent if acquired and acquired.get("local_path") else None
+        bundle_path = bundle_dir / "google-play-bundle.json" if bundle_dir else None
+        bundle_metadata = _read_json(bundle_path, root) if bundle_path else None
+
+        artifact_root = results_root / package_id / version_code / digest
+        static_path = artifact_root / "static-analysis.json"
+        static_analysis = _read_json(static_path, results_root)
+        trufflehog_dir = artifact_root / "trufflehog"
+        trufflehog_path = trufflehog_dir / "findings.json"
+        trufflehog_findings = _read_json(trufflehog_path, results_root)
+        if trufflehog_findings is None:
+            trufflehog_findings = []
+        if not isinstance(trufflehog_findings, list) or any(
+            not isinstance(item, dict) or item.get("Verified") is not True
+            for item in trufflehog_findings
+        ):
+            raise FinalRunReportError(
+                f"TruffleHog evidence for {package_id} contains non-verified or malformed records."
+            )
+
+        if isinstance(static_analysis, dict):
+            static_list = static_analysis.get("findings", [])
+            if not isinstance(static_list, list):
+                static_list = []
+            static_findings += len(static_list)
+            api_inventory = static_analysis.get("inventory", {})
+            if not isinstance(api_inventory, dict):
+                api_inventory = {}
+            endpoints = api_inventory.get("endpoints", [])
+            routes = api_inventory.get("api_routes", [])
+            if isinstance(endpoints, list):
+                api_endpoint_count += len(endpoints)
+                api_endpoints.extend({
+                    "package_id": package_id, "version_code": version_code,
+                    "sha256": digest, **entry,
+                } for entry in endpoints if isinstance(entry, dict))
+            if isinstance(routes, list):
+                api_route_count += len(routes)
+                api_routes.extend({
+                    "package_id": package_id, "version_code": version_code,
+                    "sha256": digest, **entry,
+                } for entry in routes if isinstance(entry, dict))
+            if static_analysis.get("status") == "failed":
+                static_failed += 1
+        else:
+            static_list = []
+            api_inventory = {}
+            static_failed += 1
+
+        if status.get("scan_status") == "failed":
+            trufflehog_failed += 1
+        verified_findings += len(trufflehog_findings)
+
+        verification_bundle = None
+        if isinstance(verification, dict):
+            for item in verification.get("bundles", []):
+                if (
+                    item.get("package_id") == package_id
+                    and str(item.get("version_code")) == version_code
+                ):
+                    verification_bundle = item
+                    break
+
+        artifacts.append({
+            "artifact": {
+                "package_id": package_id,
+                "app_name": selected.get("app_name") or (acquired or {}).get("app_name", ""),
+                "version_code": version_code,
+                "version_name": selected.get("version_name") or (acquired or {}).get("version_name", ""),
+                "sha256": digest,
+                "size": int(selected.get("size") or 0),
+                "source": selected.get("source", ""),
+                "local_path": selected.get("local_path", ""),
+                "signer_sha256": selected.get("signer_sha256", ""),
+                "downloaded_at": (acquired or {}).get("downloaded_at", ""),
+            },
+            "acquisition": {
+                "history_record_found": acquired is not None,
+                "bundle_metadata_path": str(bundle_path) if bundle_path else None,
+                "bundle_metadata": bundle_metadata,
+                "independent_verification": verification_bundle,
+            },
+            "processing": {
+                "apktool_status": status.get("apktool_status", "not_run"),
+                "trufflehog_status": status.get("scan_status", "not_run"),
+                "last_error": status.get("error", ""),
+            },
+            "outputs": {
+                "apktool_directory": str(artifact_root / "apktool"),
+                "apktool_log": str(artifact_root / "apktool.log"),
+                "static_analysis_path": str(static_path) if static_analysis is not None else None,
+                "trufflehog_findings_path": str(trufflehog_path) if trufflehog_path.is_file() else None,
+                "trufflehog_log": str(trufflehog_dir / "trufflehog.log"),
+                "trufflehog_stdout": str(trufflehog_dir / "stdout.jsonl"),
+                "trufflehog_stderr": str(trufflehog_dir / "stderr.log"),
+            },
+            "static_analysis": static_analysis or {
+                "status": "not_run",
+                "findings": [],
+                "coverage": {},
+                "limitations": ["The static APK surface analyzer did not produce a report for this artifact."],
+            },
+            "findings": {
+                "static_indicators": static_list,
+                "trufflehog_verified_original_objects": trufflehog_findings,
+            },
+        })
+
+    total_bytes = sum(int(item["artifact"]["size"]) for item in artifacts)
+    payload = {
+        "schema_version": 1,
+        "report_type": "apkworkbench_complete_run",
+        "run": {
+            "run_id": run_id,
+            "manifest_path": str(root / "database" / "run_manifests" / f"run_{run_id}.csv"),
+            "manifest_items": len(manifest),
+            "created_for_report_at": __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            ).isoformat(timespec="seconds"),
+        },
+        "stages": {
+            "acquisition": {
+                "source": "Google Play",
+                "status": "complete" if all(item["acquisition"]["history_record_found"] for item in artifacts) else "incomplete",
+                "artifacts": len(artifacts),
+                "total_manifest_bytes": total_bytes,
+            },
+            "independent_download_verification": verification or {"status": "missing"},
+            "apktool_decompilation": {
+                "complete": sum(item["processing"]["apktool_status"] == "success" for item in artifacts),
+                "partial": sum(item["processing"]["apktool_status"] == "partial" for item in artifacts),
+                "failed": sum(item["processing"]["apktool_status"] == "failed" for item in artifacts),
+            },
+            "static_apk_surface_analysis": {
+                "completed": sum(item["static_analysis"].get("status") == "success" for item in artifacts),
+                "partial": sum(item["static_analysis"].get("status") == "partial" for item in artifacts),
+                "failed_or_missing": static_failed,
+                "findings": static_findings,
+                "api_endpoint_candidates": api_endpoint_count,
+                "api_route_candidates": api_route_count,
+            },
+            "trufflehog_verified_secret_scan": {
+                "scanned": sum(item["processing"]["trufflehog_status"] == "success" for item in artifacts),
+                "failed": trufflehog_failed,
+                "verified_findings": verified_findings,
+                "selection": "--results=verified",
+            },
+            "report_generation": {"status": "complete"},
+            "reconciliation": reconciliation,
+        },
+        "api_catalog": {
+            "endpoint_candidates": api_endpoints,
+            "route_candidates": api_routes,
+            "rate_limit_assessment": {
+                "server_side_rate_limits": "not_determined_from_static_apk",
+                "explanation": "The APK can reveal client retry/backoff logic and rate-limit headers, but cannot establish server-side quotas or whether a provider enforces a limit.",
+            },
+        },
+        "summary": {
+            "artifacts": len(artifacts),
+            "verified_trufflehog_findings": verified_findings,
+            "static_analysis_indicators": static_findings,
+            "api_endpoint_candidates": api_endpoint_count,
+            "api_route_candidates": api_route_count,
+            "reconciliation_complete": reconciliation.get("complete", 0),
+            "reconciliation_total": reconciliation.get("total", 0),
+        },
+        "artifacts": artifacts,
+        "interpretation": {
+            "trufflehog": "Complete original TruffleHog finding objects are retained in findings.trufflehog_verified_original_objects; only explicitly Verified=true records are accepted.",
+            "static_analysis": "APK surface indicators are static leads with source evidence and are not equivalent to runtime-verified vulnerabilities.",
+            "api_catalog": "All discovered endpoint and route candidates are included with occurrence locations. Domain strings can include non-API hostnames and require review.",
+            "rate_limits": "A missing client-side rate-limit indicator does not mean the server API is unthrottled. Server-side quotas require provider documentation or authorized runtime observation.",
+        },
+    }
+
+    output_dir = reports_root / "runs" / run_id
+    if output_dir.is_symlink():
+        raise FinalRunReportError(f"Refusing symlinked final report directory: {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.resolve(strict=True).relative_to(reports_root.resolve(strict=True))
+    json_path = output_dir / "final-report.json"
+    html_path = output_dir / "final-report.html"
+    _atomic_write(json_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    _atomic_write(html_path, _html_document(payload))
+    return {
+        "json_path": str(json_path),
+        "html_path": str(html_path),
+        "artifact_count": len(artifacts),
+        "verified_findings": verified_findings,
+        "static_findings": static_findings,
+        "api_endpoint_count": api_endpoint_count,
+        "api_route_count": api_route_count,
+    }
