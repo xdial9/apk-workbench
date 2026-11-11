@@ -9,6 +9,7 @@ import hashlib
 import os
 import re
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from collections import Counter
 from collections.abc import Callable
@@ -300,7 +301,11 @@ def _parse_manifest(path: Path, relative: str, findings: list[dict[str, Any]]) -
     return {"status": "success", **facts}
 
 
-def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
+def analyze_apk_surface(
+    apktool_dir: str | Path,
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     """Inspect decoded XML/Smali/resources and produce inventory plus static leads."""
     root = Path(apktool_dir).expanduser().resolve(strict=True)
     if not root.is_dir():
@@ -409,10 +414,26 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
     rate_limit_indicators: list[dict[str, Any]] = []
     scanned_text_bytes = 0
     code_scanned = 0
+    scannable_total = sum(1 for item in files if item.suffix.lower() in TEXT_SUFFIXES)
+    scan_started = last_heartbeat = time.monotonic()
+    files_seen = 0
+    _emit_progress(
+        progress,
+        f"[Surface] Scanning {scannable_total:,} text files ({len(smali_files):,} smali) for endpoints, routes and indicators",
+    )
     for path in files:
         relative = path.relative_to(root).as_posix()
         if path.suffix.lower() not in TEXT_SUFFIXES:
             continue
+        files_seen += 1
+        if time.monotonic() - last_heartbeat >= 10:
+            last_heartbeat = time.monotonic()
+            _emit_progress(
+                progress,
+                f"[Surface] still scanning - {files_seen:,}/{scannable_total:,} files, "
+                f"{int(last_heartbeat - scan_started)}s elapsed, "
+                f"{len(api_endpoints):,} endpoints, {len(findings):,} findings",
+            )
         try:
             size = path.stat().st_size
             if size > MAX_TEXT_FILE_BYTES or scanned_text_bytes + size > MAX_TOTAL_TEXT_BYTES:
@@ -826,7 +847,7 @@ def run_static_surface_analysis(
         if progress:
             progress(f"[surface {index}/{len(eligible)}] Inspecting {package_id} v{version_code}")
         try:
-            result = analyze_apk_surface(decoded)
+            result = analyze_apk_surface(decoded, progress=progress)
             source_value = row.get("local_path", "")
             source_candidate = Path(source_value).expanduser()
             downloads_root = root / "downloads"
