@@ -16,8 +16,9 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from playstore_cli import download as play_download
 from apkworkbench.sources.google_play_anonymous import (
