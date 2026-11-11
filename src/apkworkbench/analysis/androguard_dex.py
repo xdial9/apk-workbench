@@ -98,6 +98,12 @@ def _api_category(class_name: str) -> str:
     return "external_library"
 
 
+def _is_static_asset_path(value: str) -> bool:
+    normalized = value.lstrip("/").lower()
+    has_path_prefix = value.startswith("/") or normalized.startswith(STATIC_PATH_PREFIXES)
+    return has_path_prefix and normalized.endswith(STATIC_FILE_SUFFIXES)
+
+
 def _looks_like_relative_api_path(value: str) -> bool:
     """Return whether a DEX string has a conservative relative-path shape.
 
@@ -111,10 +117,7 @@ def _looks_like_relative_api_path(value: str) -> bool:
         return False
     if "://" in value or value.startswith("//") or "\\" in value:
         return False
-    normalized = value.lstrip("/").lower()
-    if normalized.startswith(STATIC_PATH_PREFIXES):
-        return False
-    if normalized.endswith(STATIC_FILE_SUFFIXES):
+    if _is_static_asset_path(value):
         return False
     return bool(RELATIVE_PATH_RE.fullmatch(value))
 
@@ -222,6 +225,8 @@ def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
         value = str(string_item.get_value())
         url_matches = [match.group(0).rstrip(".,);]}:") for match in URL_RE.finditer(value)]
         domain_matches = [match.group(0).lower().rstrip(".") for match in DOMAIN_RE.finditer(value)]
+        if _is_static_asset_path(value):
+            domain_matches = []
         ip_matches = [match.group(0) for match in IPV4_RE.finditer(value)]
         string_xrefs = list(string_item.get_xref_from(with_offset=True))
         caller_names = {_method_name(caller) for _class_obj, caller, _offset in string_xrefs}
