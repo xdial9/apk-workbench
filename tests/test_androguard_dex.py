@@ -85,6 +85,7 @@ def test_androguard_extracts_external_api_calls_strings_and_permission_usage(mon
             return [(object(), network_method, 456)]
 
     caller = FakeMethod("Lcom/example/Main;", "load", "()V")
+    unrelated_caller = FakeMethod("Lcom/example/Helper;", "format", "()V")
     network_method = FakeMethod(
         "Lokhttp3/Call;", "execute", "()Lokhttp3/Response;",
         external=True,
@@ -98,15 +99,16 @@ def test_androguard_extracts_external_api_calls_strings_and_permission_usage(mon
     )
 
     class FakeString:
-        def __init__(self, value):
+        def __init__(self, value, reference_caller=caller):
             self.value = value
+            self.reference_caller = reference_caller
 
         def get_value(self):
             return self.value
 
         def get_xref_from(self, with_offset=False):
             assert with_offset is True
-            return [(object(), caller, 789)]
+            return [(object(), self.reference_caller, 789)]
 
     class FakeApk:
         def __init__(self, _path):
@@ -175,6 +177,7 @@ def test_androguard_extracts_external_api_calls_strings_and_permission_usage(mon
             return [
                 FakeString("https://api.example.test/v1"),
                 FakeString("/catalog/products"),
+                FakeString("/catalog/categories", unrelated_caller),
                 FakeString("/res/drawable/logo.png"),
             ]
 
@@ -204,7 +207,12 @@ def test_androguard_extracts_external_api_calls_strings_and_permission_usage(mon
     assert relative_route["route_candidate"] is True
     assert relative_route["relative_path_candidate"] is True
     assert relative_route["network_call_context"] is True
+    assert relative_route["rate_limit_or_retry_indicator"] is False
     assert relative_route["references"][0]["caller"] == caller.full_name
+    assert not any(
+        item["value"] == "/catalog/categories"
+        for item in result["dex_api_strings"]
+    )
     assert not any(
         item["value"] == "/res/drawable/logo.png"
         for item in result["dex_api_strings"]
