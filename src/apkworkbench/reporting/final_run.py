@@ -150,8 +150,14 @@ def generate_final_run_report(
         static_analysis = _read_json(static_path, results_root)
         trufflehog_dir = artifact_root / "trufflehog"
         trufflehog_path = trufflehog_dir / "findings.json"
-        trufflehog_findings = _read_json(trufflehog_path, results_root)
-        if trufflehog_findings is None:
+        if status.get("scan_status") == "success":
+            trufflehog_findings = _read_json(trufflehog_path, results_root)
+            if trufflehog_findings is None:
+                raise FinalRunReportError(
+                    f"TruffleHog status says success but findings.json is missing for {package_id}."
+                )
+        else:
+            # Never present an older findings file as the result of a failed or unrun scan.
             trufflehog_findings = []
         if not isinstance(trufflehog_findings, list) or any(
             not isinstance(item, dict) or item.get("Verified") is not True
