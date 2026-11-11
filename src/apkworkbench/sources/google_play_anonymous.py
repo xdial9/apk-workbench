@@ -149,7 +149,9 @@ class AnonymousGooglePlaySession:
                 # dispenser-issued device information below.
                 "profile": DEFAULT_PROFILE,
                 "gsfId": str(auth_data["gsfId"]),
-                "deviceCheckInConsistencyToken": str(
+                # goopdl uses "deviceCheckInConsistencyToken"; playstore-cli
+                # indexes the compatibility key with a lowercase "in".
+                "deviceCheckinConsistencyToken": str(
                     auth_data.get("deviceCheckInConsistencyToken") or ""
                 ),
                 "locale": f"en_{self.country or 'US'}",
