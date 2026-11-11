@@ -5,6 +5,7 @@ import hashlib
 import textwrap
 from pathlib import Path
 
+import apkworkbench.analysis.apk_surface as apk_surface
 from apkworkbench.analysis.apk_surface import run_static_surface_analysis
 from apkworkbench.analysis.trufflehog import TruffleHogScanner
 from apkworkbench.database.workspace import WorkspaceDatabase
@@ -18,7 +19,7 @@ def write_executable(path: Path, source: str) -> Path:
     return path
 
 
-def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(tmp_path):
+def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypatch, tmp_path):
     workspace = tmp_path / "workspace"
     database = WorkspaceDatabase(workspace)
     database.ensure()
@@ -115,10 +116,33 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(tmp_path
     assert decompilation.failed == 0
     assert database.read_processing_status()[digest]["jadx_status"] == "not_used"
 
+    monkeypatch.setattr(
+        apk_surface,
+        "analyze_apk_dex",
+        lambda _path, **_kwargs: {
+            "status": "success",
+            "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
+            "metrics": {"dex_files": 1, "external_methods_referenced": 3},
+            "coverage": {"dex_parsing": "success"},
+            "external_method_references": [{
+                "full_name": "Lokhttp3/Call; execute ()",
+                "category": "network",
+                "call_sites": [{"caller": "Lcom/example/Main; run ()V", "offset": 12}],
+            }],
+            "internal_call_graph": [],
+            "dex_api_strings": [],
+            "permission_api_usage": [],
+            "diagnostics": [],
+            "limitations": [],
+        },
+    )
     surface = run_static_surface_analysis(database, workspace, run_id=run_id)
     assert surface["completed"] == 1
     assert surface["failed"] == 0
-    assert (workspace / "results/org.example.integration/1" / digest / "static-analysis.json").is_file()
+    static_path = workspace / "results/org.example.integration/1" / digest / "static-analysis.json"
+    assert static_path.is_file()
+    static_payload = __import__("json").loads(static_path.read_text(encoding="utf-8"))
+    assert static_payload["dex_analysis"]["metrics"]["external_methods_referenced"] == 3
 
     analysis = TruffleHogScanner(
         database,
