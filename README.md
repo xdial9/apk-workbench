@@ -93,7 +93,7 @@ reports/runs/<RUN_ID>/final-report.json
 reports/runs/<RUN_ID>/final-report.html
 ```
 
-The final report contains the frozen manifest and download attempts, Play bundle metadata and independent verification, Apktool status/log references, the static surface inventory and findings, the complete original `Verified=true` TruffleHog objects, the API/route catalog, client-library and header evidence, rate-limit/retry indicators, and run reconciliation. Per-APK reports and raw scanner evidence remain alongside it under `results/` and `reports/`.
+The final report contains the frozen manifest and download attempts, Play bundle metadata and independent verification, Apktool status/log references, the broad static surface inventory and findings, Androguard DEX method/call-site cross-references and permission API usage, the complete original `Verified=true` TruffleHog objects, the API/route catalog, client-library and header evidence, rate-limit/retry indicators, and run reconciliation. Per-APK reports and raw scanner evidence remain alongside it under `results/` and `reports/`.
 
 The static surface pass inventories manifest/components/permissions, network-security configuration, API endpoints/domains/routes and HTTP client call sites, common headers, retry/backoff/rate-limit hints, WebView, dynamic loading, process execution, TLS/cryptography indicators, storage/query APIs, dependency fingerprints, resources and native libraries. It does not duplicate TruffleHog's generic secret scanning. Server-side API rate limits cannot be determined from static APK strings; the report says so explicitly. Static findings remain leads until independently confirmed.
 
