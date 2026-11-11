@@ -162,6 +162,8 @@ class DecompilationRunner:
                 if self.progress is not None:
                     def stream_log() -> None:
                         pending = b""
+                        started = time.monotonic()
+                        last_heartbeat = started
                         try:
                             with log_path.open("rb") as reader:
                                 reader.seek(log_offset)
@@ -177,6 +179,16 @@ class DecompilationRunner:
                                                 pass
                                     else:
                                         stop_tailer.wait(0.15)
+                                        now = time.monotonic()
+                                        if now - last_heartbeat >= 1.0 and not stop_tailer.is_set():
+                                            try:
+                                                self.progress(
+                                                    f"[{label}] still running — "
+                                                    f"{int(now - started)}s elapsed"
+                                                )
+                                            except Exception:
+                                                pass
+                                            last_heartbeat = now
                                 while True:
                                     chunk = reader.read(64 * 1024)
                                     if not chunk:
@@ -211,19 +223,7 @@ class DecompilationRunner:
                     except ValueError:
                         # Signal handlers can only be installed from the main thread.
                         pass
-                    deadline = time.monotonic() + self.timeout_seconds
-                    started = time.monotonic()
-                    while True:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise subprocess.TimeoutExpired(command, self.timeout_seconds)
-                        try:
-                            returncode = process.wait(timeout=min(1.0, remaining))
-                            break
-                        except subprocess.TimeoutExpired:
-                            if self.progress is not None:
-                                elapsed = int(time.monotonic() - started)
-                                self.progress(f"[{label}] still running — {elapsed}s elapsed")
+                    returncode = process.wait(timeout=self.timeout_seconds)
                 except subprocess.TimeoutExpired:
                     self._terminate_process_tree(process)
                     log_file.write(
