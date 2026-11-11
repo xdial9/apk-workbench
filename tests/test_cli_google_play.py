@@ -272,7 +272,10 @@ def test_full_run_continues_to_trufflehog_when_some_apktool_output_exists(monkey
     def fake_analyze(limit, force, run_id):
         calls.append("analyze")
 
-    def fake_surface(database, workspace, *, run_id=None, force=False, progress=None):
+    def fake_surface(
+        database, workspace, *, run_id=None, force=False,
+        dex_timeout_seconds=1800, progress=None,
+    ):
         calls.append("surface")
         assert run_id == "test-run"
         return {
