@@ -511,7 +511,7 @@ def verify_downloads(run_id: str) -> None:
     click.echo(BANNER)
     click.echo(f"Verifying Google Play acquisition run {run_id}...")
     try:
-        summary = verify_google_play_run(config.get("workspace"), run_id)
+        summary = verify_google_play_run(config.get("workspace"), run_id, progress=click.echo)
     except (AcquisitionVerificationError, DatabaseError, OSError, ValueError) as exc:
         click.echo(f"Acquisition verification failed: {exc}", err=True)
         raise click.exceptions.Exit(1) from exc
@@ -845,7 +845,7 @@ def run(
                 break
             click.echo("\n=== DOWNLOAD VERIFICATION ===")
             try:
-                verification = verify_google_play_run(Config().get("workspace"), run_id)
+                verification = verify_google_play_run(Config().get("workspace"), run_id, progress=click.echo)
             except (AcquisitionVerificationError, DatabaseError, OSError, ValueError) as exc:
                 click.echo(f"Download verification failed: {exc}", err=True)
                 stages_with_issues.append("download_verification")
