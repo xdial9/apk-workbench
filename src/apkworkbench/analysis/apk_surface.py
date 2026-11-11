@@ -94,7 +94,7 @@ CODE_RULES = (
      r"X509TrustManager|checkServerTrusted|HostnameVerifier", 0.75,
      "A custom certificate/hostname verification implementation may exist; inspect its behavior."),
     ("ssl_error_proceed", "network_security", "high", "WebView SSL error handler may proceed past certificate error",
-     r"SslErrorHandler;->proceed|\\.proceed\\(\\)", 0.88,
+     r"SslErrorHandler;->proceed|\.proceed\(\)", 0.88,
      "Review whether this call proceeds after a TLS certificate error and under which conditions."),
     ("trust_all_certificates", "network_security", "high", "Trust-all certificate implementation indicator",
      r"TrustAllCerts|ALLOW_ALL_HOSTNAME_VERIFIER|AllowAllHostnameVerifier", 0.92,
@@ -159,7 +159,10 @@ API_CLIENT_MARKERS = {
     "Cronet": (r"org\.chromium\.net", r"Lorg/chromium/net/"),
 }
 API_HEADER_RE = re.compile(
-    r"(?i)\b(accept|content-type|authorization|www-authenticate|x-api-key|x-auth-token|x-request-id|retry-after|x-ratelimit-[a-z0-9-]+|ratelimit-[a-z0-9-]+)\b"
+    r"(?i)\b(accept|accept-encoding|content-type|authorization|www-authenticate|"
+    r"cookie|set-cookie|user-agent|origin|referer|if-none-match|etag|cache-control|"
+    r"x-api-key|x-auth-token|x-request-id|retry-after|x-ratelimit-[a-z0-9-]+|"
+    r"ratelimit-[a-z0-9-]+|x-[a-z0-9-]{2,60})\b"
 )
 
 
@@ -442,11 +445,11 @@ def analyze_apk_surface(apktool_dir: str | Path) -> dict[str, Any]:
                     and not value.endswith((".xml", ".json", ".png", ".jpg", ".smali"))
                     and not any(value in endpoint for endpoint in api_endpoints)
                 ):
-                        record = api_endpoints.setdefault(value, {
-                            "value": value, "kind": "domain_candidate", "evidence": [], "occurrences": 0,
-                        })
-                        record["occurrences"] += 1
-                        record["evidence"].append({"path": relative, "line": line_number})
+                    record = api_endpoints.setdefault(value, {
+                        "value": value, "kind": "domain_candidate", "evidence": [], "occurrences": 0,
+                    })
+                    record["occurrences"] += 1
+                    record["evidence"].append({"path": relative, "line": line_number})
             if path.suffix.lower() == ".smali":
                 invoke = SMALI_INVOKE_RE.search(line)
                 if invoke and API_INVOKE_OWNER_RE.match(invoke.group(1)):
