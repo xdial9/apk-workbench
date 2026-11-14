@@ -24,6 +24,7 @@ from apkworkbench.analysis.surface.classify import (
     inventory_apk_zip,
 )
 from apkworkbench.analysis.surface.serialize import finalize_result
+from apkworkbench.analysis.surface.handoff import write_handoff
 from apkworkbench.analysis.surface.sweep import SweepState
 from apkworkbench.analysis.surface.deductions import (
     api_surface,
@@ -853,6 +854,32 @@ def run_static_surface_analysis(
             }
             finalize_result(result)
             _atomic_write_json(target, result)
+            # S8 handoff contract: the prompt chain reads surface/facts.jsonl
+            # and surface/location_map.json. Emit both next to
+            # static-analysis.json so no active run points at missing files.
+            # A write failure is recorded, never hidden: the artifact becomes
+            # partial and the reason lands in diagnostics.
+            try:
+                handoff_paths = write_handoff(output_root, result)
+            except OSError as exc:
+                result["status"] = "partial"
+                result.setdefault("diagnostics", []).append({
+                    "code": "handoff_write_failed",
+                    "message": f"{type(exc).__name__}: {exc}",
+                })
+                _atomic_write_json(target, result)
+                _emit_progress(
+                    progress,
+                    f"  Handoff write FAILED ({type(exc).__name__}: {exc}); "
+                    f"artifact marked partial",
+                )
+            else:
+                _emit_progress(
+                    progress,
+                    f"  Handoff: {handoff_paths['facts'].name} "
+                    f"({len(result.get('facts') or [])} facts) + "
+                    f"{handoff_paths['location_map'].name}",
+                )
             count = len(result.get("findings", []))
             summary["completed"] += 1
             if result.get("status") != "success":

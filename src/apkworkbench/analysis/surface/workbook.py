@@ -200,6 +200,14 @@ def build_workbook(result: dict[str, Any]) -> dict[str, Any]:
             "deliverables": DELIVERABLES,
         },
         "location_ledger": {
+            "tree_root": "apktool/",
+            "note": (
+                "locations are relative to tree_root unless they begin with a "
+                "known scheme prefix (endpoint:, permission:, sdk_root:, "
+                "coverage:, route:, fact:). location_map.json carries the same "
+                "citations already prefixed with tree_root, so either form "
+                "resolves to the same file."
+            ),
             "facts": _fact_locations(facts),
             "findings": _finding_locations(findings),
             "deductions": [
@@ -213,7 +221,14 @@ def build_workbook(result: dict[str, Any]) -> dict[str, Any]:
             ],
             "tool_outputs": [
                 "surface/static-analysis.json — summary sections (this file)",
-                "surface/facts.jsonl — full streamed facts (when present)",
+                (
+                    "surface/facts.jsonl — one JSON object per fact; line N is "
+                    "cited by location_map.json entries[].facts_jsonl_line"
+                ),
+                (
+                    "surface/location_map.json — generated index of every fact, "
+                    "finding and deduction with file:line evidence"
+                ),
                 "trufflehog/ — verified secret findings (evidence-grade)",
                 "google-play-bundle.json — acquisition provenance + hashes",
             ],
