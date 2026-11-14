@@ -188,3 +188,102 @@ def test_download_records_provenance_and_cleans_stale_partial_files(monkeypatch,
     assert metadata["provenance"] == provenance
     assert metadata["extra_files"] == ["operator-note.txt"]
     assert metadata["run_id"] == "run-prov-1"
+
+
+def test_download_refreshes_stale_delivery_once_when_first_transfer_fails(monkeypatch, tmp_path):
+    payloads = {"base.apk": b"refresh payload"}
+    play_files = [FakePlayFile("base.apk", payloads["base.apk"])]
+    plan = gp.PlayBundlePlan(
+        app=gp.PlayApp("com.example.app", "Example App", "Example Developer", "2.4.1", 241),
+        files=(
+            gp.PlayFile(
+                name="base.apk",
+                size=len(payloads["base.apk"]),
+                sha256=hashlib.sha256(payloads["base.apk"]).hexdigest(),
+                expected_algorithm="sha256",
+                expected_digest=hashlib.sha256(payloads["base.apk"]).hexdigest(),
+                kind="apk",
+            ),
+        ),
+        signer_sha256=("a" * 64,),
+        _doc=_doc(),
+        _delivery=object(),
+    )
+    state = {"downloader_calls": 0}
+    fresh_delivery = object()
+    reinspect = {"called": False}
+
+    def fake_play_files(_package, delivery):
+        return play_files
+
+    monkeypatch.setattr(gp.play_download, "play_files", fake_play_files)
+
+    class FlakyDownloader:
+        def __init__(self, _delivery):
+            state["downloader_calls"] += 1
+
+        def fetch(self, item, directory):
+            if state["downloader_calls"] == 1:
+                raise OSError("expired delivery URL")
+            (directory / item.name).write_bytes(payloads[item.name])
+            return True
+
+    monkeypatch.setattr(gp.play_download, "Downloader", FlakyDownloader)
+    source = gp.GooglePlaySource(retry_backoff_seconds=0.0)
+
+    class FakeApi:
+        def app_delivery(self, package_id, version_code=None):
+            reinspect["called"] = True
+            return _doc(), fresh_delivery
+
+    source._call = lambda operation: operation(FakeApi())
+
+    result = source.download(plan, workspace=tmp_path, run_id="run-refresh")
+
+    assert {path.name for path in result.apk_files} == {"base.apk"}
+    assert reinspect["called"] is True          # delivery was re-inspected
+    assert state["downloader_calls"] == 2       # new authenticated downloader after refresh
+
+
+def test_download_aborts_when_fresh_delivery_diverges_from_frozen_plan(monkeypatch, tmp_path):
+    payloads = {"base.apk": b"orig bytes"}
+    plan = gp.PlayBundlePlan(
+        app=gp.PlayApp("com.example.app", "Example App", "Example Developer", "2.4.1", 241),
+        files=(
+            gp.PlayFile(
+                name="base.apk",
+                size=len(payloads["base.apk"]),
+                sha256=hashlib.sha256(payloads["base.apk"]).hexdigest(),
+                expected_algorithm="sha256",
+                expected_digest=hashlib.sha256(payloads["base.apk"]).hexdigest(),
+                kind="apk",
+            ),
+        ),
+        signer_sha256=("a" * 64,),
+        _doc=_doc(),
+        _delivery=object(),
+    )
+    # Play now serves DIFFERENT bytes for the same package (new delivery).
+    diverged = [FakePlayFile("base.apk", b"new bytes")]
+    monkeypatch.setattr(gp.play_download, "play_files", lambda _package, _d: diverged)
+
+    class FailingDownloader:
+        def __init__(self, _delivery):
+            pass
+
+        def fetch(self, item, directory):
+            raise OSError("expired delivery URL")
+            return True
+
+    monkeypatch.setattr(gp.play_download, "Downloader", FailingDownloader)
+    source = gp.GooglePlaySource(retry_backoff_seconds=0.0)
+
+    class FakeApi:
+        def app_delivery(self, package_id, version_code=None):
+            return _doc(), object()
+
+    source._call = lambda operation: operation(FakeApi())
+
+    with pytest.raises(gp.GooglePlayError, match="does not match the frozen plan"):
+        source.download(plan, workspace=tmp_path, run_id="run-diverge")
+# new downloader built after refresh

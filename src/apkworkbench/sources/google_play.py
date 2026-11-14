@@ -381,7 +381,67 @@ class GooglePlaySource:
         except (OSError, ValueError) as exc:
             raise GooglePlayError("Bundle directory resolves outside the downloads workspace") from exc
 
-        downloader = play_download.Downloader(plan._delivery)
+        delivery_state: dict[str, Any] = {"downloader": play_download.Downloader(plan._delivery)}
+        delivery_refreshed: list[str] = []
+
+        def attempt_fresh_delivery() -> bool:
+            """One-time mid-download delivery refresh after a failed attempt.
+
+            Play delivery URLs are short-lived; a plan inspected long before
+            download can carry expired URLs. Refresh exactly once per bundle:
+            re-inspect the package, require the delivered component digests
+            to MATCH the frozen plan (if Play now serves different bytes,
+            the run must abort — downloading against a different artifact
+            than the frozen plan records would break provenance), and swap
+            in a fresh authenticated downloader. Returns True when a refresh
+            was attempted so the retry loop skips the backoff sleep once.
+            """
+            if delivery_refreshed:
+                return False
+            delivery_refreshed.append(plan.app.package_id)
+            self._emit_progress(
+                "[Download] transfer failed; refreshing Play delivery once "
+                "before next attempt"
+            )
+            try:
+                _doc, fresh_delivery = self._call(
+                    lambda api: api.app_delivery(plan.app.package_id, plan.app.version_code)
+                )
+            except (GooglePlayError, NotDownloadable) as exc:
+                self._emit_progress(
+                    f"[Download] delivery refresh failed ({type(exc).__name__}); "
+                    "retrying with the captured delivery"
+                )
+                return True  # refresh attempted; proceed to backoff retry
+            try:
+                fresh_files = {
+                    str(item.name): item.expected_digest()
+                    for item in play_download.play_files(
+                        plan.app.package_id, fresh_delivery
+                    )
+                }
+            except NotDownloadable as exc:
+                self._emit_progress(
+                    f"[Download] delivery refresh unavailable ({type(exc).__name__}); "
+                    "retrying with the captured delivery"
+                )
+                return True
+            for item in plan.files:
+                fresh = fresh_files.get(item.name)
+                if fresh is None or fresh[0] != item.expected_algorithm or _hex_from_b64url(
+                    fresh[1]
+                ) != item.expected_digest:
+                    raise GooglePlayError(
+                        "Fresh Google Play delivery does not match the frozen "
+                        f"plan digest for {plan.app.package_id}/{item.name}; "
+                        "the app changed versionCode or delivery since this run's "
+                        "manifest was frozen. Re-run the pipeline to re-select; "
+                        "nothing downloaded is trusted."
+                    )
+            delivery_state["downloader"] = play_download.Downloader(fresh_delivery)
+            self._emit_progress("[Download] delivery refresh verified against the frozen plan")
+            return True
+
         for item in plan.files:
             component_path = directory / item.name
             partial_path = component_path.with_name(component_path.name + ".part")
@@ -437,7 +497,7 @@ class GooglePlaySource:
                     )
                     monitor.start()
                     try:
-                        downloader.fetch(upstream_file, directory)
+                        delivery_state["downloader"].fetch(upstream_file, directory)
                     finally:
                         monitor_stop.set()
                         monitor.join(timeout=1)
@@ -452,7 +512,9 @@ class GooglePlaySource:
                             f"after {_MAX_RETRIES + 1} attempts (delivery metadata captured at "
                             f"inspect time may be stale; retrying the run re-inspects): {exc}"
                         ) from exc
-                    time.sleep(min(30.0, self.retry_backoff_seconds * (2 ** attempt)))
+                    refreshed = attempt_fresh_delivery()
+                    if not refreshed:
+                        time.sleep(min(30.0, self.retry_backoff_seconds * (2 ** attempt)))
 
         # Rerun hygiene: remove our own leftover .part files from an earlier
         # interrupted attempt; record (never delete) any other unexpected
