@@ -6,6 +6,7 @@ not execute APK code, contact discovered endpoints, or claim runtime verificatio
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import tempfile
@@ -308,6 +309,7 @@ def analyze_apk_surface(
 ) -> dict[str, Any]:
     """Inspect decoded XML/Smali/resources and produce inventory plus static leads."""
     root = Path(apktool_dir).expanduser().resolve(strict=True)
+    root = Path(os.fspath(root))
     if not root.is_dir():
         raise ValueError(f"Apktool output is not a directory: {root}")
 
@@ -328,7 +330,7 @@ def analyze_apk_surface(
     }
     files: list[Path] = []
     symlink_count = 0
-    for current, directories, names in __import__("os").walk(root):
+    for current, directories, names in os.walk(root):
         base = Path(current)
         kept_dirs = []
         for name in directories:
@@ -426,11 +428,11 @@ def analyze_apk_surface(
         if path.suffix.lower() not in TEXT_SUFFIXES:
             continue
         files_seen += 1
-        if time.monotonic() - last_heartbeat >= 10:
+        if time.monotonic() - last_heartbeat >= 2:
             last_heartbeat = time.monotonic()
             _emit_progress(
                 progress,
-                f"[Surface] still scanning - {files_seen:,}/{scannable_total:,} files, "
+                f"[Surface] scanning - {files_seen:,}/{scannable_total:,} files, "
                 f"{int(last_heartbeat - scan_started)}s elapsed, "
                 f"{len(api_endpoints):,} endpoints, {len(findings):,} findings",
             )
@@ -694,7 +696,6 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     temporary = Path(temporary_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            import json
             json.dump(payload, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
             handle.flush()
@@ -738,16 +739,24 @@ def run_static_surface_analysis(
         marker_dir.mkdir(parents=True, exist_ok=True)
         marker_dir.resolve(strict=True).relative_to(results_root)
         marker_path = marker_dir / "static-analysis-run.json"
-        _atomic_write_json(marker_path, {
-            "schema_version": 1,
-            "run_id": run_id,
-            "status": "running",
-            "eligible": 0,
-            "completed": 0,
-            "failed": 0,
-            "skipped": 0,
-            "artifacts": [],
-        })
+
+    def marker_refresh(status: str, eligible: int, completed: int, failed: int,
+                       skipped: int, partial: int, finding_count: int,
+                       artifacts: list[dict[str, Any]]) -> None:
+        if marker_path is not None:
+            _atomic_write_json(marker_path, {
+                "schema_version": 1,
+                "run_id": run_id,
+                "status": status,
+                "eligible": eligible,
+                "completed": completed,
+                "partial": partial,
+                "failed": failed,
+                "skipped": skipped,
+                "finding_count": finding_count,
+                "artifacts": artifacts,
+            })
+    marker_refresh("running", 0, 0, 0, 0, 0, 0, [])
 
     history = database.read_download_history()
     statuses = database.read_processing_status()
@@ -822,7 +831,6 @@ def run_static_surface_analysis(
             continue
         if not force and target.is_file():
             try:
-                import json
                 prior = json.loads(target.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 prior = {}
@@ -860,10 +868,22 @@ def run_static_surface_analysis(
             expected_size = int(row.get("size") or 0)
             hash_obj = hashlib.sha256()
             actual_size = 0
+            hash_started = time.monotonic()
+            last_hash_beat = hash_started
             with source_apk.open("rb") as source_handle:
-                for chunk in iter(lambda: source_handle.read(1024 * 1024), b""):
+                for chunk_index, chunk in enumerate(
+                    iter(lambda: source_handle.read(1024 * 1024), b""), start=1
+                ):
                     hash_obj.update(chunk)
                     actual_size += len(chunk)
+                    now = time.monotonic()
+                    if now - last_hash_beat >= 2:
+                        last_hash_beat = now
+                        _emit_progress(
+                            progress,
+                            f"  hashing base.apk chunk {chunk_index} "
+                            f"({actual_size:,} bytes; {int(now - hash_started)}s)",
+                        )
             if hash_obj.hexdigest() != digest or (expected_size and actual_size != expected_size):
                 raise ValueError(
                     "Original APK changed after acquisition; refusing DEX analysis "
@@ -933,22 +953,24 @@ def run_static_surface_analysis(
                 "error": str(exc),
             })
             _emit_progress(progress, f"  FAILED: {package_id}: {exc}")
+        # Always-alive marker: refresh after EVERY artifact so a crashed run
+        # leaves an honest mid-state (observability + crash forensics).
+        marker_refresh(
+            "running",
+            summary["eligible"], summary["completed"], summary["failed"],
+            summary["skipped"], summary["partial"], summary["finding_count"],
+            summary["artifacts"],
+        )
     if marker_path is not None:
         marker_status = (
             "failed" if summary["failed"]
             else "partial" if summary["skipped"] or summary["partial"]
             else "success"
         )
-        _atomic_write_json(marker_path, {
-            "schema_version": 1,
-            "run_id": run_id,
-            "status": marker_status,
-            "eligible": summary["eligible"],
-            "completed": summary["completed"],
-            "partial": summary["partial"],
-            "failed": summary["failed"],
-            "skipped": summary["skipped"],
-            "finding_count": summary["finding_count"],
-            "artifacts": summary["artifacts"],
-        })
+        marker_refresh(
+            marker_status,
+            summary["eligible"], summary["completed"], summary["failed"],
+            summary["skipped"], summary["partial"], summary["finding_count"],
+            summary["artifacts"],
+        )
     return summary

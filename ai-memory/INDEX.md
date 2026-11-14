@@ -70,12 +70,13 @@ surface.txt/plan.txt checkboxes if applicable.
   interpolation slots, known gaps). Prompts note stage numbering 0..6
   (user chaining reads 0 then 1.txt). Next refinement after first live run.
 - ACQUISITION REWORK (started 2026-11-14, at beginning per user order):
-  land round 1 committed to working tree (uncommitted): F1 provenance
-  (discover channels -> catalog -> bundle manifest), F3 rerun hygiene
-  (.part purge + extra_files recorded), F2 stale-delivery error wording;
-  prompts 0/2 + README updated; ai-memory/acquisition-review.md is the
-  audit trail. Tests 154 passing (2 new). Next: confirm commit with user;
-  then either remaining acquisition polish (P2 items) or surface S1.
+  commits 1b26eaa + 4f225e6 (pushed): F1 provenance (discover channels ->
+  catalog -> bundle manifest), F3 rerun hygiene (.part purge + extra_files),
+  F2 RESOLVED: one-time mid-download delivery refresh with frozen-plan
+  digest guard (divergent delivery aborts with re-run guidance); prompts 0/2 + README updated; ai-memory/acquisition-review.md audit trail (F1..F7;
+  F2 closed; F6/F7 documented; P2-2 pacing deferred to plan item A).
+  Tests 156 passing. Remaining acquisition polish: minor; next major step
+  is surface S1 unless user directs otherwise.
   Implementation NOT started; next item S1 (progress + checkpoint scaffold)
   per surface-plan-v2.md §4. Phase S must add the WORKBOOK section
   (§7A) to serialization scope so the handoff is complete from the start.
