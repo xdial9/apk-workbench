@@ -39,8 +39,8 @@ END: update STATE (phase item moved? decisions? VERIFYs resolved?) + tick
 surface.txt/plan.txt checkboxes if applicable.
 
 ## STATE (as of 2026-11-14, updated by agent)
-- Branch: feature/goopdl-account-auth (commit 63ca287, auth + discover/
-  download hardening; tests 152 green; live account-mode validated).
+- Branch: feature/goopdl-account-auth (S8 perf commit 964ee09; tests 205
+  green; live account-mode validated).
 - Phase: Surface analyzer overhaul planning DONE (ai-memory/surface-plan-v2.md
   is canonical; supersedes surface.txt's S-order and folds in dump/checkpoint
   + terminal + AI-consumer shaping; P9 MODEL-AGNOSTRIC HANDOFF LAW + master
@@ -77,25 +77,62 @@ surface.txt/plan.txt checkboxes if applicable.
   F2 closed; F6/F7 documented; P2-2 pacing deferred to plan item A).
   Tests 156 passing. Remaining acquisition polish: minor.
 - SURFACE OVERHAUL (plan v2): S1 9898217, S2 652a088, S3 7d1cb43, S4 9a55e64,
-  S5 3794764, S6 5077a31, S7 e22faaf (all pushed; tests 203): S7 = adversarial
+  S5 3794764, S6 5077a31, S7 e22faaf (all pushed; tests 205): S7 = adversarial
   campaign + REAL FIND: catastrophic ReDoS in DOMAIN_RE/HOST_PORT_RE (hostile
   huge label runs could wedge the sweep forever — violates never-frozen);
   fixed with possessive quantifiers on the unbounded groups; IPv6 second
   alternative extended (bounded). Consumer contract asserted on every result.
-  Next: S8 live validation — Antennapod DONE (a9ca7de: 1503s wall, partial
-  due to androguard 64MB cap on a NORMAL app — Phase A proof; 4299/4164
-  findings; fact-evidence ledger bug found+fixed). Spotify 131MB acquired+
-  verified (run c79180cf, 4 APKs), decoded 1.2GB; heavy-case surface running.
-  After S8: reconcile plan.txt + prompts cross-check, then Phase A.
+  S8 Antennapod DONE (a9ca7de: 1503s wall, partial due to androguard 64MB cap
+  on a NORMAL app — Phase A proof; 4299/4164 findings; fact-evidence ledger
+  bug found+fixed). S8 PERF (964ee09): live profile -> compiled matchers,
+  file-level dependency evidence, required-character gates; 300-file
+  microbench 16.73s -> 6.02s (~2.7x); surface-only Antennapod 407s for
+  15,290 files; parity verified (findings/inventory/manifest/deductions/
+  fact core identical; only expected diffs were the 03:39 evidence fix and
+  driver-only DEX/zip stages). Spotify 131MB acquired+verified (run
+  c79180cf, 4 APKs), decoded 1.2GB. Pre-optimization run aborted at
+  25,292/112,254 files / 2,351s (~10.8 files/s baseline only); optimized
+  rerun launched 2026-11-14; see RESUME HERE.
+  NEXT after S8: handoff contract fix (prompts reference nonexistent
+  surface/facts.jsonl + surface/location_map.json; emit additive files +
+  folder mapping per plan v2 §5, default decision), then Phase A ceilings,
+  then prompt-chain dry run, then first user active run.
 - Environment: repo /home/user/APK-Workbench; venv .venv/bin/python; pytest
-  all-green baseline 152; apktool 3.0.3; trufflehog 3.99.8; androguard 4.1.4
-  pinned; live fixture workspace /tmp/opencode/ws (VERIFY exists before use).
+  all-green baseline 205; apktool 3.0.3; trufflehog 3.99.8; androguard 4.1.4
+  pinned; live fixture workspace /tmp/opencode/ws (VERIFY exists before use);
+  optimized Spotify log /tmp/opencode/surface_spotify_optimized.log.
 - Working files now live MOVED INTO ai-memory/ by the user (plan.txt,
   surface.txt, firstreport.txt, appdev.txt are canonical HERE; repo root
   still holds firstreport.txt + surface.txt copies + plan.txt may be gone
   from root — VERIFY root state at next session and re-sync as needed).
 - Open question logged in appdev.txt §1: Phase S branch choice (default:
   stay on current branch until user says otherwise).
+
+## RESUME HERE (deliberate pause point, 2026-11-14 ~04:30)
+1. Read ai-memory/INDEX.md -> appdev.txt §1/§15-17 -> todo.md -> prompts
+   README_BUILD if touching the handoff.
+2. Check the optimized Spotify heavy-case run:
+   - command/log: /tmp/opencode/surface_spotify_optimized.log
+   - launcher PID 42219 (likely gone if it finished); run
+     c79180cf-01ab-4b2b-a507-4e238f24c1d1
+   - durable marker: workspace results/runs/<run_id>/static-analysis-run.json
+   - artifact: /tmp/opencode/ws/results/com.spotify.music/148387875/<digest>/
+     static-analysis.json (4 APKs in the bundle)
+   - if complete: record WALL_CLOCK_SECONDS + summary + status in INDEX §STATE
+     and appdev §14; if missing: rerun the command captured in todo.md.
+   - expected ~50-70 min from launch; do NOT confuse it with the aborted
+     pre-optimization run (25,292/112,254 files in 2,351s), which is only a
+     throughput baseline.
+3. Work order: (a) emit surface/facts.jsonl + location_map.json and map the
+   current results path to the prompt folder contract (or, fallback, rewrite
+   prompts to the embedded static-analysis.json/workbook keys); (b) Phase A
+   ceiling removal (androguard 64MB cap already proved harmful on a normal
+   app); (c) prompt-chain dry run on one real artifact; (d) first active user
+   run.
+4. Known-good artifacts for replay: Antennapod before/after JSON at
+   /tmp/opencode/antennapod-before.json and -after.json; benchmark harness
+   /tmp/opencode/bench_sweep.py (300-file parity/speed check).
+5. Current code/test facts: S8 perf 964ee09, tests 205 green, analyzer 0.3.0.
 
 ## COUNTERMEASURES MAPPED (why this folder reduces my failure modes)
 - Context decay across sessions -> STATE + file map; no memory-only recall.
