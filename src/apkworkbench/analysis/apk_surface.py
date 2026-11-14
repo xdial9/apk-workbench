@@ -456,34 +456,44 @@ def analyze_apk_surface(
 
     # ---- S5: fingerprint fact store + deduction templates -----------------
     fact_store = FactStore()
+    manifest_relative = next(
+        (path.relative_to(root).as_posix() for path in files if path.name == "AndroidManifest.xml"),
+        "AndroidManifest.xml",
+    )
     for record in api_endpoints.values():
-        fact_store.add("endpoint", record.get("canonical") or record["value"], extra={
+        evidence = record["evidence"][0] if record["evidence"] else None
+        fact_store.add("endpoint", record.get("canonical") or record["value"], evidence=evidence, extra={
             "kind": record["kind"], "host": record.get("host"),
             "host_class": record.get("host_class"), "flags": record.get("flags", []),
         })
     for route, route_data in api_routes.items():
-        fact_store.add("api_route", f"{route_data.get('http_method') or '?'} {route}")
+        evidence = route_data["evidence"][0] if route_data["evidence"] else None
+        fact_store.add("api_route", f"{route_data.get('http_method') or '?'} {route}", evidence=evidence)
     if isinstance(manifest_facts.get("deep_links"), list):
         for link in manifest_facts["deep_links"]:
-            fact_store.add("deep_link", f"{link['scheme']}://{link['host']}{link['path']}", extra={
-                "component": link.get("component"),
-            })
+            fact_store.add(
+                "deep_link", f"{link['scheme']}://{link['host']}{link['path']}",
+                evidence={"path": manifest_relative}, extra={"component": link.get("component")},
+            )
     for permission in manifest_facts.get("permissions", []) or []:
-        fact_store.add("permission_requested", permission)
+        fact_store.add("permission_requested", permission, evidence={"path": manifest_relative})
     for provider in manifest_facts.get("providers", []) or []:
         for authority in provider.get("authorities", []):
-            fact_store.add("provider_authority", authority, extra={"component": provider.get("name")})
+            fact_store.add("provider_authority", authority, evidence={"path": manifest_relative}, extra={
+                "component": provider.get("name"),
+            })
     for entry in manifest_facts.get("meta_data", []) or []:
         if entry.get("value") and looks_like_key(entry["name"], entry["value"]):
-            fact_store.add("meta_data_key", f'{entry["name"]}={entry["value"]}')
+            fact_store.add("meta_data_key", f'{entry["name"]}={entry["value"]}', evidence={"path": manifest_relative})
     for item in sweep.decoded_strings:
-        fact_store.add("decoded_string", item["decoded"], extra={
-            "encoded": item["encoded"], "reveals": item["reveals"],
-        })
+        fact_store.add("decoded_string", item["decoded"], evidence={
+            "path": item["path"], "line": item["line"],
+        }, extra={"encoded": item["encoded"], "reveals": item["reveals"]})
     for dependency in dependencies:
-        fact_store.add("dependency_sdk", dependency["name"])
+        evidence = {"path": dependency["evidence_paths"][0]} if dependency["evidence_paths"] else None
+        fact_store.add("dependency_sdk", dependency["name"], evidence=evidence)
     for library in native_libraries:
-        fact_store.add("native_library", library)
+        fact_store.add("native_library", library, evidence={"path": library})
 
     histogram = package_root_histogram(tree.entries, manifest_facts.get("package"))
     smali_entries = [
