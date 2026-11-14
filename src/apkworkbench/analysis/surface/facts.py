@@ -8,7 +8,6 @@ deduped, pointerized).
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
 from typing import Any
 
 REPRESENTATIVE_EVIDENCE_CAP = 3

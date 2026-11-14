@@ -311,6 +311,7 @@ class SweepState:
                 value = match.group(0).lower().rstrip(".")
                 if (
                     value
+                    and value not in TOOLING_URL_HOSTS
                     and not value.endswith((".xml", ".json", ".png", ".jpg", ".smali"))
                     and value not in self.endpoint_hosts
                 ):

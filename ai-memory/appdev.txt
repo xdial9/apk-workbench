@@ -410,6 +410,12 @@ Deduction templates (each holds when ALL required facts exist):
   one stat() per file for byte accounting; canonical endpoint grouping is
   O(1) dict — no quadratic containment. Sweep engine lives in
   surface/sweep.py; apk_surface orchestrates.
+2026-11-14 S5 landed (facts + deductions): FactStore fingerprint dedup;
+  package-root histogram = data-driven SDK detection (no curated guessing);
+  deduction templates are conjunctive-only + cite fingerprints + carry
+  next_steps for the handoff (§7A). Lesson recorded: implicit string
+  concatenation inside list literals is a real bug class here (ruff ISC004)
+  — always parenthesize wrapped strings in collections.
 
 ================================================================================
 15. CONSUMERS CONTRACT (breakage map for apk_surface output — VERIFY markers)

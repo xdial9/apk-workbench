@@ -76,15 +76,15 @@ surface.txt/plan.txt checkboxes if applicable.
   digest guard (divergent delivery aborts with re-run guidance); prompts 0/2 + README updated; ai-memory/acquisition-review.md audit trail (F1..F7;
   F2 closed; F6/F7 documented; P2-2 pacing deferred to plan item A).
   Tests 156 passing. Remaining acquisition polish: minor.
-- SURFACE OVERHAUL (plan v2): S1 9898217, S2 652a088, S3 7d1cb43, S4 9a55e64
-  (all pushed; tests 184): sweep v2 in surface/sweep.py (schemes, canonical
-  dedup, userinfo, IPv6/host:port, host classes, base64 decoding, windowed
-  retrofit, precompiled rules, context snippets, header context class,
-  proximity over all evidence); sweep budgets/caps REMOVED (Phase A item
-  done for this module). Next: S5 facts store + first deduction templates
-  (SDK histogram, packed downgrade, permission-mismatch, API reconstruction;
-  deductions carry next-step suggestions for the AI handoff). S6 serializer
-  must include the WORKBOOK (§7A).
+- SURFACE OVERHAUL (plan v2): S1 9898217, S2 652a088, S3 7d1cb43, S4 9a55e64,
+  S5 3794764 (all pushed; tests 192): S5 = FactStore (fingerprint dedup,
+  representative evidence) + package-root histogram (data-driven SDK
+  owners) + deduction templates (D-SDK-HISTOGRAM, D-PACKED-CANDIDATE,
+  D-OBFUSCATED-NAMES, D-PERMISSION-MISMATCH, D-API-SURFACE) each citing
+  fact fingerprints and carrying next_steps for the terminal AI; facts/
+  deductions/sdk_histogram sections in static-analysis.json; sweep skips
+  tooling namespace hosts. Next: S6 serializer + WORKBOOK (§7A) + version
+  bump 0.3.0 + stale-reuse handling; then S7 driver/test campaign.
 - Environment: repo /home/user/APK-Workbench; venv .venv/bin/python; pytest
   all-green baseline 152; apktool 3.0.3; trufflehog 3.99.8; androguard 4.1.4
   pinned; live fixture workspace /tmp/opencode/ws (VERIFY exists before use).

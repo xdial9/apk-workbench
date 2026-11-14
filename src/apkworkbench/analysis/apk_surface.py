@@ -23,6 +23,7 @@ from apkworkbench.analysis.surface.classify import (
     classify_decoded_tree,
     inventory_apk_zip,
 )
+from apkworkbench.analysis.surface.serialize import finalize_result
 from apkworkbench.analysis.surface.sweep import SweepState
 from apkworkbench.analysis.surface.deductions import (
     api_surface,
@@ -37,6 +38,9 @@ from apkworkbench.analysis.surface.manifest_v2 import (
     parse_manifest_v2,
     parse_network_security_config,
 )
+
+ANALYZER_ID = "apk-surface"
+ANALYZER_VERSION = "0.3.0"
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
 
@@ -513,9 +517,9 @@ def analyze_apk_surface(
         if deduction is not None:
             deductions.append(deduction)
     deductions.sort(key=lambda item: item["id"])
-    return {
+    result = {
         "schema_version": 1,
-        "analyzer": {"id": "apk-surface", "version": "0.2.0"},
+        "analyzer": {"id": ANALYZER_ID, "version": ANALYZER_VERSION},
         "status": (
             "success"
             if manifest_facts.get("status") == "success"
@@ -575,6 +579,7 @@ def analyze_apk_surface(
             "native_library_count": len(native_libraries),
         },
     }
+    return finalize_result(result)
 
 
 def _emit_progress(progress: Callable[[str], None] | None, message: str) -> None:
@@ -738,7 +743,7 @@ def run_static_surface_analysis(
                 isinstance(prior, dict)
                 and prior.get("status") in {"success", "partial"}
                 and isinstance(prior_analyzer, dict)
-                and prior_analyzer.get("version") == "0.2.0"
+                and prior_analyzer.get("version") == ANALYZER_VERSION
                 and isinstance(prior_dex, dict)
                 and prior_dex.get("status") in {"success", "partial"}
             ):
@@ -836,6 +841,7 @@ def run_static_surface_analysis(
                 "package_id": package_id, "version_code": version_code,
                 "sha256": digest, "source_apk": str(source_apk),
             }
+            finalize_result(result)
             _atomic_write_json(target, result)
             count = len(result.get("findings", []))
             summary["completed"] += 1
@@ -859,7 +865,7 @@ def run_static_surface_analysis(
             summary["failed"] += 1
             failure = {
                 "schema_version": 1,
-                "analyzer": {"id": "apk-surface", "version": "0.2.0"},
+                "analyzer": {"id": ANALYZER_ID, "version": ANALYZER_VERSION},
                 "status": "failed",
                 "artifact": {
                     "package_id": package_id, "version_code": version_code,
