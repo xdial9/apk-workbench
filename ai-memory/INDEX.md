@@ -103,6 +103,13 @@ surface.txt/plan.txt checkboxes if applicable.
   all-green baseline 205; apktool 3.0.3; trufflehog 3.99.8; androguard 4.1.4
   pinned; live fixture workspace /tmp/opencode/ws (VERIFY exists before use);
   optimized Spotify log /tmp/opencode/surface_spotify_optimized.log.
+- Spotify heavy-case scan STOPPED BY USER 2026-11-14 04:52 at
+  57,944/112,254 files (1,481s, ~39 files/s optimized, 6,227 endpoints,
+  4,890 findings in memory). NOTHING PERSISTED: no static-analysis.json /
+  facts.jsonl / location_map.json for any Spotify artifact, and the run
+  marker is stale ("running", eligible 0) — do not treat it as a live run.
+  Heavy-case validation remains INCOMPLETE; Antennapod is the only finished
+  artifact. Rerun command preserved in todo.md; safe to rerun.
 - Working files now live MOVED INTO ai-memory/ by the user (plan.txt,
   surface.txt, firstreport.txt, appdev.txt are canonical HERE; repo root
   still holds firstreport.txt + surface.txt copies + plan.txt may be gone

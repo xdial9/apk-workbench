@@ -560,6 +560,15 @@ Deduction templates (each holds when ALL required facts exist):
   alone). static-analysis.json untouched, so S8 parity holds. Still
   missing: handoff FOLDER assembly (results/<pkg>/<ver>/<digest>/ ->
   the folder names the prompts promise), dry run, hierarchy, schema gate.
+2026-11-14 Spotify heavy-case scan STOPPED by user request at 04:52:
+  SIGTERM to PID 42219 after 57,944/112,254 files (1,481s, ~39 files/s,
+  6,227 endpoints, 4,890 findings — memory only). No artifact was written
+  for any of the 4 APKs; the run marker remains "running"/eligible 0 and is
+  STALE (the driver refreshes it only after an artifact completes). Heavy-
+  case validation is INCOMPLETE; do not cite it as a completed run. The
+  throughput number IS usable as the optimized heavy-case rate (~39
+  files/s vs 10.8 files/s pre-062973b). Rerun command is preserved in
+  todo.md and is safe because nothing was persisted.
 
 ================================================================================
 15. CONSUMERS CONTRACT (breakage map for apk_surface output — VERIFY markers)

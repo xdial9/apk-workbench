@@ -45,7 +45,28 @@ first; this file holds the hands-on details for resuming.
   androguard DEX (dex_timeout_seconds=1800, and the 64 MB output cap will
   likely make it partial -> status partial, Phase A proof), then splits 2-4.
 
-## RUNNING NOW (optimized Spotify heavy case)
+## STOPPED 2026-11-14 04:52 — Spotify heavy-case scan (user request)
+- SIGTERM to PID 42219 at 04:52; process now a zombie (Z) reaped by its
+  parent shell. The background shell reported exit 143 (SIGTERM).
+- Final progress: 57,944 / 112,254 text files, 1,481s elapsed, 6,227
+  endpoints, 4,890 findings — ALL IN MEMORY ONLY.
+- NOTHING WAS PERSISTED: no static-analysis.json, no facts.jsonl, no
+  location_map.json for any of the 4 Spotify artifacts (find returned
+  nothing). Surface output is written only after sweep -> APK re-hash ->
+  DEX -> finalize, and the sweep never finished.
+- Marker results/runs/c79180cf-.../static-analysis-run.json still says
+  "status": "running", eligible 0, no artifacts. STALE / DO NOT TRUST: the
+  driver refreshes it only after an artifact completes. A future resume
+  must not read it as evidence that a run is alive.
+- Consequence: the heavy-case (131MB / 112k-file) validation is INCOMPLETE.
+  Antennapod remains the only finished surface artifact. The measured
+  throughput from this run is still valid evidence (57,944 files / 1,481s
+  = ~39 files/s on the optimized code, vs 10.8 files/s before 062973b) and
+  can be quoted as the heavy-case rate without claiming a completed run.
+- Rerun command preserved below; it is safe to rerun (no partial artifact
+  to corrupt).
+
+## RUNNING NOW (optimized Spotify heavy case) — HISTORICAL, see STOPPED above
 - PID 42219, launched 2026-11-14 ~04:26, run
   c79180cf-01ab-4b2b-a507-4e238f24c1d1.
 - Log: /tmp/opencode/surface_spotify_optimized.log
