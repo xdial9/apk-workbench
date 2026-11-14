@@ -1,0 +1,269 @@
+# APK WORKBENCH — MASTER PLAN (working doc, written for the agent's own use)
+State as of 2026-11-14. Branch: feature/goopdl-account-auth (auth work committed, tests 152 green).
+Live-validated: account-mode discover/download/verify on real Play data (keyring-saved account).
+
+## PROGRAM IDENTITY (top of file; read first every session)
+The program is a STATIC, deterministic, no-thought read/write DATAMAP engine.
+Its value chain ends at the AI WORK ASSIGNMENT (the handoff): the briefs,
+facts, deduped findings, coverage gaps and playbooks that the terminal AI
+call consumes. THE IDENTITY HIERARCHY:
+  1. The pipeline's whole purpose is to produce a complete, deduplicated,
+     evidence-cited datamap of every artifact + the work order that turns it
+     into intelligence.
+  2. The terminal AI is the ANALYST, not a reader: its mandated workflow is
+     (a) FIRST read and map the entire RAW DECOMPILed .apk tree itself —
+     independent observation BEFORE seeing tool conclusions (anti-anchoring:
+     own findings recorded in ai_analysis BEFORE cross-checking the tool's
+     static-analysis); (b) THEN read the program output (facts, findings,
+     coverage ledger, playbook); (c) TRACE EACH HINT — pursue, decode,
+     correlate, and make the judgement findings/deductions a static tool
+     cannot make; (d) finish the coverage; (e) write the final dossier +
+     overlay into ai_analysis/ with citations.
+  3. Every stage before the handoff therefore exists to maximize the
+     handoff's quality: exhaustiveness of extraction, dedup cleanliness,
+     evidence citability, honest coverage gaps, and an ao playbook worth
+     executing. A stage that does not improve the handoff is dead weight.
+This identity GOVERNS any conflict with older phrasing elsewhere in file.
+ACTIVE WORK FILE: surface.txt (line-by-line surface-analyzer review + S-a..S-g
+order). This master plan's Phase S summary below is COPIED FROM surface.txt; on
+conflict, surface.txt wins for standing surface-analyzer details; plan.txt wins
+for doctrine/phase-ladder/appetites.
+
+---
+
+## 0. CURRENT WORK ITEM (replaces "start at Phase A")
+### PHASE S — FIX + OPTIMIZE the surface analyzer FIRST
+Rationale: the surface analyzer is becoming the core product. Fix/optimize it
+BEFORE the ceiling-removal (A) and rewrite (C) phases; then reconcile the plan
+against what changed; THEN enact the final full rewrite.
+
+Known defects to fix (from full codebase read; file: analysis/apk_surface.py, 954 lines):
+- S1. Monolith: `analyze_apk_surface` (L~304-677) does parse+scan+deduce+persist
+  in one function. Split into: manifest parser / text-file sweeper / inventory
+  builder / coverage+output assembler. Keep pure-function entry point shape.
+- S2. Quadratic-ish domain check: `any(value in endpoint for endpoint in
+  api_endpoints)` per domain (L~515) -> use exact-name matching + precomputed
+  lowercase value sets/dicts (dedupe by value fingerprint).
+- S3. Inline imports (`__import__("os").walk` L331; `import json` L698/L825)
+  -> module-level imports.
+- S4. Snippet handling: whole-XML-element `ET.tostring` snippets and raw smali
+  lines inflate findings; cap snippet SIZE (chars) per finding, not coverage.
+- S5. Duplicated per-module helpers (atomic_write, terminate tree) -> extract
+  shared core helpers (also used by trufflehog.py + runner.py later; do not
+  block S).
+- S6. Optimizations (low-hardware friendly, keep sequential): sorted file walk
+  once (currently os.walk re-walks for smali/text/resource inventories -> single
+  pass, classify by extension); avoid re-reading same file for multiple rules;
+  precompile regexes module-level (already mostly done — verify); skip decode
+  leftovers deterministically but RECORD them in coverage ledger.
+- S7. run_static_surface_analysis (L713-954): keep skip-reuse + source-integrity
+  re-check; make per-artifact JSON write + run marker exactly as-is but go
+  through the shared atomic helper.
+- S8. Version bump analyzer to 0.3.0 after S (reuse gate keys on version —
+  handle old 0.2.0 results: treat as stale, re-analyze).
+- Tests: update analysis tests in tests/test_apk_surface.py for S1-S8; keep all
+  green; add adversarial fixture (deep dir tree, unicode, huge line).
+
+Optimization target metric: single file walk, no repeated reads, dict-based
+dedupe; outcome: same findings superset, faster wall-clock, identical CLI flow.
+
+### AFTER S SUCCEEDS
+- Reconcile plan: update this file to reflect proven changes; then Phase A
+  (remove all ceilings incl. surface budgets/caps per Phase A section) and the
+  remaining phases; then the FINAL FULL REWRITE (Phase C) as planned.
+
+---
+
+## 1. DOCTRINE (standing rules for every change)
+- Linear, sequential, slow, accurate. Low hardware. "Turn on, go to sleep."
+- DEDUCE FROM DATA, NEVER GUESS: tool flags verified against installed binary;
+  analyzer deductions cite file:line evidence; corpus links only on exact
+  fingerprint matches (similarity = labeled hint, never a link).
+- No maximums, no timeouts: if it works, it runs to completion.
+- PERFORMANCE LAW (user directive 2026-11-14): actively look for ways to
+  speed this tool up, but NEVER at the expense of accuracy or reliability.
+  Practical form: every phase ships at least one considered speed review
+  (recorded in the decisions log; adopt only when correctness-neutral:
+  single-pass IO, compiled regexes, dict/set lookups, streaming reads,
+  batching IO, avoiding whole-file copies). The 2s heartbeat and progress
+  layer are measured cost-free (monotonic checks + throttled writes) and
+  are NOT a place to trade against accuracy. Speed wins that would skip
+  verification, skip files, cap findings, or hide findings are FORBIDDEN.
+- Findings must NEVER be redacted/hidden/unsearched; classify all knowledge by
+  confidence (verified / deduced / hint).
+- Tools point at the ORIGINAL .apk; derived artifacts only when a tool cannot
+  read the format directly (Appendix C exception clause).
+
+## 2. PHASE LADDER (order)
+
+### PHASE A — Remove ceilings (maxima/timeouts -> none)
+- apk_surface: kill 8MB/file + 512MB total budgets, 100k findings cap.
+- androguard_dex: kill 64MB out / 100k methods / 200k edges / 100k strings
+  caps + 1800s timeout (keep heartbeats).
+- decompilation/runner: remove 3600s timeout (SIGINT cleanup stays).
+- trufflehog.py: remove 2h timeout + 512MB out cap.
+- executor/contracts: knobs default null-unbounded.
+- config.py: timeout/limit keys ignored by default; operator override knob
+  exists but never set by default.
+- doctor: drop timeout expectations.
+
+### PHASE B — Capture every hint + tool maximization
+1. TruffleHog (flags verified from installed 3.99.8 help):
+   - PRIMARY verified-only scan (minimal, justified):
+     `filesystem --concurrency=1 --no-update --results=verified --json --fail-on-scan-errors <dir>`
+   - hard-abort on unverified/malformed lines RETAINED (defective output can't
+     be deduced from).
+   - HINT PASS (second scan):
+     `filesystem --concurrency=1 --no-update --results=verified,unverified,unknown --json --filter-unverified --no-ignore-tag --fail-on-scan-errors <dir>`
+     stored as hints: verified=tool_verified, unverified=corroborated_static,
+     unknown=flagged_error. --filter-unverified dedupes; --no-ignore-tag
+     re-hydrates tag-suppressed lines (hidden-findings class we opt out of).
+   - Default detector set is already ALL; --allow-verification-overlap NOT used.
+2. Reports (per-APK + final) render verified AND hint buckets w/ labels.
+3. Asset packs (.pak etc.) acquired, hashed, manifested, analyzed.
+4. Surface output becomes first-class report content (not stage counts).
+
+### PHASE C — Surface analyzer full rewrite (deducing engine)
+On the dormant framework (contracts/registry/executor, database/evidence.py):
+1. Parsers -> facts (dedup by value fingerprint): manifest, every smali file,
+   resources, assets, so files, DEX (Androguard), asset packs, zip inventory.
+2. Deduction rules -> estimated logics with confidence + cited evidence
+   (beaconing, SDK reconstruction, obfuscation detection, crypto graphs).
+3. Coverage ledger per file -> explicit "not analyzed: X" (should shrink to
+   dynamic-only items).
+4. Wire analyzer registry/executor in for surface analyzers; SQLite as
+   shadow store; CSVs stay source of truth until proven equivalent.
+
+### PHASE D — Dossier generator
+Per app Markdown + JSON: Identity/provenance, Architecture map, Network life,
+Security posture, Secrets (verified+hints), Deduced behaviors, Relationship
+graph, Unknowns/exclusions. Every deduction evidence-clickable (file+line+hash).
+
+### PHASE E — Corpus correlation (SQLite finding_relationship)
+same_endpoint / same_vendor / duplicate_value / derived_from / conflicts;
+fingerprint-match links only; similarity = hint. Query surface for cross-app
+questions; additive phase.
+
+## 3. APPENDIX A — apktool maximization (verified from apktool 3.0.3 help)
+Current: `apktool d --jobs 4 --force -o <staging> <apk>`
+- ADD --all-src (decodes unknown/packed dexes — currently missed).
+- ADD --keep-broken-res (decode resources that would be silently dropped).
+- EVALUATE --res-resolve-mode greedy (adopt if empirical delta positive).
+- KEEP debug info (no --no-debug-info): .line/.param feed line-precise evidence.
+- KEEP --jobs 4. NEVER --no-assets/-r/-s/--match-original (we never rebuild).
+- PIN workspace framework dir (-p) for cached/reproducible extraction.
+
+## 4. APPENDIX B — TruffleHog involvement (from verified 3.99.8 help)
+See Phase B.1/B.2: minimal justified primary flag set + dedicated hint pass;
+no detector whitelist (default = all); no --allow-verification-overlap;
+ordering: verified scan BEFORE hint pass (high-confidence resumes first).
+
+## 5. APPENDIX C — Input policy: original .apk
+Every tool's primary input = the original APK. Only exception: a tool that
+cannot read a format directly takes the earliest derived artifact that unlocks
+that content (e.g. trufflehog needs decoded smali; surface text sweep needs
+decode trees; androguard MUST keep reading the original APK — hash-guarded).
+Surface must build a complete zip-member inventory (every member listed +
+hashed) so undecoded members are still mapped. Tests:
+- trufflehog scan set == decode tree + original-only members.
+- surface facts include full zip member inventory with member hashes.
+- androguard input hash == original APK hash on every execution.
+
+## 6. VERIFICATION GATES (per phase)
+- All existing tests stay green; new adversarial tests per phase.
+- Live sample-APK batch before committing each phase.
+- No findings hidden: phase-level audit repeats the 2026-11-14 redaction audit
+  (verified-only leaks, unstaged caps, silent skips) and must come up empty.
+
+## 7. APPENDIX D — ALWAYS-ALIVE TERMINAL (standing rule, all stages)
+At NO time may the terminal screen be blank or frozen. The user must be able
+to tell instantly whether the program is working or hung, on ordinary low-
+hardware terminals (plain STDOUT/TTY, no rich-TUI dependency).
+
+Requirements for EVERY stage and sub-stage (surface analyzer included):
+- A continuously refreshing line that proves forward motion: at minimum a
+  counter/percentage for closed-form work (X/Y files, Z/N artifacts, G.OF.T
+  bytes) and, for open-ended work, a unitless status that changes on every
+  processed unit (latest file, current rule, chunk number).
+- A one-line description of the CURRENT work item (e.g. "scanning resources/
+  strings.xml rules 12/19", "hashing base.apk chunk 1024").
+- Max normal-emit interval: nothing silent longer than ~2s of wall clock
+  during active stages; heartbeats (e.g. elapsed: N s) when a single unit
+  takes longer than that.
+- Long single-unit operations (DEX analysis, huge file sweep, hash of a large
+  APK)must emit sub-unit progress (chunks, methods, edges) not just stage
+  labels.
+- Existing progress hooks in this direction exist and MUST be kept/widened:
+  _emit_progress in google_play.py / apk_surface.py, androguard per-second
+  heartbeats, trufflehog findings-counter, decompilation live log tail.
+- CI/tests: fake clocks and long ops must assert the emit interval contract
+  (non-silent > 2s is a test failure).
+Mechanism note: implement parity across stages via a tiny shared progress
+printer (replaces copy-paste _emit_progress variants progressively; unchanged
+semantics: single line updates via \r, no flicker, no blank lines).
+
+## 8. PHASE D AMENDMENT — AI HANDOFF (decided 2026-11-14)
+A. AI as last stage (manual, not automated): acceptable and designed for.
+   The tool produces the deterministic evidence; an external AI session works
+   as the terminal reasoning stage per artifact. AI outputs must be labeled
+   ai_deduced and never silently merge with tool_verified findings.
+B. Token-efficiency data-plane rules (apply from Phase S onward):
+   - Facts deduped by fingerprint; multi-occurrence values carry ONE entry
+     with representative evidence, never N copies (tokens are a cost).
+   - Dense deterministic shapes (JSON/JSONL, one shape per app); snippets
+     size-capped; exact file:line pointers (pull context, don't push it).
+   - Graded briefing: established facts -> verified findings -> hints ->
+     what nobody checked (coverage ledger verbatim).
+C. Per-run/per-APK handoff folders:
+   - Content layer stays GLOBAL (downloads/, results/, ledgers, sha256
+     dedup across runs - immutable history keeps deduplication).
+   - At end of `run`, materialize handoff/<run_id>/<pkg>/<ver>/<digest>/
+     containing: BRIEFING.md (written for a model with zero project memory),
+     dossier/brief data, static-analysis.json, trufflehog verified+hint
+     findings, the artifact's verification rows, decode tree, and the
+     ORIGINAL APK - assembled with HARDLINKS (no symlinks; zero disk copy).
+   - One folder = one APK = complete, cold-start consumable; user hands the
+     AI any folder, one at a time; 100 runs = 100 ready folders.
+   - "Independent to consume, shared underneath": dedup stays global, the
+     view is self-contained.
+D. Optional feedback loop: AI conclusions can return as a machine-readable
+   overlay (ai_analysis_<run>.json, verification_state=ai_deduced, evidence
+   links to the same trails); corpus untouched; additive and diffable.
+E. Format rule: briefing/dossier maximally useful to a human with a text
+   editor AND to any future AI; never require any specific model to read.
+D2. MODEL-AGNOSTRIC HANDOFF LAW (added 2026-11-14; binding from Phase S1
+   serialization design onward): every pipeline output EXCEPT trufflehog
+   VERIFIED findings must be authored for the final AI tool call and remain
+   consumable by virtually any capable model: self-describing schemas,
+   plain formats (JSON/JSONL/Markdown), inline terminology definitions in
+   the briefing, no external-context references, machine-verifiable
+   evidence chains, stable invariants (same key = same meaning in every
+   artifact/run), paging-friendly structure (briefing indexes everything;
+   no single load-bearing file), no reliance on model memory/tools/keys
+   the reader does not have.
+D3. ACTIVE-AGENT HANDOFF (user directive 2026-11-14; pillar P10 of
+   surface-plan-v2; §7A there holds the full design): the AI is NOT a
+   read-only reporter. Every handoff grants direction (ranked open leads +
+   location ledger + suggested methods as goals, not commands), a
+   permission map (immutable evidence vs writable ai_analysis/ overlay),
+   and a defined finish line (all coverage triaged, leads pursued or
+   dismissed with reasons, overlay + narrative written with citations) so
+   the final tool call actively extends the analysis and closes the
+   process ("sews it up neatly"). Capability-adaptive: with or without
+   shell access, any capable model can execute the loop.
+   F. RUN WORKSPACE ISOLATION (amends C; decided 2026-11-14):
+      - Downloads stay in the UNIVERSAL content folder (dedup by sha256
+        unchanged; never moved/duplicated by runs).
+      - ALL outputs of one run live in ONE per-run folder:
+        workspace/runs/<run_id>/ - the frozen manifest copy, phase-one
+        verification report, static-analysis.json + trufflehog outputs per
+        artifact (hardlinked from the digest-keyed work cache when bytes
+        are identical), markers, dossier/briefing, handoff files.
+      - Universal tree becomes the work cache (pure function of APK bytes;
+        cross-run skip-reuse reads it); run folder = the RECORD and the AI
+        consumption unit: self-sufficient with no external references,
+        including a hardlink of the original APK.
+      - The AI is pointed at workspace/runs/<run_id>/ (or any single artifact
+        subfolder within it) with zero project context and finds everything.
+      - Phase C adopts the run-folder layout natively (one migration during
+        the full rewrite; Phase S keeps current paths to stay green).

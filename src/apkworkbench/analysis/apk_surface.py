@@ -12,20 +12,20 @@ import re
 import tempfile
 import time
 import xml.etree.ElementTree as ET
-from collections import Counter
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Any
 
 from apkworkbench.analysis.androguard_dex import analyze_apk_dex
+from apkworkbench.analysis.surface.classify import (
+    TEXT_SUFFIXES,
+    classify_decoded_tree,
+    inventory_apk_zip,
+)
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
-TEXT_SUFFIXES = {
-    ".smali", ".xml", ".json", ".properties", ".yml", ".yaml", ".txt",
-    ".js", ".html", ".htm", ".css", ".cfg", ".conf", ".ini", ".gradle",
-    ".kt", ".java", ".md", ".plist", ".csv",
-}
 MAX_TEXT_FILE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_TEXT_BYTES = 512 * 1024 * 1024
 MAX_FINDINGS = 100_000
@@ -328,38 +328,25 @@ def analyze_apk_surface(
         "runtime_behavior": "not_performed",
         "dynamic_network_testing": "not_performed",
     }
-    files: list[Path] = []
-    symlink_count = 0
-    for current, directories, names in os.walk(root):
-        base = Path(current)
-        kept_dirs = []
-        for name in directories:
-            candidate = base / name
-            if candidate.is_symlink():
-                symlink_count += 1
-            else:
-                kept_dirs.append(name)
-        directories[:] = kept_dirs
-        for name in names:
-            candidate = base / name
-            if candidate.is_symlink() or not candidate.is_file():
-                symlink_count += int(candidate.is_symlink())
-                continue
-            files.append(candidate)
-    files.sort()
+    tree = classify_decoded_tree(root)
+    files = tree.files
+    symlink_count = tree.symlink_count
     if symlink_count:
         diagnostics.append({
             "code": "symlink_entries_skipped",
             "message": f"Skipped {symlink_count} symlinked entries in decoded output.",
         })
 
-    extensions = Counter(path.suffix.lower() or "(no extension)" for path in files)
+    extensions = tree.extension_counts
     native_libraries = sorted(
         path.relative_to(root).as_posix() for path in files
         if path.suffix.lower() in {".so", ".a"}
     )
     smali_files = [path for path in files if path.suffix.lower() == ".smali"]
-    resource_files = [path for path in files if path.relative_to(root).parts[:1] in {("res",), ("assets",)}]
+    resource_files = [
+        path for path in files
+        if path.relative_to(root).parts[:1] in {("res",), ("assets",)}
+    ]
     if resource_files:
         coverage["resource_inventory"] = "success"
     manifest = next((path for path in files if path.name == "AndroidManifest.xml"), None)
@@ -635,6 +622,7 @@ def analyze_apk_surface(
             "text_files_scanned": code_scanned,
             "text_bytes_scanned": scanned_text_bytes,
             "extension_counts": dict(sorted(extensions.items())),
+            "classification": tree.summary(),
             "smali_file_count": len(smali_files),
             "resource_and_asset_file_count": len(resource_files),
             "resource_and_asset_paths": [path.relative_to(root).as_posix() for path in resource_files],
@@ -908,6 +896,19 @@ def run_static_surface_analysis(
                 result["status"] = "partial"
                 result.setdefault("diagnostics", []).extend(dex_result.get("diagnostics", []))
                 result.setdefault("limitations", []).extend(dex_result.get("limitations", []))
+            # Original-APK zip inventory (Appendix C): every archive member
+            # is mapped regardless of decode success; nested containers are
+            # named. Never silently skipped: failures are recorded.
+            try:
+                result["apk_inventory"] = inventory_apk_zip(source_apk)
+                result["coverage"]["apk_zip_inventory"] = "success"
+            except (OSError, zipfile.BadZipFile) as exc:
+                result["coverage"]["apk_zip_inventory"] = "failed"
+                result.setdefault("diagnostics", []).append({
+                    "code": "apk_inventory_failed",
+                    "message": f"{type(exc).__name__}: {exc}",
+                })
+                result["status"] = "partial"
             result["artifact"] = {
                 "package_id": package_id, "version_code": version_code,
                 "sha256": digest, "source_apk": str(source_apk),

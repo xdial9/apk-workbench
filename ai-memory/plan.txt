@@ -80,6 +80,15 @@ dedupe; outcome: same findings superset, faster wall-clock, identical CLI flow.
   analyzer deductions cite file:line evidence; corpus links only on exact
   fingerprint matches (similarity = labeled hint, never a link).
 - No maximums, no timeouts: if it works, it runs to completion.
+- PERFORMANCE LAW (user directive 2026-11-14): actively look for ways to
+  speed this tool up, but NEVER at the expense of accuracy or reliability.
+  Practical form: every phase ships at least one considered speed review
+  (recorded in the decisions log; adopt only when correctness-neutral:
+  single-pass IO, compiled regexes, dict/set lookups, streaming reads,
+  batching IO, avoiding whole-file copies). The 2s heartbeat and progress
+  layer are measured cost-free (monotonic checks + throttled writes) and
+  are NOT a place to trade against accuracy. Speed wins that would skip
+  verification, skip files, cap findings, or hide findings are FORBIDDEN.
 - Findings must NEVER be redacted/hidden/unsearched; classify all knowledge by
   confidence (verified / deduced / hint).
 - Tools point at the ORIGINAL .apk; derived artifacts only when a tool cannot

@@ -75,11 +75,13 @@ surface.txt/plan.txt checkboxes if applicable.
   F2 RESOLVED: one-time mid-download delivery refresh with frozen-plan
   digest guard (divergent delivery aborts with re-run guidance); prompts 0/2 + README updated; ai-memory/acquisition-review.md audit trail (F1..F7;
   F2 closed; F6/F7 documented; P2-2 pacing deferred to plan item A).
-  Tests 156 passing. Remaining acquisition polish: minor; next major step
-  is surface S1 unless user directs otherwise.
-  Implementation NOT started; next item S1 (progress + checkpoint scaffold)
-  per surface-plan-v2.md §4. Phase S must add the WORKBOOK section
-  (§7A) to serialization scope so the handoff is complete from the start.
+  Tests 156 passing. Remaining acquisition polish: minor.
+- SURFACE OVERHAUL (plan v2): 9898217 (S1 scaffolding DONE, pushed):
+  analysis/surface/{progress,checkpoint}.py + facade; apk_surface.py
+  heartbeat 2s + hash-loop beats + per-artifact marker refresh; tests 163.
+  Next: S2 (classify.py single-walk + original-APK zip inventory + nested
+  archive detection), then S3 manifest v2. S6 must include the WORKBOOK
+  section (§7A) in serialization scope so the handoff is complete.
 - Environment: repo /home/user/APK-Workbench; venv .venv/bin/python; pytest
   all-green baseline 152; apktool 3.0.3; trufflehog 3.99.8; androguard 4.1.4
   pinned; live fixture workspace /tmp/opencode/ws (VERIFY exists before use).
@@ -96,4 +98,7 @@ surface.txt/plan.txt checkboxes if applicable.
 - Schema breakage -> appdev.txt §15 consumers contract before edits.
 - Drift/scope creep -> plan.txt phase ladder + notes in INDEX STATE.
 - Non-determinism habits -> appdev.txt §16 tripwires.
+- Speed-vs-accuracy tension -> PERFORMANCE LAW (plan.txt doctrine):
+  actively seek speedups, accuracy/reliability always win; considered
+  speed review recorded per phase in decisions log.
 - Token inefficiency for AI consumer -> design laws in plan.txt §8B.

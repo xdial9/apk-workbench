@@ -24,7 +24,16 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
     database = WorkspaceDatabase(workspace)
     database.ensure()
 
-    apk_bytes = b"synthetic verified APK fixture for integration testing"
+    # A real (minimal) APK zip: the pipeline now inventories the archive
+    # members of every artifact, so the fixture is a genuine zip file.
+    import io
+    import zipfile as _zipfile
+
+    apk_stream = io.BytesIO()
+    with _zipfile.ZipFile(apk_stream, "w") as archive:
+        archive.writestr("AndroidManifest.xml", "<manifest/>")
+        archive.writestr("classes.dex", b"dex\n000037\x00synthetic")
+    apk_bytes = apk_stream.getvalue()
     digest = hashlib.sha256(apk_bytes).hexdigest()
     apk_path = (
         workspace / "downloads/org.example.integration/1" / digest / "app.apk"
