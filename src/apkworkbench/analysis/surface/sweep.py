@@ -163,6 +163,59 @@ class SweepState:
         self.decoded_strings: list[dict] = []
         self.decoded_seen: set[str] = set()
         self.findings: list[dict] = []
+        # Prepared once per artifact, reused for every file (PERFORMANCE LAW:
+        # no per-line marker lowercasing / regex lookup churn).
+        self._dependency_matchers: tuple[
+            tuple[str, tuple[str, ...], re.Pattern[str]], ...
+        ] | None = None
+        self._client_matchers: tuple[
+            tuple[str, tuple[re.Pattern[str], ...]], ...
+        ] | None = None
+        self._client_gate: re.Pattern[str] | None = None
+        self._code_rules: tuple[tuple[tuple, re.Pattern[str]], ...] | None = None
+        self._code_rule_gate: re.Pattern[str] | None = None
+
+    def _prepare_matchers(
+        self,
+        code_rules,
+        api_client_markers: dict[str, tuple[str, ...]],
+        dependency_markers: dict[str, tuple[str, ...]],
+    ) -> None:
+        if self._dependency_matchers is not None:
+            return
+        # Dependency evidence is file-level (deduped downstream). Literal
+        # lowercase substrings are enough; the compiled gate is the fallback
+        # for very large files where a whole-file lowercase copy is avoided.
+        self._dependency_matchers = tuple(
+            (
+                name,
+                tuple(marker.lower() for marker in markers),
+                re.compile(
+                    "|".join(re.escape(marker) for marker in markers),
+                    re.IGNORECASE,
+                ),
+            )
+            for name, markers in dependency_markers.items()
+        )
+        self._client_matchers = tuple(
+            (name, tuple(re.compile(p, re.IGNORECASE) for p in patterns))
+            for name, patterns in api_client_markers.items()
+        )
+        self._client_gate = re.compile(
+            "|".join(
+                f"(?:{pattern.pattern})"
+                for _name, patterns in self._client_matchers
+                for pattern in patterns
+            ),
+            re.IGNORECASE,
+        )
+        self._code_rules = tuple(code_rules)
+        self._code_rule_gate = re.compile(
+            "|".join(
+                f"(?:{compiled.pattern})" for _rule, compiled in self._code_rules
+            ),
+            re.IGNORECASE,
+        )
 
     # -- record helpers ---------------------------------------------------------
     def record_endpoint(self, value: str, kind: str, parsed=None, *,
@@ -228,17 +281,33 @@ class SweepState:
         emit: Callable[[str], None],
     ) -> None:
         """Sweep one text file into the accumulators (single pass, per-line)."""
+        self._prepare_matchers(code_rules, api_client_markers, dependency_markers)
+        assert self._dependency_matchers is not None
+        assert self._client_matchers is not None
+        assert self._client_gate is not None
+        assert self._code_rules is not None
+        assert self._code_rule_gate is not None
+        # File-level dependency presence: the old loop appended the path once
+        # per matching LINE then deduped; one match per file is the same fact.
+        # Small files use one transient lowercase copy (cheap C scan); huge
+        # files fall back to the compiled case-insensitive gate to avoid the
+        # memory copy the drift tripwires warn about.
+        lowered_text = text.lower() if len(text) <= 8_000_000 else None
+        for dependency, markers, gate in self._dependency_matchers:
+            if lowered_text is not None:
+                matched = any(marker in lowered_text for marker in markers)
+            else:
+                matched = gate.search(text) is not None
+            if matched:
+                self.dependency_evidence[dependency].append(relative)
         lines = text.splitlines()
-        file_class = "code" if path.suffix.lower() in CODE_SUFFIXES else "doc_or_other"
+        file_suffix = path.suffix.lower()
+        file_class = "code" if file_suffix in CODE_SUFFIXES else "doc_or_other"
+        is_smali = file_suffix == ".smali"
         annotation_method: str | None = None
         annotation_line: int | None = None
         for line_number, line in enumerate(lines, start=1):
-            lowered_line = line.lower()
-            for dependency, markers in dependency_markers.items():
-                if any(marker.lower() in lowered_line for marker in markers):
-                    self.dependency_evidence[dependency].append(relative)
-
-            if RETROFIT_ANNOTATION_RE.search(line):
+            if "Lretrofit2/http/" in line and RETROFIT_ANNOTATION_RE.search(line):
                 annotation_method = RETROFIT_ANNOTATION_RE.search(line).group(1).upper()
                 annotation_line = line_number
             if annotation_method is not None and line_number - (annotation_line or 0) <= RETROFIT_WINDOW_LINES:
@@ -260,97 +329,107 @@ class SweepState:
             ):
                 annotation_method = None
 
-            for match in GENERIC_URL_RE.finditer(line):
-                value = match.group(0).rstrip(".,);]}:")
-                if not value:
-                    continue
-                try:
-                    parsed = urlsplit(value)
-                except ValueError:
-                    parsed = None
-                if parsed is not None and parsed.hostname:
-                    if parsed.hostname.lower().rstrip(".") in TOOLING_URL_HOSTS:
+            # Cheap C-level character gates: each family below needs the
+            # character tested, so most code lines skip all of its regexes.
+            if "://" in line:
+                for match in GENERIC_URL_RE.finditer(line):
+                    value = match.group(0).rstrip(".,);]}:")
+                    if not value:
+                        continue
+                    try:
+                        parsed = urlsplit(value)
+                    except ValueError:
+                        parsed = None
+                    if parsed is not None and parsed.hostname:
+                        if parsed.hostname.lower().rstrip(".") in TOOLING_URL_HOSTS:
+                            continue
+                        self.record_endpoint(
+                            value, "url", parsed=parsed,
+                            evidence={"path": relative, "line": line_number},
+                        )
+            if ":" in line:
+                for match in URI_SPECIAL_RE.finditer(line):
+                    self.record_endpoint(
+                        match.group(0).rstrip(".,);]}:"), "uri_special",
+                        scheme=match.group(1).lower(),
+                        evidence={"path": relative, "line": line_number},
+                    )
+                for match in IPV6_RE.finditer(line):
+                    self.record_endpoint(
+                        match.group(1), "ipv6_candidate", host=match.group(1),
+                        evidence={"path": relative, "line": line_number},
+                    )
+                for match in HOST_PORT_RE.finditer(line):
+                    host, port_text = match.group(1), match.group(2)
+                    port = int(port_text)
+                    if not (0 < port <= 65535):
                         continue
                     self.record_endpoint(
-                        value, "url", parsed=parsed,
+                        f"{host}:{port_text}", "host_port", host=host, port=port,
                         evidence={"path": relative, "line": line_number},
                     )
-            for match in URI_SPECIAL_RE.finditer(line):
-                self.record_endpoint(
-                    match.group(0).rstrip(".,);]}:"), "uri_special",
-                    scheme=match.group(1).lower(),
-                    evidence={"path": relative, "line": line_number},
-                )
-            for match in IPV6_RE.finditer(line):
-                self.record_endpoint(
-                    match.group(1), "ipv6_candidate", host=match.group(1),
-                    evidence={"path": relative, "line": line_number},
-                )
-            for match in BRACKET_IPV6_RE.finditer(line):
-                self.record_endpoint(
-                    match.group(1), "ipv6_candidate", host=match.group(1),
-                    evidence={"path": relative, "line": line_number},
-                )
-            for match in HOST_PORT_RE.finditer(line):
-                host, port_text = match.group(1), match.group(2)
-                port = int(port_text)
-                if not (0 < port <= 65535):
-                    continue
-                self.record_endpoint(
-                    f"{host}:{port_text}", "host_port", host=host, port=port,
-                    evidence={"path": relative, "line": line_number},
-                )
-            for match in HTTP_METHOD_RE.finditer(line):
-                method, route = match.group(1).upper(), match.group(2)
-                record = self.api_routes.setdefault(route, {
-                    "path": route, "http_method": method, "evidence": [], "occurrences": 0,
-                })
-                record["occurrences"] += 1
-                record["evidence"].append({"path": relative, "line": line_number})
-            for match in ROUTE_RE.finditer(line):
-                route = match.group(1)
-                record = self.api_routes.setdefault(route, {
-                    "path": route, "http_method": None, "evidence": [], "occurrences": 0,
-                })
-                record["occurrences"] += 1
-                record["evidence"].append({"path": relative, "line": line_number})
-            for match in DOMAIN_RE.finditer(line):
-                value = match.group(0).lower().rstrip(".")
-                if (
-                    value
-                    and value not in TOOLING_URL_HOSTS
-                    and not value.endswith((".xml", ".json", ".png", ".jpg", ".smali"))
-                    and value not in self.endpoint_hosts
-                ):
+            # BRACKET_IPV6_RE's alphabet permits colon-free bracket shapes
+            # (e.g. [deadbeef]); gate on the bracket, not the colon.
+            if "[" in line:
+                for match in BRACKET_IPV6_RE.finditer(line):
                     self.record_endpoint(
-                        value, "domain_candidate",
+                        match.group(1), "ipv6_candidate", host=match.group(1),
                         evidence={"path": relative, "line": line_number},
                     )
-            for match in IPV4_RE.finditer(line):
-                self.record_endpoint(
-                    match.group(0), "ip_candidate", host=match.group(0),
-                    evidence={"path": relative, "line": line_number},
-                )
-            for raw, decoded in iter_decoded_b64_candidates(line):
-                if raw in self.decoded_seen:
-                    continue
-                self.decoded_seen.add(raw)
-                hits = list(GENERIC_URL_RE.finditer(decoded)) + list(DOMAIN_RE.finditer(decoded))
-                if not hits:
-                    continue
-                self.decoded_strings.append({
-                    "encoded": raw,
-                    "decoded": decoded,
-                    "reveals": [hit.group(0).rstrip(".,);]}:") for hit in hits],
-                    "path": relative, "line": line_number,
-                })
-                self.findings.append(build_finding(
-                    "encoded_string_decoded", "secrets_hint", "info",
-                    "Base64-encoded string decodes to a network indicator",
-                    f"Encoded literal decoded; reveals: {', '.join(h.group(0) for h in hits[:3])}",
-                    relative, line_number, raw, 0.7,
-                ))
-            if path.suffix.lower() == ".smali":
+            if "." in line:
+                for match in DOMAIN_RE.finditer(line):
+                    value = match.group(0).lower().rstrip(".")
+                    if (
+                        value
+                        and value not in TOOLING_URL_HOSTS
+                        and not value.endswith((".xml", ".json", ".png", ".jpg", ".smali"))
+                        and value not in self.endpoint_hosts
+                    ):
+                        self.record_endpoint(
+                            value, "domain_candidate",
+                            evidence={"path": relative, "line": line_number},
+                        )
+                for match in IPV4_RE.finditer(line):
+                    self.record_endpoint(
+                        match.group(0), "ip_candidate", host=match.group(0),
+                        evidence={"path": relative, "line": line_number},
+                    )
+            if '"' in line or "'" in line:
+                for match in HTTP_METHOD_RE.finditer(line):
+                    method, route = match.group(1).upper(), match.group(2)
+                    record = self.api_routes.setdefault(route, {
+                        "path": route, "http_method": method, "evidence": [], "occurrences": 0,
+                    })
+                    record["occurrences"] += 1
+                    record["evidence"].append({"path": relative, "line": line_number})
+                for match in ROUTE_RE.finditer(line):
+                    route = match.group(1)
+                    record = self.api_routes.setdefault(route, {
+                        "path": route, "http_method": None, "evidence": [], "occurrences": 0,
+                    })
+                    record["occurrences"] += 1
+                    record["evidence"].append({"path": relative, "line": line_number})
+            if len(line) >= 24:
+                for raw, decoded in iter_decoded_b64_candidates(line):
+                    if raw in self.decoded_seen:
+                        continue
+                    self.decoded_seen.add(raw)
+                    hits = list(GENERIC_URL_RE.finditer(decoded)) + list(DOMAIN_RE.finditer(decoded))
+                    if not hits:
+                        continue
+                    self.decoded_strings.append({
+                        "encoded": raw,
+                        "decoded": decoded,
+                        "reveals": [hit.group(0).rstrip(".,);]}:") for hit in hits],
+                        "path": relative, "line": line_number,
+                    })
+                    self.findings.append(build_finding(
+                        "encoded_string_decoded", "secrets_hint", "info",
+                        "Base64-encoded string decodes to a network indicator",
+                        f"Encoded literal decoded; reveals: {', '.join(h.group(0) for h in hits[:3])}",
+                        relative, line_number, raw, 0.7,
+                    ))
+            if is_smali and "invoke-" in line:
                 invoke = smali_invoke_re.search(line)
                 if invoke and api_invoke_owner_re.match(invoke.group(1)):
                     self.api_call_sites.append({
@@ -362,11 +441,12 @@ class SweepState:
                         "line": line_number,
                         "snippet": line.strip(),
                     })
-            for client, patterns in api_client_markers.items():
-                if any(re.search(pattern, line, re.IGNORECASE) for pattern in patterns):
-                    self.api_clients[client].append({
-                        "path": relative, "line": line_number, "snippet": line.strip(),
-                    })
+            if self._client_gate.search(line):
+                for client, patterns in self._client_matchers:
+                    if any(pattern.search(line) for pattern in patterns):
+                        self.api_clients[client].append({
+                            "path": relative, "line": line_number, "snippet": line.strip(),
+                        })
             for header_match in header_re.finditer(line):
                 header = header_match.group(1)
                 self.api_headers.setdefault(header.lower(), []).append({
@@ -377,11 +457,10 @@ class SweepState:
                     "path": relative, "line": line_number, "snippet": line.strip(),
                 })
 
-            suffix = path.suffix.lower()
-            if suffix in {".smali", ".xml", ".js", ".java", ".kt", ".json",
-                          ".properties", ".html", ".htm"}:
+            if file_suffix in {".smali", ".xml", ".js", ".java", ".kt", ".json",
+                               ".properties", ".html", ".htm"} and self._code_rule_gate.search(line):
                 for (rule_id, category, severity, title, _pattern,
-                     confidence, rationale), compiled in code_rules:
+                     confidence, rationale), compiled in self._code_rules:
                     if compiled.search(line):
                         context_start = max(0, line_number - 3)
                         context = "\n".join(lines[context_start:line_number + 2])

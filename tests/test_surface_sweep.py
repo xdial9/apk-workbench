@@ -148,6 +148,28 @@ def test_rule_findings_carry_capped_context(tmp_path):
     assert len(hit["evidence"]["context"]) <= sweep.SNIPPET_CONTEXT_CHARS
 
 
+def test_ipv6_bracket_shape_without_colon_preserved(tmp_path):
+    # BRACKET_IPV6_RE's alphabet allows colon-free bracket shapes; the
+    # character gate must not silently drop them (behavior parity).
+    state = _sweep(tmp_path, 'const-string v0, "[deadbeef]"\n')
+    assert any(
+        e["kind"] == "ipv6_candidate" and e["value"] == "deadbeef"
+        for e in state.api_endpoints.values()
+    )
+
+
+def test_dependency_evidence_is_file_level_not_per_line(tmp_path):
+    text = (
+        "Lokhttp3/OkHttpClient;\n"
+        "Lokhttp3/OkHttpClient;\n"
+        "Lretrofit2/Retrofit;\n"
+    )
+    state = _sweep(tmp_path, text)
+    # same fact the old per-line appends were deduped into: one path per file
+    assert state.dependency_evidence["OkHttp"] == ["smali/com/x/A.smali"]
+    assert state.dependency_evidence["Retrofit"] == ["smali/com/x/A.smali"]
+
+
 def test_rate_limit_proximity_uses_all_evidence(tmp_path):
     text = (
         '"https://api.example.com/one"\n'
