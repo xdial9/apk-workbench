@@ -404,6 +404,12 @@ Deduction templates (each holds when ALL required facts exist):
 2026-11-14 S3 landed (manifest v2): all surface.txt 1A holes closed; compat
   keys preserved (appdev §15 verified via test); NSC + backup-rules parsing
   moved to surface/manifest_v2.py; findings additive only.
+2026-11-14 S4 landed (sweep v2): budgets/caps removed for the sweep module
+  (Phase A apk_surface item done early — nothing skipped, no finding cap);
+  speed review: per-line lower (no whole-file copy), precompiled rules,
+  one stat() per file for byte accounting; canonical endpoint grouping is
+  O(1) dict — no quadratic containment. Sweep engine lives in
+  surface/sweep.py; apk_surface orchestrates.
 
 ================================================================================
 15. CONSUMERS CONTRACT (breakage map for apk_surface output — VERIFY markers)

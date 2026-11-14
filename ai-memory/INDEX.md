@@ -76,13 +76,15 @@ surface.txt/plan.txt checkboxes if applicable.
   digest guard (divergent delivery aborts with re-run guidance); prompts 0/2 + README updated; ai-memory/acquisition-review.md audit trail (F1..F7;
   F2 closed; F6/F7 documented; P2-2 pacing deferred to plan item A).
   Tests 156 passing. Remaining acquisition polish: minor.
-- SURFACE OVERHAUL (plan v2): S1 done (9898217); S2 done (652a088); S3 done
-  (7d1cb43, pushed): manifest v2 full fact map + derived findings (deep
-  links, meta-data keys, providers, queries, backup rules resolution +
-  default-true deduction, NSC domain-config/user-anchors/pins, anomalies);
-  compat keys preserved; tests 173. Next: S4 sweep v2 (schemes, canonical
-  URL dedup, private/IDN tags, base64 decode, context snippets, per-suffix
-  structured passes). S6 must include the WORKBOOK section (§7A).
+- SURFACE OVERHAUL (plan v2): S1 9898217, S2 652a088, S3 7d1cb43, S4 9a55e64
+  (all pushed; tests 184): sweep v2 in surface/sweep.py (schemes, canonical
+  dedup, userinfo, IPv6/host:port, host classes, base64 decoding, windowed
+  retrofit, precompiled rules, context snippets, header context class,
+  proximity over all evidence); sweep budgets/caps REMOVED (Phase A item
+  done for this module). Next: S5 facts store + first deduction templates
+  (SDK histogram, packed downgrade, permission-mismatch, API reconstruction;
+  deductions carry next-step suggestions for the AI handoff). S6 serializer
+  must include the WORKBOOK (§7A).
 - Environment: repo /home/user/APK-Workbench; venv .venv/bin/python; pytest
   all-green baseline 152; apktool 3.0.3; trufflehog 3.99.8; androguard 4.1.4
   pinned; live fixture workspace /tmp/opencode/ws (VERIFY exists before use).

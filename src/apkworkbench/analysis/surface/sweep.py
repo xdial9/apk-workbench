@@ -80,6 +80,11 @@ CODE_SUFFIXES = frozenset({
 
 SNIPPET_CONTEXT_CHARS = 500
 
+# Tooling namespace hosts are build-tool artifacts, not app endpoints
+# (evidence: the xmlns declaration they appear in). Skipped at the URL
+# recorder level so the endpoint inventory stays app-focused.
+TOOLING_URL_HOSTS = frozenset({"schemas.android.com", "www.w3.org"})
+
 
 def classify_host(host: str | None) -> str | None:
     """Data-driven host class; None means public/undetermined (not hidden)."""
@@ -257,6 +262,8 @@ class SweepState:
                 except ValueError:
                     parsed = None
                 if parsed is not None and parsed.hostname:
+                    if parsed.hostname.lower().rstrip(".") in TOOLING_URL_HOSTS:
+                        continue
                     self.record_endpoint(
                         value, "url", parsed=parsed,
                         evidence={"path": relative, "line": line_number},

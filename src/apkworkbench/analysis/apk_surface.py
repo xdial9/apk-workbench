@@ -24,7 +24,15 @@ from apkworkbench.analysis.surface.classify import (
     inventory_apk_zip,
 )
 from apkworkbench.analysis.surface.sweep import SweepState
+from apkworkbench.analysis.surface.deductions import (
+    api_surface,
+    packed_or_obfuscated,
+    permission_mismatch,
+    sdk_stack,
+)
+from apkworkbench.analysis.surface.facts import FactStore, package_root_histogram
 from apkworkbench.analysis.surface.manifest_v2 import (
+    looks_like_key,
     parse_backup_rules,
     parse_manifest_v2,
     parse_network_security_config,
@@ -441,6 +449,70 @@ def analyze_apk_surface(
         {"name": name, "evidence_paths": sorted(set(paths))}
         for name, paths in sorted(dependency_evidence.items()) if paths
     ]
+
+    # ---- S5: fingerprint fact store + deduction templates -----------------
+    fact_store = FactStore()
+    for record in api_endpoints.values():
+        fact_store.add("endpoint", record.get("canonical") or record["value"], extra={
+            "kind": record["kind"], "host": record.get("host"),
+            "host_class": record.get("host_class"), "flags": record.get("flags", []),
+        })
+    for route, route_data in api_routes.items():
+        fact_store.add("api_route", f"{route_data.get('http_method') or '?'} {route}")
+    if isinstance(manifest_facts.get("deep_links"), list):
+        for link in manifest_facts["deep_links"]:
+            fact_store.add("deep_link", f"{link['scheme']}://{link['host']}{link['path']}", extra={
+                "component": link.get("component"),
+            })
+    for permission in manifest_facts.get("permissions", []) or []:
+        fact_store.add("permission_requested", permission)
+    for provider in manifest_facts.get("providers", []) or []:
+        for authority in provider.get("authorities", []):
+            fact_store.add("provider_authority", authority, extra={"component": provider.get("name")})
+    for entry in manifest_facts.get("meta_data", []) or []:
+        if entry.get("value") and looks_like_key(entry["name"], entry["value"]):
+            fact_store.add("meta_data_key", f'{entry["name"]}={entry["value"]}')
+    for item in sweep.decoded_strings:
+        fact_store.add("decoded_string", item["decoded"], extra={
+            "encoded": item["encoded"], "reveals": item["reveals"],
+        })
+    for dependency in dependencies:
+        fact_store.add("dependency_sdk", dependency["name"])
+    for library in native_libraries:
+        fact_store.add("native_library", library)
+
+    histogram = package_root_histogram(tree.entries, manifest_facts.get("package"))
+    smali_entries = [
+        entry for entry in tree.entries if entry.suffix == ".smali"
+    ]
+    if len(smali_entries) >= 20:
+        short_names = sum(
+            1 for entry in smali_entries if len(entry.path.stem) <= 3
+        )
+        short_name_ratio = round(short_names / len(smali_entries), 3)
+    else:
+        short_name_ratio = None
+    large_asset_blobs = sum(
+        1 for entry in tree.entries
+        if entry.relative.startswith("assets/")
+        and entry.size_bytes > 1_000_000
+        and (
+            entry.content_kind in {"zip", "gzip"}
+            or (entry.content_kind is None and entry.suffix not in TEXT_SUFFIXES)
+        )
+    )
+    code_rule_hits = [finding["rule_id"] for finding in findings]
+    deductions: list[dict[str, Any]] = []
+    for deduction in (
+        sdk_stack(fact_store, histogram),
+        api_surface(fact_store, list(api_endpoints.values()), api_routes),
+        *packed_or_obfuscated(
+            fact_store, code_rule_hits, large_asset_blobs, short_name_ratio
+        ),
+    ):
+        if deduction is not None:
+            deductions.append(deduction)
+    deductions.sort(key=lambda item: item["id"])
     return {
         "schema_version": 1,
         "analyzer": {"id": "apk-surface", "version": "0.2.0"},
@@ -452,6 +524,9 @@ def analyze_apk_surface(
         ),
         "coverage": coverage,
         "manifest": manifest_facts,
+        "facts": fact_store.export(),
+        "deductions": deductions,
+        "sdk_histogram": histogram,
         "inventory": {
             "file_count": len(files),
             "text_files_scanned": code_scanned,
@@ -731,6 +806,19 @@ def run_static_surface_analysis(
                 result["status"] = "partial"
                 result.setdefault("diagnostics", []).extend(dex_result.get("diagnostics", []))
                 result.setdefault("limitations", []).extend(dex_result.get("limitations", []))
+            # S5: dex-grounded deduction — requested-but-unused sensitive
+            # permissions (only when the DEX permission mapping succeeded:
+            # no data, no deduction).
+            requested = result.get("manifest", {}).get("permissions", []) or []
+            if dex_result.get("permission_api_usage"):
+                used = {
+                    permission
+                    for entry in dex_result["permission_api_usage"]
+                    for permission in entry.get("permissions", [])
+                }
+                mismatch = permission_mismatch(requested, used)
+                if mismatch is not None:
+                    result.setdefault("deductions", []).append(mismatch)
             # Original-APK zip inventory (Appendix C): every archive member
             # is mapped regardless of decode success; nested containers are
             # named. Never silently skipped: failures are recorded.

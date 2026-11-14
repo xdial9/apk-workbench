@@ -65,6 +65,7 @@ class ClassifiedFile:
     path: Path
     relative: str
     suffix: str
+    size_bytes: int
     content_kind: str | None   # sniff result: zip/dex/elf/... or None for text
     is_text_candidate: bool
 
@@ -116,6 +117,10 @@ def classify_decoded_tree(root: Path) -> DecodedTree:
             kind = sniff_file_magic(candidate)
             if kind == "unreadable":
                 tree.unreadable_count += 1
+            try:
+                size_bytes = candidate.stat().st_size
+            except OSError:
+                size_bytes = 0
             is_text = kind in (None, "empty") and (
                 suffix in TEXT_SUFFIXES or kind == "empty"
             )
@@ -123,6 +128,7 @@ def classify_decoded_tree(root: Path) -> DecodedTree:
                 path=candidate,
                 relative=candidate.relative_to(root).as_posix(),
                 suffix=suffix,
+                size_bytes=size_bytes,
                 content_kind=kind,
                 is_text_candidate=is_text,
             )
