@@ -401,6 +401,9 @@ Deduction templates (each holds when ALL required facts exist):
   streaming pass over the original APK (required by Appendix C; comparable
   to the existing mandatory hash pass). Adopted: correctness-neutral;
   no skipped files, no caps. S2 landed commit after S1 (9898217).
+2026-11-14 S3 landed (manifest v2): all surface.txt 1A holes closed; compat
+  keys preserved (appdev §15 verified via test); NSC + backup-rules parsing
+  moved to surface/manifest_v2.py; findings additive only.
 
 ================================================================================
 15. CONSUMERS CONTRACT (breakage map for apk_surface output — VERIFY markers)

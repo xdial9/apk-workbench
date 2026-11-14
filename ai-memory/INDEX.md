@@ -76,14 +76,13 @@ surface.txt/plan.txt checkboxes if applicable.
   digest guard (divergent delivery aborts with re-run guidance); prompts 0/2 + README updated; ai-memory/acquisition-review.md audit trail (F1..F7;
   F2 closed; F6/F7 documented; P2-2 pacing deferred to plan item A).
   Tests 156 passing. Remaining acquisition polish: minor.
-- SURFACE OVERHAUL (plan v2): S1 done (9898217); S2 done (652a088, pushed):
-  analysis/surface/classify.py single-walk + magic routing; inventory_apk_zip
-  maps every APK member (Appendix C) + nested containers; classification
-  summary in inventory; integration fixture now a real zip; tests 169.
-  Next: S3 manifest v2 (full element map, deep links, meta-data, providers,
-  queries, backup rules, NSC domain-config/anchors, anomaly deductions).
-  S6 must include the WORKBOOK section (§7A) in serialization scope so the
-  handoff is complete.
+- SURFACE OVERHAUL (plan v2): S1 done (9898217); S2 done (652a088); S3 done
+  (7d1cb43, pushed): manifest v2 full fact map + derived findings (deep
+  links, meta-data keys, providers, queries, backup rules resolution +
+  default-true deduction, NSC domain-config/user-anchors/pins, anomalies);
+  compat keys preserved; tests 173. Next: S4 sweep v2 (schemes, canonical
+  URL dedup, private/IDN tags, base64 decode, context snippets, per-suffix
+  structured passes). S6 must include the WORKBOOK section (§7A).
 - Environment: repo /home/user/APK-Workbench; venv .venv/bin/python; pytest
   all-green baseline 152; apktool 3.0.3; trufflehog 3.99.8; androguard 4.1.4
   pinned; live fixture workspace /tmp/opencode/ws (VERIFY exists before use).

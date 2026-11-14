@@ -15,7 +15,6 @@ import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import urlsplit
 from typing import Any
 
 from apkworkbench.analysis.androguard_dex import analyze_apk_dex
@@ -24,6 +23,7 @@ from apkworkbench.analysis.surface.classify import (
     classify_decoded_tree,
     inventory_apk_zip,
 )
+from apkworkbench.analysis.surface.sweep import SweepState
 from apkworkbench.analysis.surface.manifest_v2 import (
     parse_backup_rules,
     parse_manifest_v2,
@@ -31,9 +31,6 @@ from apkworkbench.analysis.surface.manifest_v2 import (
 )
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
-MAX_TEXT_FILE_BYTES = 8 * 1024 * 1024
-MAX_TOTAL_TEXT_BYTES = 512 * 1024 * 1024
-MAX_FINDINGS = 100_000
 
 SENSITIVE_PERMISSIONS = {
     "android.permission.READ_SMS", "android.permission.RECEIVE_SMS",
@@ -138,7 +135,9 @@ CODE_RULES = (
      "Review whether JavaScript is enabled for untrusted or remote content."),
 )
 
-URL_RE = re.compile(r"""(?:https?|wss?|ftp|grpc)://[^\s"'<>\\]+""", re.IGNORECASE)
+COMPILED_CODE_RULES = [
+    (rule, re.compile(rule[4], re.IGNORECASE)) for rule in CODE_RULES
+]
 DOMAIN_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
     r"[A-Za-z]{2,63}(?![A-Za-z0-9_])"
@@ -146,14 +145,6 @@ DOMAIN_RE = re.compile(
 IPV4_RE = re.compile(
     r"(?<![0-9.])(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})"
     r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})){3}(?![0-9.])"
-)
-HTTP_METHOD_RE = re.compile(
-    r"""(?:@|->)?(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\(?\s*["']([^"']+)["']""",
-    re.IGNORECASE,
-)
-ROUTE_RE = re.compile(
-    r"""["']((?:/)(?:api(?:/|$)|v[0-9]+(?:/|$)|graphql(?:/|$)|oauth(?:/|$)|auth(?:/|$)|users?(?:/|$)|accounts?(?:/|$)|tokens?(?:/|$)|payments?(?:/|$)|(?:health|status|login|register)(?:/|$))[^"']*)["']""",
-    re.IGNORECASE,
 )
 RATE_LIMIT_RE = re.compile(
     r"rate.?limit|retry-after|x-ratelimit|ratelimit-|backoff|exponential.?backoff|too many requests|http.?429|token.?bucket|quota.?exceeded",
@@ -189,7 +180,6 @@ API_INVOKE_OWNER_RE = re.compile(
 RETROFIT_ANNOTATION_RE = re.compile(
     r"\.annotation\s+\S+\s+Lretrofit2/http/(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS);"
 )
-ANNOTATION_VALUE_RE = re.compile(r"""\bvalue\s*=\s*["']([^"']+)["']""")
 
 
 def _local_name(tag: str) -> str:
@@ -356,6 +346,8 @@ def analyze_apk_surface(
         progress,
         f"[Surface] Scanning {scannable_total:,} text files ({len(smali_files):,} smali) for endpoints, routes and indicators",
     )
+    sweep = SweepState(DEPENDENCY_MARKERS)
+    sweep.api_clients = {name: [] for name in API_CLIENT_MARKERS}
     for path in files:
         relative = path.relative_to(root).as_posix()
         if path.suffix.lower() not in TEXT_SUFFIXES:
@@ -367,142 +359,39 @@ def analyze_apk_surface(
                 progress,
                 f"[Surface] scanning - {files_seen:,}/{scannable_total:,} files, "
                 f"{int(last_heartbeat - scan_started)}s elapsed, "
-                f"{len(api_endpoints):,} endpoints, {len(findings):,} findings",
+                f"{len(sweep.api_endpoints):,} endpoints, {len(sweep.findings):,} findings",
             )
         try:
-            size = path.stat().st_size
-            if size > MAX_TEXT_FILE_BYTES or scanned_text_bytes + size > MAX_TOTAL_TEXT_BYTES:
-                diagnostics.append({"code": "text_file_limit", "message": f"Skipped text scan due to size budget: {relative} ({size} bytes)."})
-                continue
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             diagnostics.append({"code": "text_read_failed", "message": f"{relative}: {exc}"})
             continue
-        scanned_text_bytes += size
+        scanned_text_bytes += path.stat().st_size
         code_scanned += 1
         coverage["endpoints_and_domains"] = "success"
         if path.suffix.lower() == ".smali":
             coverage["smali_security_indicators"] = "success"
-        lowered_path = relative.lower()
-        lowered_text = text.lower()
-        for dependency, markers in DEPENDENCY_MARKERS.items():
-            if any(marker.lower() in lowered_path or marker.lower() in lowered_text for marker in markers):
-                dependency_evidence[dependency].append(relative)
-
-        retrofit_annotation_method: str | None = None
-        for line_number, line in enumerate(text.splitlines(), start=1):
-            retrofit_annotation = RETROFIT_ANNOTATION_RE.search(line)
-            if retrofit_annotation:
-                retrofit_annotation_method = retrofit_annotation.group(1).upper()
-            if retrofit_annotation_method:
-                annotation_value = ANNOTATION_VALUE_RE.search(line)
-                if annotation_value:
-                    route = annotation_value.group(1)
-                    record = api_routes.setdefault(route, {
-                        "path": route, "http_method": retrofit_annotation_method,
-                        "evidence": [], "occurrences": 0,
-                    })
-                    record["occurrences"] += 1
-                    record["evidence"].append({
-                        "path": relative, "line": line_number,
-                        "source": "retrofit_annotation",
-                    })
-                if ".end annotation" in line:
-                    retrofit_annotation_method = None
-            for match in URL_RE.finditer(line):
-                value = match.group(0).rstrip(".,);]}:")
-                if value:
-                    try:
-                        parsed = urlsplit(value)
-                        parsed_host = parsed.hostname
-                        parsed_port = parsed.port
-                        parsed_path = parsed.path
-                        parsed_query = bool(parsed.query)
-                    except ValueError:
-                        parsed_host = parsed_port = parsed_path = None
-                        parsed_query = None
-                    record = api_endpoints.setdefault(value, {
-                        "value": value, "kind": "url", "scheme": value.split(":", 1)[0].lower(),
-                        "host": parsed_host, "port": parsed_port, "path": parsed_path,
-                        "query_present": parsed_query, "evidence": [], "occurrences": 0,
-                    })
-                    record["occurrences"] += 1
-                    record["evidence"].append({"path": relative, "line": line_number})
-            for match in HTTP_METHOD_RE.finditer(line):
-                method, route = match.group(1).upper(), match.group(2)
-                record = api_routes.setdefault(route, {
-                    "path": route, "http_method": method, "evidence": [], "occurrences": 0,
-                })
-                record["occurrences"] += 1
-                record["evidence"].append({"path": relative, "line": line_number})
-            for match in ROUTE_RE.finditer(line):
-                route = match.group(1)
-                record = api_routes.setdefault(route, {
-                    "path": route, "http_method": None, "evidence": [], "occurrences": 0,
-                })
-                record["occurrences"] += 1
-                record["evidence"].append({"path": relative, "line": line_number})
-            for match in DOMAIN_RE.finditer(line):
-                value = match.group(0).lower().rstrip(".")
-                if (
-                    value
-                    and not value.endswith((".xml", ".json", ".png", ".jpg", ".smali"))
-                    and not any(value in endpoint for endpoint in api_endpoints)
-                ):
-                    record = api_endpoints.setdefault(value, {
-                        "value": value, "kind": "domain_candidate", "evidence": [], "occurrences": 0,
-                    })
-                    record["occurrences"] += 1
-                    record["evidence"].append({"path": relative, "line": line_number})
-            for match in IPV4_RE.finditer(line):
-                value = match.group(0)
-                record = api_endpoints.setdefault(value, {
-                    "value": value, "kind": "ip_candidate", "scheme": None,
-                    "host": value, "port": None, "path": None, "evidence": [], "occurrences": 0,
-                })
-                record["occurrences"] += 1
-                record["evidence"].append({"path": relative, "line": line_number})
-            if path.suffix.lower() == ".smali":
-                invoke = SMALI_INVOKE_RE.search(line)
-                if invoke and API_INVOKE_OWNER_RE.match(invoke.group(1)):
-                    api_call_sites.append({
-                        "owner": invoke.group(1),
-                        "method": invoke.group(2),
-                        "arguments": invoke.group(3),
-                        "return_type": invoke.group(4),
-                        "path": relative,
-                        "line": line_number,
-                        "snippet": line.strip(),
-                    })
-            for client, patterns in API_CLIENT_MARKERS.items():
-                if any(re.search(pattern, line, re.IGNORECASE) for pattern in patterns):
-                    api_clients[client].append({
-                        "path": relative, "line": line_number, "snippet": line.strip(),
-                    })
-            for header_match in API_HEADER_RE.finditer(line):
-                header = header_match.group(1)
-                api_headers.setdefault(header.lower(), []).append({
-                    "path": relative, "line": line_number,
-                })
-            if RATE_LIMIT_RE.search(line):
-                rate_limit_indicators.append({
-                    "path": relative, "line": line_number, "snippet": line.strip(),
-                })
-
-            if path.suffix.lower() in {".smali", ".xml", ".js", ".java", ".kt", ".json", ".properties", ".html", ".htm"}:
-                for rule_id, category, severity, title, pattern, confidence, rationale in CODE_RULES:
-                    if re.search(pattern, line, flags=re.IGNORECASE):
-                        findings.append(_finding(
-                            rule_id, category, severity, title, rationale,
-                            relative, line_number, line, confidence,
-                        ))
-                        if len(findings) >= MAX_FINDINGS:
-                            diagnostics.append({"code": "finding_limit", "message": f"Finding cap reached at {MAX_FINDINGS}."})
-                            break
-                if len(findings) >= MAX_FINDINGS:
-                    break
-        if len(findings) >= MAX_FINDINGS:
-            break
+        sweep.sweep_text(
+            relative=relative,
+            path=path,
+            text=text,
+            code_rules=COMPILED_CODE_RULES,
+            api_client_markers=API_CLIENT_MARKERS,
+            api_invoke_owner_re=API_INVOKE_OWNER_RE,
+            smali_invoke_re=SMALI_INVOKE_RE,
+            header_re=API_HEADER_RE,
+            rate_limit_re=RATE_LIMIT_RE,
+            dependency_markers=DEPENDENCY_MARKERS,
+            emit=lambda message: None,
+        )
+    findings.extend(sweep.findings)
+    dependency_evidence = sweep.dependency_evidence
+    api_endpoints = sweep.api_endpoints
+    api_routes = sweep.api_routes
+    api_call_sites = sweep.api_call_sites
+    api_clients = sweep.api_clients
+    api_headers = sweep.api_headers
+    rate_limit_indicators = sweep.rate_limit_indicators
 
     if smali_files and coverage["smali_security_indicators"] != "success":
         coverage["smali_security_indicators"] = "partial"
