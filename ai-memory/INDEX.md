@@ -39,7 +39,7 @@ END: update STATE (phase item moved? decisions? VERIFYs resolved?) + tick
 surface.txt/plan.txt checkboxes if applicable.
 
 ## STATE (as of 2026-11-14, updated by agent)
-- Branch: feature/goopdl-account-auth (S8 perf commit 964ee09; tests 205
+- Branch: feature/goopdl-account-auth (S8 perf commit 062973b; tests 205
   green; live account-mode validated).
 - Phase: Surface analyzer overhaul planning DONE (ai-memory/surface-plan-v2.md
   is canonical; supersedes surface.txt's S-order and folds in dump/checkpoint
@@ -84,7 +84,7 @@ surface.txt/plan.txt checkboxes if applicable.
   alternative extended (bounded). Consumer contract asserted on every result.
   S8 Antennapod DONE (a9ca7de: 1503s wall, partial due to androguard 64MB cap
   on a NORMAL app — Phase A proof; 4299/4164 findings; fact-evidence ledger
-  bug found+fixed). S8 PERF (964ee09): live profile -> compiled matchers,
+  bug found+fixed). S8 PERF (062973b): live profile -> compiled matchers,
   file-level dependency evidence, required-character gates; 300-file
   microbench 16.73s -> 6.02s (~2.7x); surface-only Antennapod 407s for
   15,290 files; parity verified (findings/inventory/manifest/deductions/
@@ -132,7 +132,7 @@ surface.txt/plan.txt checkboxes if applicable.
 4. Known-good artifacts for replay: Antennapod before/after JSON at
    /tmp/opencode/antennapod-before.json and -after.json; benchmark harness
    /tmp/opencode/bench_sweep.py (300-file parity/speed check).
-5. Current code/test facts: S8 perf 964ee09, tests 205 green, analyzer 0.3.0.
+5. Current code/test facts: S8 perf 062973b, tests 205 green, analyzer 0.3.0.
 
 ## COUNTERMEASURES MAPPED (why this folder reduces my failure modes)
 - Context decay across sessions -> STATE + file map; no memory-only recall.

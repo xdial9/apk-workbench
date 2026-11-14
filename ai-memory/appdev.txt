@@ -29,7 +29,7 @@ OUTPUT HONESTY: every factual claim in group A (factual technical claims
 --------------------------------------------------------------------------------
 1. STATE (keep current — agent, update me)
 --------------------------------------------------------------------------------
-Branch: feature/goopdl-account-auth; tests 205 green (S8 perf commit 964ee09).
+Branch: feature/goopdl-account-auth; tests 205 green (S8 perf commit 062973b).
 Live account-mode validation succeeded earlier: discover, download
 de.danoeh.antennapod, verification pass 1f6f6be4.
 Workspace working files: plan.txt (master), surface.txt (surface verdicts +
@@ -39,7 +39,7 @@ validation is closing. S1 9898217, S2 652a088, S3 7d1cb43, S4 9a55e64,
 S5 3794764, S6 5077a31, S7 e22faaf. S8 Antennapod validation (1503s,
 partial from the 64MB androguard cap) found fact-evidence gaps (fixed
 a9ca7de) and profile-proven per-line sweep cost.
-S8 PERF FIX (2026-11-14, commit 964ee09): compiled client/rule matchers
+S8 PERF FIX (2026-11-14, commit 062973b): compiled client/rule matchers
 once per artifact, file-level dependency evidence (same deduped fact),
 required-character regex gates, per-file suffix. Measured 300 real
 Antennapod smali 16.73s -> 6.02s (~2.7x); full surface-only Antennapod
@@ -62,7 +62,7 @@ PHASE S ITEM STATUS ([x] done, [~] in progress):
       c79180cf-01ab-4b2b-a507-4e238f24c1d1, log
       /tmp/opencode/surface_spotify_optimized.log). Pre-optimization run
       baseline: 25,292/112,254 files in 2,351s (~10.8 files/s; projected
-      ~2.5-3h); aborted deliberately because 964ee09 supersedes it.
+      ~2.5-3h); aborted deliberately because 062973b supersedes it.
 NEXT (resume order; details in INDEX.md "RESUME HERE" + todo.md):
  1. Check the optimized Spotify run log/marker; record wall + summary.
     If it is gone, rerun the documented command in INDEX/todo.
@@ -462,7 +462,7 @@ Deduction templates (each holds when ALL required facts exist):
   unbounded repetition, not the bounded inner ones). IPv6 second alternative
   extended with bounded leading groups. Adversarial fixtures are now a
   permanent regression gate.
-2026-11-14 S8 performance review (PERFORMANCE LAW; commit 964ee09): live
+2026-11-14 S8 performance review (PERFORMANCE LAW; commit 062973b): live
   py-spy profile of the Spotify scan attributed ~43% of CPU to the per-line
   API-client marker loop (11 clients x patterns re.search per line) and the
   dependency-marker lower/any loop; code-rule loop ~7%. Adopted only
@@ -482,7 +482,7 @@ Deduction templates (each holds when ALL required facts exist):
   absent from the direct surface rerun. Tests 205 green.
 2026-11-14 S8 heavy-case baseline + abort: pre-optimization Spotify run
   reached 25,292/112,254 files in 2,351s (~10.8 files/s, projected 2.5-3h).
-  Deliberately aborted because 964ee09 supersedes it; optimized rerun
+  Deliberately aborted because 062973b supersedes it; optimized rerun
   launched with the same run_id (log
   /tmp/opencode/surface_spotify_optimized.log). Never treat the aborted
   run as validation evidence; only its rate baseline is useful.

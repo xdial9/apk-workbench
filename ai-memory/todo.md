@@ -6,7 +6,7 @@ first; this file holds the hands-on details for resuming.
 ## DONE THIS SESSION
 1. Profiled the live Spotify sweep (py-spy): API-client marker loop ~28%,
    dependency-marker lower/any loop ~15%, code-rule loop ~7% of CPU.
-2. Optimized `surface/sweep.py` (commit 964ee09, tests 205 green):
+2. Optimized `surface/sweep.py` (commit 062973b, tests 205 green):
    - compile client/rule matchers once per artifact;
    - dependency evidence once per matching FILE (old per-line appends were
      deduped by sorted(set(paths)), so exported facts are identical);
