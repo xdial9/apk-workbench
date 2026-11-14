@@ -41,9 +41,9 @@ source .venv/bin/activate
 apkworkbench doctor
 ```
 
-No Google login, AAS token, API key, browser sign-in, or manually supplied bearer token is required. On the first Play request, goopdl obtains short-lived anonymous credentials from Aurora Store's public token dispenser and maintains a rotating local token pool. The Play API still uses a bearer token internally, but it is issued anonymously rather than from your Google account. The dispenser is a third-party service and may rate-limit or become unavailable; the Play API itself is unofficial. The adapter currently targets free apps, and Play may add a free app to the anonymous device profile's library as part of delivery. Device profile compatibility affects which variants are served.
+No Google login is required by default: on the first Play request, goopdl can obtain short-lived anonymous credentials from Aurora Store's public token dispenser and maintain a rotating local token pool. The Play API still uses a bearer token internally. The dispenser is a third-party service that frequently rate-limits or becomes unavailable, and the Play API itself is unofficial — so account mode is recommended: run `goopdl auth login` (browser sign-in) or export `GOOPDL_ACCOUNT_EMAIL` and `GOOPDL_AAS_TOKEN`, and pick `auto` or `account` in `sources.google_play.auth_mode`. The adapter currently targets free apps, and Play may add a free app to the selected device profile's library as part of delivery. Device profile compatibility affects which variants are served.
 
-Unset `GOOPDL_ACCOUNT_EMAIL` and `GOOPDL_AAS_TOKEN` if either is present. APK Workbench fails closed rather than using Google account credentials.
+Check `apkworkbench doctor`; it reports the resolved Play session source. See docs/configuration.md for the full auth_mode reference.
 
 ## 4. Verify dependencies
 

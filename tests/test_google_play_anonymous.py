@@ -128,9 +128,99 @@ def test_refuses_to_fall_back_to_user_account_credentials(monkeypatch, name, val
     monkeypatch.setattr(auth.token_auth, "pick_pool_token", lambda **_kwargs: called.append(True))
 
     with pytest.raises(auth.AnonymousGooglePlaySessionError, match="anonymous Play access only"):
-        auth.AnonymousGooglePlaySession().new_api()
+        auth.AnonymousGooglePlaySession(auth_mode="anonymous").new_api()
 
     assert called == []
+
+
+def test_auto_mode_uses_account_credentials_from_the_environment(monkeypatch):
+    monkeypatch.setenv("GOOPDL_ACCOUNT_EMAIL", "research@example.invalid")
+    monkeypatch.setenv("GOOPDL_AAS_TOKEN", "aas_et/session-token")
+    payload = _auth_payload("account-bearer", gsf_id="424242")
+    monkeypatch.setattr(auth, "PlayApi", FakePlayApi)
+    seen = {}
+
+    def pick_token(**kwargs):
+        seen["kwargs"] = kwargs
+        return payload
+
+    original_use_scope = auth.token_auth._use_scope
+
+    def use_scope(scope):
+        seen["credentials"] = scope.credentials
+        return original_use_scope(scope)
+
+    monkeypatch.setattr(auth.token_auth, "_use_scope", use_scope)
+    monkeypatch.setattr(auth.token_auth, "pick_pool_token", pick_token)
+
+    fake = FakePlayApi
+    fake.calls.clear()
+    api = auth.GooglePlaySession(auth_mode="auto", load_saved_account=lambda: None).new_api()
+
+    assert seen["credentials"] == ("research@example.invalid", "aas_et/session-token")
+    assert api.session["authToken"] == "account-bearer"
+    assert api.device["gsfId"] == "424242"
+
+
+def test_auto_mode_falls_back_to_the_dispenser_without_account(monkeypatch):
+    monkeypatch.delenv("GOOPDL_ACCOUNT_EMAIL", raising=False)
+    monkeypatch.delenv("GOOPDL_AAS_TOKEN", raising=False)
+    payload = _auth_payload("anonymous-bearer")
+    monkeypatch.setattr(auth, "PlayApi", FakePlayApi)
+    monkeypatch.setattr(auth.token_auth, "pick_pool_token", lambda **_kwargs: payload)
+
+    api = auth.GooglePlaySession(auth_mode="auto", load_saved_account=lambda: None).new_api()
+
+    assert api.session["authToken"] == "anonymous-bearer"
+
+
+def test_account_mode_without_any_credentials_fails_with_remedy(monkeypatch):
+    called = []
+    monkeypatch.setattr(auth.token_auth, "pick_pool_token", lambda **_kwargs: called.append(True))
+
+    with pytest.raises(auth.AnonymousGooglePlaySessionError, match="goopdl auth login"):
+        auth.GooglePlaySession(auth_mode="account", load_saved_account=lambda: None).new_api()
+
+    assert called == []
+
+
+def test_account_mode_prefers_saved_account_over_nothing_and_masks_doctor_report(monkeypatch):
+    report = auth.describe_auth_mode(
+        "auto",
+        load_saved_account=lambda: ("researcher@example.invalid", "aas_et/x"),
+    )
+    assert report["resolved_mode"] == "account"
+    assert report["account_source"] == "goopdl_saved_account"
+    assert report["account_email"] == "r***@example.invalid"
+
+    report_env = auth.describe_auth_mode(
+        "auto",
+        load_saved_account=lambda: ("saved@example.invalid", "aas_et/y"),
+        read_env=lambda: ("env@example.invalid", "aas_et/z"),
+    )
+    assert report_env["account_source"] == "environment"
+    assert report_env["account_email"] == "e***@example.invalid"
+
+    report_none = auth.describe_auth_mode("auto", load_saved_account=lambda: None)
+    assert report_none["resolved_mode"] == "anonymous"
+
+    report_account = auth.describe_auth_mode("account", load_saved_account=lambda: None)
+    assert report_account["resolved_mode"] is None
+
+
+def test_session_error_carries_dispenser_retry_after_hint(monkeypatch):
+    failure = auth.token_auth.DispenserRateLimitedError(120)
+
+    def fail(**_kwargs):
+        raise failure
+
+    monkeypatch.setattr(auth.token_auth, "pick_pool_token", fail)
+    with pytest.raises(auth.AnonymousGooglePlaySessionError) as raised:
+        auth.GooglePlaySession(
+            auth_mode="auto", load_saved_account=lambda: None
+        ).new_api()
+
+    assert raised.value.retry_after == 120
 
 
 def test_rejects_invalid_country_code():

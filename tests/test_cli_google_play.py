@@ -53,6 +53,52 @@ def test_discover_writes_google_play_package_catalog(monkeypatch, tmp_path):
     assert "GOOGLE PLAY STORE" in result.output
 
 
+def test_discover_merges_reruns_and_persists_batches_incrementally(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    catalog = cli._catalog_path(config)
+    cli._write_catalog(catalog, [
+        PlayApp("com.example.old", "Old App", "Old Inc.", "0.9", 0),
+    ])
+
+    writes = []
+
+    class FakeSource:
+        def __init__(self, **_kwargs):
+            pass
+
+        def discover(self, **kwargs):
+            batches = [
+                [PlayApp("com.example.one", "One", "Inc.", "1.0", 1)],
+                [PlayApp("com.example.two", "Two", "Inc.", "1.0", 1)],
+            ]
+            on_batch = kwargs["on_batch"]
+            def catalog_ids():
+                with catalog.open(encoding="utf-8", newline="") as handle:
+                    return [row["package_id"] for row in csv.DictReader(handle)]
+            for batch in batches:
+                on_batch(batch)
+                writes.append(catalog_ids())
+            assert kwargs["category_ids"] is None
+            return [app for batch in batches for app in batch]
+
+    monkeypatch.setattr(cli, "Config", lambda: config)
+    monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-merge"))
+    monkeypatch.setattr(cli, "GooglePlaySource", FakeSource)
+
+    result = CliRunner().invoke(cli.main, ["discover", "--limit", "10"])
+
+    assert result.exit_code == 0, result.output
+    # After each persisted batch: union so far — old+one, then old+one+two.
+    assert writes == [
+        ["com.example.old", "com.example.one"],
+        ["com.example.old", "com.example.one", "com.example.two"],
+    ]
+    assert "Distinct package IDs catalogued: 3" in result.output
+    with catalog.open(encoding="utf-8", newline="") as handle:
+        ids = [row["package_id"] for row in csv.DictReader(handle)]
+    assert ids == ["com.example.old", "com.example.one", "com.example.two"]
+
+
 def test_download_skips_unavailable_apps_and_records_verified_play_artifact(monkeypatch, tmp_path):
     config = _config(tmp_path)
     catalog = cli._catalog_path(config)

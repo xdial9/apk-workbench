@@ -4,20 +4,50 @@ All discovery and acquisition commands use Google Play Store. No other source is
 
 ## Authentication prerequisite
 
-Run these once in the same virtual environment as APK Workbench:
+APK Workbench obtains Play bearer tokens through goopdl in one of three modes,
+selected in `~/.config/apkworkbench/config.yaml`:
 
-```bash
-playstore-cli login
-playstore-cli checkin
+```yaml
+sources:
+  google_play:
+    auth_mode: auto   # auto (default) | account | anonymous
 ```
 
-Use a dedicated research Google account. The upstream client uses an unofficial Google Play API and may result in account restrictions.
+### Google account mode (recommended; stable)
+
+```bash
+goopdl auth login         # browser sign-in; saves the account, or use --manual
+goopdl auth status        # confirm the saved account
+```
+
+goopdl registers a device for your account and exchanges its AAS token for a
+short-lived Play bearer token. The Aurora dispenser is never contacted in
+account mode. Use a dedicated account — Play may add a free app to the
+account's library during delivery acquisition, and the unofficial API may
+result in account restrictions.
+
+Alternatively export `GOOPDL_ACCOUNT_EMAIL` and `GOOPDL_AAS_TOKEN` instead of
+`goopdl auth login`.
+
+### Anonymous dispenser mode (fallback)
+
+No account is used; goopdl fetches anonymous device sessions from Aurora
+Store's public token dispenser (`auroraoss.com`). This is third-party and
+often unavailable or rate-limited.
+
+| `auth_mode` | Behavior |
+|---|---|
+| `auto` (default) | Uses the account when one is configured (`goopdl auth login` or the two env vars); falls back to the anonymous dispenser otherwise |
+| `account` | Google account only; fails fast with instructions when nothing is configured |
+| `anonymous` | Public dispenser only; fails closed if `GOOPDL_ACCOUNT_EMAIL`/`GOOPDL_AAS_TOKEN` is set, and the dispenser is never used otherwise |
+
+`apkworkbench doctor` prints the resolved session source.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `doctor` | Check Play client, Java, Apktool, and TruffleHog |
+| `doctor` | Check Play client, Java, Apktool, and TruffleHog; report the resolved Play session source |
 | `discover` | Collect package IDs from Google Play charts, categories, searches, or a package file |
 | `download` | Freeze delivery hashes and download complete Play app bundles |
 | `verify-downloads` | Independently re-hash and verify every file in a completed acquisition run |

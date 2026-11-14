@@ -43,6 +43,7 @@ class Config:
             "sources": {
                 "google_play": {
                     "retry_backoff_seconds": 1.0,
+                    "auth_mode": "auto",
                 },
             },
             "decompilation": {"timeout_seconds": 3600},
@@ -86,6 +87,13 @@ class Config:
             play_overrides = source_overrides.get("google_play", {})
             if not isinstance(play_overrides, dict):
                 raise ConfigError("Configuration 'sources.google_play' must be a mapping.")
+            if "auth_mode" in play_overrides:
+                mode = play_overrides["auth_mode"]
+                if not isinstance(mode, str) or mode.strip().lower() not in ("auto", "account", "anonymous"):
+                    raise ConfigError(
+                        "Configuration 'sources.google_play.auth_mode' must be one of: auto, account, anonymous."
+                    )
+                play_overrides["auth_mode"] = mode.strip().lower()
             overrides["sources"] = {"google_play": play_overrides}
         tool_overrides = overrides.get("tools")
         if tool_overrides is not None:

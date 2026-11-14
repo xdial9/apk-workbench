@@ -25,6 +25,7 @@ from playstore_cli import download as play_download
 from apkworkbench.sources.google_play_anonymous import (
     AnonymousGooglePlaySession,
     AnonymousGooglePlaySessionError,
+    validate_auth_mode,
 )
 from playstore_cli.api import (
     NotDownloadable,
@@ -37,6 +38,7 @@ _PACKAGE_RE = re.compile(r"^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$")
 _MAX_RETRIES = 3
 _MIN_DELAY, _MAX_DELAY = 2.0, 5.0
 _RATE_RETRIES, _RATE_BASE = 4, 30
+_RETRY_AFTER_CAP = 600.0
 
 
 class GooglePlayError(RuntimeError):
@@ -48,6 +50,11 @@ class GooglePlayUnavailableError(GooglePlayError):
 
 
 class GooglePlayAuthenticationError(GooglePlayError):
+    """Play authentication unavailable for the configured session mode."""
+
+    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
     """Raised when an anonymous Google Play device session is unavailable."""
 
 
@@ -117,6 +124,7 @@ class GooglePlaySource:
         self,
         *,
         retry_backoff_seconds: float = 1.0,
+        auth_mode: str = "auto",
         country: str | None = None,
         arch: str = "arm64",
         profile: str | None = None,
@@ -126,10 +134,12 @@ class GooglePlaySource:
     ):
         if retry_backoff_seconds < 0:
             raise ValueError("retry_backoff_seconds cannot be negative")
+        self.auth_mode = validate_auth_mode(auth_mode)
         self.retry_backoff_seconds = retry_backoff_seconds
         self.progress = progress
         self._api: PlayApi | None = None
         self._anonymous_session = anonymous_session or AnonymousGooglePlaySession(
+            auth_mode=self.auth_mode,
             country=country,
             arch=arch,
             profile=profile,
@@ -140,15 +150,38 @@ class GooglePlaySource:
         try:
             return self._anonymous_session.new_api(force_refresh=force_session)
         except AnonymousGooglePlaySessionError as exc:
-            raise GooglePlayAuthenticationError(str(exc)) from exc
+            raise GooglePlayAuthenticationError(
+                str(exc), retry_after=getattr(exc, "retry_after", None)
+            ) from exc
         except Exception:  # noqa: BLE001 - sanitize arbitrary dispenser/client failures
             raise GooglePlayAuthenticationError(
-                "Could not initialise anonymous Google Play access."
+                "Could not initialise Google Play access."
             ) from None
+
+    def _new_api_honoring_retry_after(self, *, force_session: bool = False) -> PlayApi:
+        """Create a session; when the source announced a retry window, honor it once.
+
+        Aurora's dispenser rate limits carry a ``retry_after`` hint and the
+        anonymous path re-mints immediately after a Play 401. Sleeping for
+        (capped) the advertised window gives rotated/minted tokens a chance
+        instead of hammering straight into another 429.
+        """
+        try:
+            return self._new_api(force_session=force_session)
+        except GooglePlayAuthenticationError as first:
+            retry_after = getattr(first, "retry_after", None)
+            if not isinstance(retry_after, (int, float)) or retry_after <= 0:
+                raise
+            wait = min(float(retry_after), _RETRY_AFTER_CAP)
+            self._emit_progress(
+                f"[Google Play] Session source busy; honoring retry_after={wait:.0f}s"
+            )
+            time.sleep(wait)
+            return self._new_api(force_session=force_session)
 
     def _call(self, operation):
         if self._api is None:
-            self._api = self._new_api()
+            self._api = self._new_api_honoring_retry_after()
         renewed = False
         rate_tries = 0
         while True:
@@ -167,7 +200,7 @@ class GooglePlaySource:
                     continue
                 if exc.status == 401 and not renewed:
                     renewed = True
-                    self._api = self._new_api(force_session=True)
+                    self._api = self._new_api_honoring_retry_after(force_session=True)
                     continue
                 raise GooglePlayError(f"Google Play API request failed: {exc}") from exc
             except NotDownloadable as exc:
@@ -176,6 +209,7 @@ class GooglePlaySource:
                 raise
             except Exception as exc:
                 raise GooglePlayError(f"Google Play request failed: {exc}") from exc
+
     def _emit_progress(self, message: str) -> None:
         if self.progress is not None:
             try:
@@ -228,10 +262,22 @@ class GooglePlaySource:
         per_category_limit: int = 200,
         per_query_limit: int = 516,
         total_limit: int = 15000,
+        on_batch: Callable[[list[PlayApp]], None] | None = None,
     ) -> list[PlayApp]:
-        """Collect and de-duplicate Play search and top-free chart results."""
+        """Collect and de-duplicate Play search and top-free chart results.
+
+        ``on_batch`` is invoked after every query and category channel with
+        the apps found so far, so a crash or rate-limit abort midway through
+        a large crawl still leaves persisted progress (the CLI merges this
+        into the catalog after each batch).
+        """
         if total_limit < 1:
             raise ValueError("total_limit must be positive")
+
+        def flush() -> None:
+            if on_batch is not None:
+                on_batch(list(found.values()))
+
         categories = list(category_ids) if category_ids is not None else [
             category_id for category_id, _ in self.categories()
         ]
@@ -241,13 +287,18 @@ class GooglePlaySource:
             for app in self.search(query, limit=per_query_limit):
                 found.setdefault(app.package_id, app)
                 if len(found) >= total_limit:
+                    flush()
                     return list(found.values())
+            flush()
         for category_index, category_id in enumerate(categories, start=1):
             self._emit_progress(f"[Google Play] Discovery category {category_index}/{len(categories)}: {category_id}")
             for app in self.top(category_id, limit=per_category_limit):
                 found.setdefault(app.package_id, app)
                 if len(found) >= total_limit:
+                    flush()
                     return list(found.values())
+            flush()
+        flush()
         return list(found.values())
 
     def inspect(self, package_id: str, *, version_code: int | None = None) -> PlayBundlePlan:

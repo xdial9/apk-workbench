@@ -31,6 +31,30 @@ from apkworkbench.sources.google_play import (
     GooglePlayUnavailableError,
     PlayApp,
 )
+from apkworkbench.sources.google_play_anonymous import (
+    describe_auth_mode,
+)
+
+
+def _play_auth_mode(config: Config) -> str:
+    """Resolve the configured Google Play authentication mode (validated in Config)."""
+    return str(config.get("sources.google_play.auth_mode", "auto"))
+
+
+def _source_auth_mode(config: Config) -> str:
+    """AuthMode accepted by the Play source/session layer (fails on bad config)."""
+    mode = _play_auth_mode(config)
+    try:
+        from apkworkbench.sources.google_play_anonymous import validate_auth_mode
+
+        return validate_auth_mode(mode)
+    except ValueError as exc:
+        raise click.ClickException(f"Invalid auth_mode configuration: {exc}") from exc
+
+
+def _doctor_auth_report(config: Config) -> dict:
+    """Summarize the current Play session source without touching any token."""
+    return describe_auth_mode(_source_auth_mode(config))
 
 
 def _workspace_locked(command):
@@ -204,6 +228,25 @@ def doctor() -> None:
             all_required_ok = False
             if dependency.error:
                 click.echo(f"  {dependency.error}")
+    auth_report = _doctor_auth_report(config)
+    resolved = auth_report.get("resolved_mode")
+    if resolved == "account":
+        source_text = auth_report.get("account_source") or "resolved"
+        email = auth_report.get("account_email") or "***"
+        if source_text == "environment-incomplete":
+            click.echo("[AUTH] Play session source: INCOMPLETE ACCOUNT CREDENTIALS")
+            click.echo("  Set both GOOPDL_ACCOUNT_EMAIL and GOOPDL_AAS_TOKEN, or run `goopdl auth login`.")
+        else:
+            click.echo(f"[AUTH] Play session source: ACCOUNT ({source_text}; {email})")
+    elif resolved == "anonymous" or auth_report.get("configured_mode") == "anonymous":
+        click.echo("[AUTH] Play session source: ANONYMOUS (Aurora public token dispenser)")
+        click.echo("  The third-party dispenser is often unavailable; run `goopdl auth login` "
+                   "and use auth_mode=auto/account for stable acquisition.")
+    else:
+        configured = auth_report.get("configured_mode") or "auto"
+        if configured == "account" or auth_report.get("account_source") in ("none-configured", "saved-account-unreadable"):
+            click.echo("[AUTH] Play session source: UNAVAILABLE (no account configured to use)")
+            click.echo("  Run `goopdl auth login`, or export GOOPDL_ACCOUNT_EMAIL and GOOPDL_AAS_TOKEN.")
     click.echo("Status: READY" if all_required_ok else "Status: MISSING OR UNHEALTHY REQUIRED DEPENDENCIES")
     if not all_required_ok:
         raise click.exceptions.Exit(1)
@@ -233,10 +276,25 @@ def discover(
     logger = setup_logging(config)
     source = GooglePlaySource(
         retry_backoff_seconds=float(config.get("sources.google_play.retry_backoff_seconds", 1)),
+        auth_mode=_source_auth_mode(config),
         progress=click.echo,
     )
     click.echo(BANNER)
     click.echo("Discovering applications from Google Play Store...")
+    catalog = _catalog_path(config)
+    apps = []
+
+    def persist_batch(batch_apps: list[PlayApp]) -> None:
+        # Crash-safe discovery: merge what exists with every completed channel
+        # so a rate-limit abort at category 45 of 60 keeps the first 44.
+        for app in batch_apps:
+            existing.setdefault(app.package_id, app)
+        _write_catalog(catalog, list(existing.values()))
+
+    existing: dict[str, PlayApp] = {}
+    if catalog.is_file() and not catalog.is_symlink():
+        for app in _read_catalog(catalog):
+            existing[app.package_id] = app
     try:
         apps = source.discover(
             queries=queries,
@@ -244,20 +302,29 @@ def discover(
             per_category_limit=per_category,
             per_query_limit=per_query,
             total_limit=limit,
+            on_batch=persist_batch,
         )
         if packages_file:
-            existing = {app.package_id for app in apps}
+            session_packages = {app.package_id for app in apps}
             for raw in packages_file.read_text(encoding="utf-8").splitlines():
                 package_id = raw.strip()
-                if not package_id or package_id.startswith("#") or package_id in existing:
+                if not package_id or package_id.startswith("#") or package_id in session_packages:
                     continue
                 if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id):
                     raise click.ClickException(f"Invalid Android package ID in {packages_file}: {package_id!r}")
-                apps.append(PlayApp(package_id, package_id, "", "", 0))
-                existing.add(package_id)
+                contributed = PlayApp(package_id, package_id, "", "", 0)
+                apps.append(contributed)
+                existing.setdefault(package_id, contributed)
+                session_packages.add(package_id)
                 if len(apps) >= limit:
                     break
+        # Catalog semantics: the file is a rolling union of every discover
+        # session that completed since it was created, so reruns after a
+        # crash/rate-limit only ever add apps and never delete them.
+        for app in apps:
+            existing.setdefault(app.package_id, app)
         catalog = _catalog_path(config)
+        apps = list(existing.values())
         _write_catalog(catalog, apps)
     except (GooglePlayError, OSError, ValueError) as exc:
         logger.error("Google Play discovery failed: %s", exc)
@@ -306,6 +373,7 @@ def download(apk_count: int | None, package_id: str | None) -> None:
     database = WorkspaceDatabase(config.get("workspace"))
     source = GooglePlaySource(
         retry_backoff_seconds=float(config.get("sources.google_play.retry_backoff_seconds", 1)),
+        auth_mode=_source_auth_mode(config),
     )
     click.echo(BANNER)
     click.echo("Preparing Google Play Store acquisition...")
@@ -426,7 +494,14 @@ def download(apk_count: int | None, package_id: str | None) -> None:
             bundle = source.download(plan, workspace=workspace, run_id=run_id)
             for apk_path in bundle.apk_files:
                 digest = _file_sha256(apk_path)
-                file_info = next(item for item in plan.files if item.name == apk_path.name)
+                try:
+                    file_info = next(item for item in plan.files if item.name == apk_path.name)
+                except StopIteration as exc:
+                    raise GooglePlayError(
+                        "Bundle file {name!r} has no matching download-plan entry for "
+                        f"{plan.app.package_id}; refusing to record an unverified APK."
+                        .format(name=apk_path.name)
+                    ) from exc
                 if digest != file_info.sha256:
                     raise GooglePlayError(f"Local SHA-256 mismatch after Play verification: {apk_path.name}")
                 if digest not in selected_hashes or digest in recorded_hashes:
