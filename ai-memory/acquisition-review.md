@@ -54,9 +54,9 @@ F6. NOT-a-defect but reads like one: _call() sleeps a random 2-5s before
 
 F7. VERIFY later when the whole per-run workchain exists:
 - per-artifact provenance references RUN-scoped artifacts (phase-one report).
-  They live run-scoped in database/run_manifests/reports (§8F moves them to
-  runs/<run_id>/ in Phase C). Bundle provenance.json (added) references them
-  by workspace-relative path so the AI can find them today.
+  They live run-scoped in database/run_manifests/reports (a future run-folder
+  phase may move them; not scheduled). Bundle provenance.json (added)
+  references them by workspace-relative path so the AI can find them today.
 
 ================================================================================
 HANDOFF CONSUMPTION MAP (what the final AI gets from acquisition now)
@@ -80,6 +80,7 @@ DECISION LOG (short, dated; details in commits)
 2026-11-14 Delivered: F1 provenance wiring (discover->catalog->bundle),
        F3 rerun hygiene, F2 partial message, handoff wiring v0.
 DEFER: delivery staleness re-inspect (P2-1), pacing redesign (P2-2),
-       Phase C run-folder layout (P2-3).
+       run-folder layout (P2-3; superseded in scope by Phase W per-bundle
+       workspaces, INDEX.md D-1/D-3).
 ================================================================================
 EOF_MARKER

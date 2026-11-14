@@ -31,11 +31,18 @@ for doctrine/phase-ladder/appetites.
 
 ---
 
-## 0. CURRENT WORK ITEM (replaces "start at Phase A")
+## 0. CURRENT WORK ITEM (updated 2026-11-14)
+### STATUS: Phase S is COMPLETE (S1-S8, including the handoff writers).
+### CURRENT WORK: PHASE W — per-bundle workspace + freeze (see §2).
+Next after W: prompt-chain dry run, then Phase A (as streaming), per the
+phase order in todo.md and the decisions in INDEX.md D-1..D-9.
+The section below is the historical Phase S charter, kept for context.
+
 ### PHASE S — FIX + OPTIMIZE the surface analyzer FIRST
-Rationale: the surface analyzer is becoming the core product. Fix/optimize it
-BEFORE the ceiling-removal (A) and rewrite (C) phases; then reconcile the plan
-against what changed; THEN enact the final full rewrite.
+Rationale: the surface analyzer is the core product. Fix/optimize it BEFORE
+the ceiling-removal (A) phase; then reconcile the plan against what changed.
+NOTE: the "final full rewrite" that this section originally pointed at is
+CANCELLED (D-6) — do not resurrect it.
 
 Known defects to fix (from full codebase read; file: analysis/apk_surface.py, 954 lines):
 - S1. Monolith: `analyze_apk_surface` (L~304-677) does parse+scan+deduce+persist
@@ -67,10 +74,15 @@ Known defects to fix (from full codebase read; file: analysis/apk_surface.py, 95
 Optimization target metric: single file walk, no repeated reads, dict-based
 dedupe; outcome: same findings superset, faster wall-clock, identical CLI flow.
 
-### AFTER S SUCCEEDS
-- Reconcile plan: update this file to reflect proven changes; then Phase A
-  (remove all ceilings incl. surface budgets/caps per Phase A section) and the
-  remaining phases; then the FINAL FULL REWRITE (Phase C) as planned.
+### AFTER S SUCCEEDS (status 2026-11-14: S is done)
+- Reconcile plan: update this file to reflect proven changes; then the
+  PER-BUNDLE WORKSPACE phase (W, below), then Phase A and the remaining
+  phases in the agreed order (INDEX.md "CANONICAL DESIGN DECISIONS" +
+  todo.md phase order).
+- The former "FINAL FULL REWRITE (Phase C) as planned" is CANCELLED
+  (user directive 2026-11-14, D-6). No full rewrite. Analyzer work is
+  measurement-led, targeted refactor only; S1-S8 already removed the
+  monolith, quadratic check, caps and adversarial failures that motivated it.
 
 ---
 
@@ -96,7 +108,19 @@ dedupe; outcome: same findings superset, faster wall-clock, identical CLI flow.
 
 ## 2. PHASE LADDER (order)
 
+### PHASE W — Per-bundle workspace + freeze (CURRENT; decided 2026-11-14)
+One self-contained, frozen, portable folder per app VERSION BUNDLE
+(results/<pkg>/<version_code>/<index_sha256>/, decoded components under
+apktool/<component>/). In-place freeze: read-only evidence +
+hashes.sha256 + verify-workspace; NO copy/hardlink/symlink; ai_analysis/
+attempt-01/ is the only writable area. surface/ + trufflehog/ + manifest/ +
+prompts + handoff.json + README complete the folder the prompts promise.
+Full contract + code-change list: INDEX.md D-1..D-4 and todo.md Unit 1.
+
 ### PHASE A — Remove ceilings (maxima/timeouts -> none)
+REWRITE 2026-11-14: this is STREAMING, not deleting. The box has ~3.8GB RAM;
+removing a cap without streaming converts truncation into OOM. Output goes
+to disk in bounded chunks; nothing is dropped, nothing is buffered whole.
 - apk_surface: kill 8MB/file + 512MB total budgets, 100k findings cap.
 - androguard_dex: kill 64MB out / 100k methods / 200k edges / 100k strings
   caps + 1800s timeout (keep heartbeats).
@@ -108,31 +132,36 @@ dedupe; outcome: same findings superset, faster wall-clock, identical CLI flow.
 - doctor: drop timeout expectations.
 
 ### PHASE B — Capture every hint + tool maximization
+STATUS 2026-11-14: the second "HINT PASS" below is RETRACTED (D-5). TruffleHog
+is verified-only by design and is not the product; the AI does verification.
+The only sanctioned future variant is ONE unfiltered run split into verified
+findings + unverified hints (no extra traversal), and only if a real gap
+appears. Kept below as an archived rejected option, clearly marked.
 1. TruffleHog (flags verified from installed 3.99.8 help):
-   - PRIMARY verified-only scan (minimal, justified):
+   - PRIMARY verified-only scan (CURRENT, APPROVED):
      `filesystem --concurrency=1 --no-update --results=verified --json --fail-on-scan-errors <dir>`
    - hard-abort on unverified/malformed lines RETAINED (defective output can't
      be deduced from).
-   - HINT PASS (second scan):
+   - [RETRACTED 2026-11-14 — DO NOT IMPLEMENT] HINT PASS (second scan):
      `filesystem --concurrency=1 --no-update --results=verified,unverified,unknown --json --filter-unverified --no-ignore-tag --fail-on-scan-errors <dir>`
-     stored as hints: verified=tool_verified, unverified=corroborated_static,
-     unknown=flagged_error. --filter-unverified dedupes; --no-ignore-tag
-     re-hydrates tag-suppressed lines (hidden-findings class we opt out of).
+     Rejected because it re-traverses the whole tree, inflates handoff volume,
+     and adds a parallel classification system the prompt must explain.
    - Default detector set is already ALL; --allow-verification-overlap NOT used.
 2. Reports (per-APK + final) render verified AND hint buckets w/ labels.
 3. Asset packs (.pak etc.) acquired, hashed, manifested, analyzed.
 4. Surface output becomes first-class report content (not stage counts).
 
-### PHASE C — Surface analyzer full rewrite (deducing engine)
-On the dormant framework (contracts/registry/executor, database/evidence.py):
-1. Parsers -> facts (dedup by value fingerprint): manifest, every smali file,
-   resources, assets, so files, DEX (Androguard), asset packs, zip inventory.
-2. Deduction rules -> estimated logics with confidence + cited evidence
-   (beaconing, SDK reconstruction, obfuscation detection, crypto graphs).
-3. Coverage ledger per file -> explicit "not analyzed: X" (should shrink to
-   dynamic-only items).
-4. Wire analyzer registry/executor in for surface analyzers; SQLite as
-   shadow store; CSVs stay source of truth until proven equivalent.
+### PHASE C — Surface analyzer [CANCELLED AS REWRITE 2026-11-14]
+The "full rewrite (deducing engine)" is CANCELLED by user directive (D-6).
+No dormant-framework migration, no registry/executor rewrite, no SQLite
+shadow store as a rewrite driver. What survives from this section is a
+TARGETED, measurement-led list, done only when a measured defect justifies it:
+1. Parsers -> facts (dedup by value fingerprint): extend incrementally.
+2. Deduction rules -> confidence + cited evidence: add rules individually,
+   each with tests and a parity check.
+3. Coverage ledger per file -> explicit "not analyzed: X".
+4. Framework wiring ONLY if profiling shows the current path is the
+   bottleneck; otherwise leave it alone.
 
 ### PHASE D — Dossier generator
 Per app Markdown + JSON: Identity/provenance, Architecture map, Network life,
@@ -251,19 +280,19 @@ D3. ACTIVE-AGENT HANDOFF (user directive 2026-11-14; pillar P10 of
    the final tool call actively extends the analysis and closes the
    process ("sews it up neatly"). Capability-adaptive: with or without
    shell access, any capable model can execute the loop.
-   F. RUN WORKSPACE ISOLATION (amends C; decided 2026-11-14):
+   F. RUN WORKSPACE ISOLATION (REVISED 2026-11-14 by D-1/D-2/D-3).
+      SUPERSEDED for the AI consumption unit: the per-bundle workspace
+      results/<pkg>/<ver>/<index_sha256>/ IS the self-sufficient unit the AI
+      is pointed at (see INDEX.md D-1..D-3). No hardlinks anywhere (D-2).
       - Downloads stay in the UNIVERSAL content folder (dedup by sha256
         unchanged; never moved/duplicated by runs).
-      - ALL outputs of one run live in ONE per-run folder:
-        workspace/runs/<run_id>/ - the frozen manifest copy, phase-one
-        verification report, static-analysis.json + trufflehog outputs per
-        artifact (hardlinked from the digest-keyed work cache when bytes
-        are identical), markers, dossier/briefing, handoff files.
-      - Universal tree becomes the work cache (pure function of APK bytes;
-        cross-run skip-reuse reads it); run folder = the RECORD and the AI
-        consumption unit: self-sufficient with no external references,
-        including a hardlink of the original APK.
-      - The AI is pointed at workspace/runs/<run_id>/ (or any single artifact
-        subfolder within it) with zero project context and finds everything.
-      - Phase C adopts the run-folder layout natively (one migration during
-        the full rewrite; Phase S keeps current paths to stay green).
+      - A run-level record may still live under workspace/runs/<run_id>/
+        (marker, verification report, manifest copy). It is NOT the folder
+        handed to the AI; the bundle workspace is.
+      - The universal results tree is the work cache; the bundle workspace is
+        the frozen, portable record.
+      - The AI is pointed at one bundle workspace with zero project context
+        and finds everything inside it.
+      - No layout migration is bundled with a rewrite: the rewrite is
+        cancelled (D-6). Phase W introduces the bundle layout for NEW runs;
+        existing trees are left as they are.

@@ -204,5 +204,5 @@ S-f. Timing: heartbeats per always-alive contract + emit tests; marker
 S-g. Test campaign: manifest v2 fixtures (deep links/providers/backup/
      meta-data), endpoint variants, private/IDN, base64, nested archives,
      text sniff, dedup contract, emit-contract tests.
-THEN: reconcile plan.txt with actual S outcomes + adjust Phase A/C bullets
-     before the full rewrite (plan.txt "current work item" section).
+THEN: reconcile plan.txt with actual S outcomes + adjust Phase A/W bullets
+     before Phase W begins (plan.txt "current work item" section).

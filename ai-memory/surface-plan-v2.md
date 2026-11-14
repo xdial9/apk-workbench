@@ -14,7 +14,8 @@ app + original APK and produces the machine-shaped KNOWLEDGE BASE of the app:
 every fact, every hint, every deduced behavior, every coverage gap — mapped,
 deduplicated, evidence-cited, confidence-labeled. Its data plane is read by
 (a) the dossier/briefing generator (Phase D), (b) the final AI tool call
-(handoff consumer), (c) reconcile/final report compatibility layer (Phase C).
+(handoff consumer), (c) reconcile/final report compatibility layer (Phase W
+clamp: new surface/ path + legacy fallback).
 Its terminal plane proves liveness continuously. Terminal silence = bug.
 "The tool that catches everything from the smallest hint to the biggest
 vulnerability, maps it all, and hands it to the reasoner — fast to consume,
@@ -43,8 +44,9 @@ P6 TOKEN-EFFICIENT SHAPE: dense, deterministic, deduped facts w/ exact
    briefing (facts → verified → hints → unchecked). Lives in data plane so
    the briefing generator stays thin.
 P7 COMPAT GUARDS: existing consumer keys (final_run.py, reconcile_run,
-   tests) keep working until Phase C migrates layout; changes documented in
-   appdev.txt §15 per commit.
+   tests) keep working through Phase W's layout change — new path first,
+   legacy root path as fallback; changes documented in appdev.txt §15 per
+   commit.
 P8 SEQUENTIAL/LOW-HW: one file at a time; cheap per-file memory; no
    parallelism inside the analyzer; heartbeats carry enough state to resume.
 P9 MODEL-AGNOSTRIC AI HANDOFF: ALL output except trufflehog VERIFIED
@@ -120,8 +122,11 @@ analysis/surface/  (new package; apk_surface.py becomes a facade for
                            recheck of source APK before DEX pass).
 ardo (unchanged): androguard_dex.py — stays as-is architecturally (its facts
         merge into the same fact pool; its input-hash guard stays).
-Deferred to Phase C (NOT this overhaul): run-folder layout migration,
-registry/executor wiring, evidence.py integration, dossier generator.
+Deferred out of the S overhaul, now scheduled as PHASE W (2026-11-14):
+per-bundle workspace layout (`results/<pkg>/<ver>/<index_sha256>/` with
+`apktool/<component>/`) and in-place freeze. Still deferred: registry/
+executor wiring, evidence.py integration, dossier generator (Phase D).
+The former "Phase C full rewrite" is CANCELLED (no rewrite, D-6).
 
 ================================================================================
 4. EXECUTION ORDER (replaces surface.txt S-a..S-g; each item = commit + tests)
@@ -181,7 +186,8 @@ Then: reconcile plan.txt (post-S status) + plan Phase A ceilings (the
 ================================================================================
 5. OUTPUT PLANE (what the artifact's data looks like — the AI's first byte)
 ================================================================================
-Per-artifact stable directory (paths unchanged until Phase C):
+Per-artifact directory TODAY (legacy layout; Phase W introduces the
+per-bundle workspace for NEW runs, INDEX.md D-1/D-3):
 results/<pkg>/<ver>/<digest>/
   static-analysis.json    : compat source of truth + summary layers:
       manifest_facts, inventory (compat keys preserved), findings (deduped,
@@ -246,20 +252,22 @@ Why it wins: deterministic (any model, same sequence); inspectable by the
 operator before use; token-frugal (load only what a stage needs); progress
 is native; the anti-anchoring raw-map-first order is enforced, not hoped.
 
-STRUCTURE (that goes into the working .apk folder; Phase C natively, and
-the interim Phase S folder growth adapts paths):
-  <artifact folder>/ai_handoff/
-    00_PROMPT_TEMPLATE.txt : static master prompt: role, doctrine, rules
-        of engagement, output conventions, schema vocabulary glossary,
-        confidence labels, working-memory protocol (NOTES.md), finish-line
-        definition. Ends with: "Now read 1.txt to start the workload."
-    01_map_raw.txt ... NNN : numbered stages. EACH file (static skeleton +
-        per-artifact GENERATED content interpolated by the serializer):
+STRUCTURE (updated 2026-11-14: the workspace IS the bundle folder; there is
+no separate ai_handoff/ wrapper — see INDEX.md D-1..D-3):
+  <bundle workspace>/          results/<pkg>/<ver>/<index_sha256>/
+     0.txt : static master prompt (role, doctrine, rules of engagement,
+        output conventions, schema vocabulary, confidence labels,
+        working-memory protocol, finish-line definition). Ends with:
+        "Now read 1.txt to start the workload."
+     1.txt .. 6.txt : numbered stages (static skeleton; per-bundle generated
+        content interpolated at freeze time):
         a) mechanical steps; b) reasoning standard + definition-of-done
         (checkable; no stage closes without satisfying it); c) exact
         evidence locations (location ledger slice) + suggested methods
         (goals, not commands); d) what may/may not be written (permission
         map slice); e) pointer "Now read <next>.txt".
+     README.txt : what the folder is, how to start, what is frozen.
+     handoff.json : schema/tool/prompt versions + hashes.
   Expected stage skeleton (names stable, count variable):
     01 map raw tree (FULL read of decompiled apk; own observations into
         NOTES.md FIRST, before any tool output is opened)
@@ -338,9 +346,10 @@ per-run/per-artifact BRIEFING.md (Phase D) renders from it. Content:
 6. Capability-adaptive: an AI with shell/tool access works the folder
    directly (decode, hash, grep, extend facts); an AI without still
    produces the deepest possible written analysis from the same files.
-Default landing zone for the AI overlay:
-  runs/<run_id>/<pkg>/<ver>/<digest>/ai_analysis/   (post-Phase-C layout)
-  (interim Phase S: results/<pkg>/<ver>/<digest>/ai_analysis/)
+Default landing zone for the AI overlay (updated 2026-11-14, D-1/D-3):
+  results/<pkg>/<ver>/<index_sha256>/ai_analysis/attempt-01/
+  (attempt-NN per model/attempt so one frozen folder can be reused without
+  resetting anything; legacy artifacts use results/<pkg>/<ver>/<digest>/)
 
 ================================================================================
 8. RISKS + GUARDS
@@ -353,10 +362,15 @@ R2 checkpoint/resume bugs duplicating facts: fingerprint store is the idem-
 R3 \r progress vs CI logs: ProgressPrinter falls back to newline every
    ~5-Heartbeat if not a TTY (detect isatty), no control-char in logs.
 R4 huge findings: entire JSON body big — facts.jsonl stays the streamed
-   file; static-analysis.json can grow but remains server-loadable; fine
-   for per-artifact folder size (hardlinks cheaper later).
-R5 scope: Phase C items (run-folder layout, registry, evidence store,
-   dossier) DO NOT happen inside S; note-only per tripwire §16.6.
+   file; static-analysis.json can grow but remains server-loadable. NO
+   hardlinks are used (D-2): hardlinks share the inode, so chmod affects both
+   names and an in-place write corrupts evidence and handoff together; they
+   also cannot cross filesystems or link directories. The bundle workspace is
+   the single copy; integrity comes from read-only freeze + hashes.sha256 +
+   verify-workspace.
+R5 scope: Phase W (per-bundle workspace + freeze) and Phase D (dossier) are
+   separate units, done one at a time with user review. The former Phase C
+   rewrite is cancelled (D-6).
 ================================================================================
 END SURFACE-PLAN-V2 — surface-overhaul plan canonical.
 Surface.txt order retained for reference; this file supersedes it for work.
