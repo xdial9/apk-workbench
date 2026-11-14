@@ -167,21 +167,9 @@ tempCodeRunnerFile.py
 # Streamlit
 .streamlit/secrets.toml
 
-# APK Workbench runtime data (keep generated binaries and ledgers out of Git)
-APK-Workbench/
-results/
-reports/
-logs/
-database/*.csv
-database/*.sqlite
-database/run_manifests/
-*.apk
-*.part
-config/gpg_keys/
-.env.*
-!.env.example
-
-# Unified local installation: never commit local runtime data or secrets
+# APK Workbench runtime data (generated artifacts, never committed)
 /workspace/
 /config/
 /state/
+*.apk
+*.part

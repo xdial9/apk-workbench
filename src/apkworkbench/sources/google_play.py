@@ -10,6 +10,7 @@ import base64
 import hashlib
 import json
 import os
+import random
 import re
 import tempfile
 import threading
@@ -34,6 +35,8 @@ from playstore_cli.api import (
 
 _PACKAGE_RE = re.compile(r"^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$")
 _MAX_RETRIES = 3
+_MIN_DELAY, _MAX_DELAY = 2.0, 5.0
+_RATE_RETRIES, _RATE_BASE = 4, 30
 
 
 class GooglePlayError(RuntimeError):
@@ -146,23 +149,33 @@ class GooglePlaySource:
     def _call(self, operation):
         if self._api is None:
             self._api = self._new_api()
-        try:
-            return operation(self._api)
-        except PlayApiError as exc:
-            if exc.status != 401:
-                raise GooglePlayError(f"Google Play API request failed: {exc}") from exc
-            self._api = self._new_api(force_session=True)
+        renewed = False
+        rate_tries = 0
+        while True:
+            time.sleep(random.uniform(_MIN_DELAY, _MAX_DELAY))
             try:
                 return operation(self._api)
-            except Exception as retry_exc:
-                raise GooglePlayError(
-                    f"Google Play API request failed after session renewal: {retry_exc}"
-                ) from retry_exc
-        except NotDownloadable as exc:
-            raise GooglePlayUnavailableError(f"Google Play cannot deliver this app: {exc}") from exc
-        except Exception as exc:
-            raise GooglePlayError(f"Google Play request failed: {exc}") from exc
-
+            except PlayApiError as exc:
+                if exc.status == 429 and rate_tries < _RATE_RETRIES:
+                    wait = _RATE_BASE * 2 ** rate_tries + random.uniform(0, 5)
+                    rate_tries += 1
+                    self._emit_progress(
+                        f"[Google Play] HTTP 429, waiting {wait:.0f}s "
+                        f"(retry {rate_tries}/{_RATE_RETRIES})"
+                    )
+                    time.sleep(wait)
+                    continue
+                if exc.status == 401 and not renewed:
+                    renewed = True
+                    self._api = self._new_api(force_session=True)
+                    continue
+                raise GooglePlayError(f"Google Play API request failed: {exc}") from exc
+            except NotDownloadable as exc:
+                raise GooglePlayUnavailableError(f"Google Play cannot deliver this app: {exc}") from exc
+            except GooglePlayError:
+                raise
+            except Exception as exc:
+                raise GooglePlayError(f"Google Play request failed: {exc}") from exc
     def _emit_progress(self, message: str) -> None:
         if self.progress is not None:
             try:

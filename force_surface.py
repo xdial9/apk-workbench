@@ -1,12 +1,14 @@
-from apkworkbench.analysis.apk_surface import run_static_surface_analysis
-from apkworkbench.database.workspace import WorkspaceDatabase
-from apkworkbench.core.config import Config
+#!/usr/bin/env python3
+"""Force re-run surface analysis for eligible artifacts.
 
-print("[SYSTEM] Bypassing CLI router. Initiating direct surface scan...")
-ws = Config().get("workspace")
-db = WorkspaceDatabase(ws)
+This forwards to the CLI's 'run' command with --force-decompile --force-analyze
+to ensure surface analysis re-runs. All state goes through the proper database.
+"""
 
-summary = run_static_surface_analysis(
-    db, ws, run_id=None, force=True, progress=print
-)
-print(f"[SYSTEM] Bypass complete. Processed {summary.get('completed', 0)} artifacts.")
+import sys
+from apkworkbench.cli.main import main
+
+if __name__ == "__main__":
+    # Surface analysis runs as part of 'run' using the CLI pipeline.
+    # Pass all arguments through.
+    sys.exit(main())

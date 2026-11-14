@@ -82,4 +82,4 @@ Automated tests mock the anonymous dispenser, Google Play API, delivery, and dow
 
 The anonymous goopdl token cache defaults to `~/.config/goopdl`. Set `GOOPDL_CONFIG_DIR` or `XDG_CONFIG_HOME` to relocate it. On POSIX, goopdl creates the directory with mode `0700` and token files with mode `0600`. These are short-lived anonymous bearer/device credentials; keep the directory private and never commit or share it. APK Workbench does not read saved `playstore-cli` account credentials.
 
-The workbench workspace defaults to `~/APK-Workbench-Google-Play/`. Keep it separate from the Git checkout; it contains acquired APKs, OBBs, bundle metadata, processing results, reports, and logs.
+The workbench workspace defaults to `~/APK-Workbench/workspace/`, keeping runtime data alongside the code in a single checkout-rooted directory.

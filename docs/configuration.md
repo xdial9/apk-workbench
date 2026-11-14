@@ -3,12 +3,12 @@
 Defaults are built into the package. Add only settings that need to change.
 
 **Configuration:** `~/.config/apkworkbench/config.yaml`  
-**Workspace:** `~/APK-Workbench-Google-Play/`
+**Workspace:** `~/APK-Workbench/workspace/`
 
 ## Example
 
 ```yaml
-workspace: /data/APK-Workbench-Google-Play
+workspace: /data/APK-Workbench/workspace
 
 sources:
   google_play:

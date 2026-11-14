@@ -30,7 +30,7 @@ class Config:
             env.get("APKWORKBENCH_STATE_DIR", home / ".local/state/apkworkbench")
         ).expanduser()
         workspace = Path(
-            env.get("APKWORKBENCH_WORKSPACE", home / "APK-Workbench-Google-Play")
+            env.get("APKWORKBENCH_WORKSPACE", home / "APK-Workbench" / "workspace")
         ).expanduser()
 
         self.config_file = (

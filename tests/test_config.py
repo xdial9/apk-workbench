@@ -20,7 +20,7 @@ def test_unsupported_source_and_tool_overrides_are_discarded(tmp_path):
     assert config.get("tools.apktool") == "/opt/apktool-wrapper"
 
 
-def test_default_workspace_is_separate_from_legacy_workspace(tmp_path):
+def test_default_workspace_is_within_checkout(tmp_path):
     config = Config(environ={"HOME": str(tmp_path)})
 
-    assert config.get("workspace") == str(tmp_path / "APK-Workbench-Google-Play")
+    assert config.get("workspace") == str(tmp_path / "APK-Workbench" / "workspace")
