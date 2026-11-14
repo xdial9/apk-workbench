@@ -82,8 +82,11 @@ surface.txt/plan.txt checkboxes if applicable.
   huge label runs could wedge the sweep forever — violates never-frozen);
   fixed with possessive quantifiers on the unbounded groups; IPv6 second
   alternative extended (bounded). Consumer contract asserted on every result.
-  Next: S8 live validation (Antennapod fixture + one large APK, wall-clock
-  delta recorded) then reconcile plan.txt + prompts cross-check.
+  Next: S8 live validation — Antennapod DONE (a9ca7de: 1503s wall, partial
+  due to androguard 64MB cap on a NORMAL app — Phase A proof; 4299/4164
+  findings; fact-evidence ledger bug found+fixed). Spotify 131MB acquired+
+  verified (run c79180cf, 4 APKs), decoded 1.2GB; heavy-case surface running.
+  After S8: reconcile plan.txt + prompts cross-check, then Phase A.
 - Environment: repo /home/user/APK-Workbench; venv .venv/bin/python; pytest
   all-green baseline 152; apktool 3.0.3; trufflehog 3.99.8; androguard 4.1.4
   pinned; live fixture workspace /tmp/opencode/ws (VERIFY exists before use).

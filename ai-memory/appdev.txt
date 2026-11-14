@@ -419,6 +419,12 @@ Deduction templates (each holds when ALL required facts exist):
 2026-11-14 S6 landed: workbook + finalize_result (distinct metrics) +
   analyzer 0.3.0 with stale-reuse rejection; workchain prompts now have a
   concrete data contract (workbook section) to point the AI at.
+2026-11-14 S8 live validation (Antennapod 10MB, real): 1503s wall, partial
+  (androguard_output_limit 64MB cap hit by a NORMAL app -> Phase A proof);
+  4299 findings / 4164 distinct; 2658 facts; workbook 8 leads; REAL FIND:
+  facts lacked evidence -> ledger empty; fixed (facts now carry citations).
+  Spotify 131MB/4-APK bundle acquired+verified (137MB, provenance recorded);
+  decoded 1.2GB; surface heavy-case running.
 2026-11-14 S7 landed: adversarial campaign FOUND a real ReDoS (DOMAIN_RE/
   HOST_PORT_RE backtracking on huge label runs -> wedge forever); fixed with
   possessive quantifiers on unbounded groups only (bounded quantifiers stay
