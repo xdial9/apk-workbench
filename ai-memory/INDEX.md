@@ -93,10 +93,12 @@ surface.txt/plan.txt checkboxes if applicable.
   c79180cf, 4 APKs), decoded 1.2GB. Pre-optimization run aborted at
   25,292/112,254 files / 2,351s (~10.8 files/s baseline only); optimized
   rerun launched 2026-11-14; see RESUME HERE.
-  NEXT after S8: handoff contract fix (prompts reference nonexistent
-  surface/facts.jsonl + surface/location_map.json; emit additive files +
-  folder mapping per plan v2 §5, default decision), then Phase A ceilings,
-  then prompt-chain dry run, then first user active run.
+  NEXT after S8: handoff contract — PARTIALLY DONE, UNCOMMITTED (writers for
+  facts.jsonl + location_map.json exist in tree; folder assembly still
+  missing; user has not approved committing). Then, in this order: prompt
+  chain dry run (never executed, highest risk), volume hierarchy for
+  large artifacts, Phase A ceilings, output schema gate, first user run.
+  Read "HANDOFF READINESS ASSESSMENT" below before choosing.
 - Environment: repo /home/user/APK-Workbench; venv .venv/bin/python; pytest
   all-green baseline 205; apktool 3.0.3; trufflehog 3.99.8; androguard 4.1.4
   pinned; live fixture workspace /tmp/opencode/ws (VERIFY exists before use);
@@ -107,6 +109,88 @@ surface.txt/plan.txt checkboxes if applicable.
   from root — VERIFY root state at next session and re-sync as needed).
 - Open question logged in appdev.txt §1: Phase S branch choice (default:
   stay on current branch until user says otherwise).
+
+## HANDOFF READINESS ASSESSMENT (2026-11-14, agent opinion, evidence-based)
+
+Context: user asked for a judgement of whether the overhaul is on track for
+its stated purpose — run end to end, then hand off to ANY capable AI model
+so it can operate at maximum efficiency, direction and accuracy.
+
+VERDICT: the DESIGN is on track; the PROOF and the BUDGETING are not.
+Architecturally this is the right shape and stronger than typical
+"AI-ready" pipelines. Functionally it has never been executed once by a
+real model, and its "everything is present" handoff does not scale in the
+efficiency sense. Sequence should be: dry run -> volume hierarchy ->
+machine-checked output contract -> Phase A ceilings.
+
+What is genuinely right (keep; do not redesign):
+1. It hands over WORK, not conclusions: workbook.playbook.open_leads +
+   finish_line make the model an analyst with an assignment. A summary can
+   be answered by summarizing; this cannot, which is correct.
+2. Evidence discipline is real and enforced in the data: file:line cites,
+   confidence labels (tool_verified/deduced/hint/open_question/ai_deduced),
+   coverage ledger, limitations, diagnostics, acquisition hashes.
+3. Raw-first law (map the tree before trusting tool output) is a genuine
+   accuracy lever; it stops the model inheriting the analyzer's blind spots.
+4. Nothing is hidden: coverage gaps become explicit leads. Unusual and
+   correct for trust.
+
+Where it is NOT yet on track (ranked by risk):
+1. NEVER EXECUTED. prompts 0..6 have not been run by a model on a real
+   artifact. Biggest risk in the whole overhaul, larger than any code item.
+   Predictable first-run failures: unresolved paths, ambiguous steps,
+   skipped numbered instructions.
+2. NO VOLUME HIERARCHY. Spotify at ~31k/112k files already has ~4,000
+   endpoints and ~4,600 findings; location_map.json will be megabytes. A
+   model cannot ingest that. Efficiency needs a ranked front page plus
+   stable IDs the model can page/request — not the complete index at once.
+   The current design is honest but not efficient.
+3. FOUR OVERLAPPING REPRESENTATIONS of the same data
+   (static-analysis.json facts, facts.jsonl, location_map.json,
+   workbook.location_ledger). Different models will read different ones and
+   some will treat them as independent corroboration. Accuracy hazard;
+   needs explicit "same evidence, different views" wording + a canonical
+   precedence rule.
+4. NO ENFORCED OUTPUT CONTRACT. ai_analysis.json / lead_ledger.json /
+   closure_report.md are described in prose only. Nothing validates them,
+   so finish_line is a suggestion, not a gate.
+5. NO FEEDBACK LOOP. The model's closure report does not feed lead
+   generation; every run starts from zero.
+6. DEX STILL CAPPED (64MB androguard output cap), so a whole class of
+   results never reaches the handoff at all.
+
+## HANDOFF CONTRACT WORK IN THE TREE (UNCOMMITTED, decision pending)
+Implemented but NOT committed, deliberately left for the user to choose
+commit / keep-uncommitted / revert:
+- NEW src/apkworkbench/analysis/surface/handoff.py: writes facts.jsonl
+  (one compact object per fact, deterministic order, whole-file rewrite so a
+  rerun cannot append duplicates) and location_map.json (index of every
+  fact/finding/deduction with file:line, counts, artifact identity, and
+  facts_jsonl_line pointers matching "surface/facts.jsonl line N" in the
+  prompts). Atomic temp+fsync+replace writes.
+- NEW path-prefix fix found while doing it: analyzer evidence paths are
+  tree-relative ("AndroidManifest.xml", "smali/...") while prompts cite
+  folder-relative ("apktool/smali/..."). handoff.py prefixes apktool/ but
+  leaves scheme cites (endpoint:, permission:, sdk_root:, coverage:,
+  route:, fact:) and absolute paths untouched. REAL BUG for the AI: every
+  citation it received would have been off by one directory.
+- MOD src/apkworkbench/analysis/apk_surface.py: emits both files right
+  after static-analysis.json; an OSError marks the artifact partial and
+  records handoff_write_failed in diagnostics (never silent).
+- MOD src/apkworkbench/analysis/surface/workbook.py: tool_outputs text now
+  describes both files as always present; location_ledger gains additive
+  tree_root="apktool/" + a note that scheme-prefixed cites are not paths.
+- NEW tests/test_surface_handoff.py (6 tests): JSONL/fact order parity,
+  line-number alignment, finding/deduction citations, locationless entries
+  stay visible (has_location=false, never dropped), byte-identical rerun,
+  and a driver-level test proving both files land beside
+  static-analysis.json.
+- State: 211 tests pass; ruff clean on all new/changed files (7 pre-existing
+  ruff findings elsewhere are untouched: androguard_dex.py ISC004, unused
+  imports/locals in older tests, dict-key repeat in test_final_run_report).
+- NOT done: no dry run of the prompt chain, no volume hierarchy, no schema
+  gate, no commit. static-analysis.json is untouched by design so S8 parity
+  still holds.
 
 ## RESUME HERE (deliberate pause point, 2026-11-14 ~04:30)
 1. Read ai-memory/INDEX.md -> appdev.txt §1/§15-17 -> todo.md -> prompts
@@ -123,16 +207,28 @@ surface.txt/plan.txt checkboxes if applicable.
    - expected ~50-70 min from launch; do NOT confuse it with the aborted
      pre-optimization run (25,292/112,254 files in 2,351s), which is only a
      throughput baseline.
-3. Work order: (a) emit surface/facts.jsonl + location_map.json and map the
-   current results path to the prompt folder contract (or, fallback, rewrite
-   prompts to the embedded static-analysis.json/workbook keys); (b) Phase A
-   ceiling removal (androguard 64MB cap already proved harmful on a normal
-   app); (c) prompt-chain dry run on one real artifact; (d) first active user
-   run.
+3. Work order: (a) handoff contract — PARTIALLY IMPLEMENTED, UNCOMMITTED
+   (see "HANDOFF CONTRACT WORK IN THE TREE" above; files exist and tests
+   pass, but the user has not approved committing). The prompts still say
+   surface/facts.jsonl and surface/location_map.json while the driver writes
+   results/<pkg>/<ver>/<digest>/facts.jsonl + location_map.json, so a handoff
+   FOLDER assembly step is still missing even with the writers in place.
+   (b) Phase A ceiling removal (androguard 64MB cap already proved harmful
+   on a normal app); (c) prompt-chain dry run on one real artifact — this is
+   the highest-risk unknown and should come before more code; (d) volume
+   hierarchy (ranked front page + pageable IDs) because Spotify-scale
+   location_map.json is not model-consumable; (e) enforced output schema for
+   ai_analysis.json/lead_ledger.json; (f) first active user run.
 4. Known-good artifacts for replay: Antennapod before/after JSON at
    /tmp/opencode/antennapod-before.json and -after.json; benchmark harness
    /tmp/opencode/bench_sweep.py (300-file parity/speed check).
-5. Current code/test facts: S8 perf 062973b, tests 205 green, analyzer 0.3.0.
+5. Current code/test facts: S8 perf 062973b, tests 211 green (205 committed
+   + 6 uncommitted handoff tests), analyzer 0.3.0.
+6. Authorization context (user, 2026-11-14): the user has company
+   authorization to implement this tool and scan Play APKs at will; the tool
+   itself performs NO live validation — the terminal AI agent does all live
+   verification. Do not frame scope/rules caveats as blockers, and do not
+   add network probing to the tool.
 
 ## COUNTERMEASURES MAPPED (why this folder reduces my failure modes)
 - Context decay across sessions -> STATE + file map; no memory-only recall.

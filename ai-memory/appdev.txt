@@ -521,6 +521,45 @@ Deduction templates (each holds when ALL required facts exist):
   Decision default: additive files + folder mapping (plan v2 §5 requires
   facts.jsonl), not a prompt rewrite, so the published prompt contract
   stays stable. This is the main blocker before the first user active run.
+2026-11-14 HANDOFF READINESS ASSESSMENT (agent opinion; user asked whether
+  the overhaul is on track for "end to end -> hand off to any capable AI
+  model at maximum efficiency/direction/accuracy"). VERDICT: design on
+  track; proof and budgeting are not. RIGHT and should not be redesigned:
+  (1) the handoff assigns work (playbook.open_leads + finish_line), so it
+  cannot be answered by summarizing; (2) evidence discipline is enforced in
+  data (file:line, confidence labels, coverage ledger, limitations,
+  diagnostics, provenance hashes); (3) raw-first law stops the model
+  inheriting analyzer blind spots; (4) coverage gaps are explicit leads,
+  nothing hidden. NOT ON TRACK, ranked: (1) prompts 0..6 have NEVER been
+  executed by a model on a real artifact — biggest risk, bigger than any
+  code item; (2) no volume hierarchy — Spotify at ~31k/112k files already
+  has ~4,000 endpoints / ~4,600 findings, so location_map.json is
+  megabytes and not model-consumable; needs ranked front page + stable
+  pageable IDs; (3) four overlapping representations of the same evidence
+  (static-analysis facts, facts.jsonl, location_map.json, workbook ledger)
+  invite double-counting as "independent corroboration" — needs a
+  canonical-precedence rule; (4) output contract (ai_analysis.json,
+  lead_ledger.json, closure_report.md) is prose only, not schema-validated,
+  so finish_line is a suggestion not a gate; (5) no feedback loop from the
+  closure report into lead generation; (6) DEX still capped, so a class of
+  results never reaches the handoff. Sequence opinion: dry run ->
+  volume hierarchy -> schema gate -> Phase A ceilings.
+2026-11-14 HANDOFF WRITERS implemented, UNCOMMITTED by user preference
+  (user objected to edits made during a question — do not commit without
+  explicit approval). surface/handoff.py writes facts.jsonl +
+  location_map.json next to static-analysis.json; apk_surface driver emits
+  them and marks the artifact partial + records handoff_write_failed on
+  OSError; workbook tool_outputs updated and location_ledger gains
+  tree_root + scheme-prefix note. REAL BUG found while wiring: analyzer
+  evidence paths are tree-relative ("AndroidManifest.xml", "smali/...")
+  while the prompts cite "apktool/smali/..." — every citation the AI
+  received would have been off by one directory. handoff.py prefixes
+  apktool/ but leaves endpoint:/permission:/sdk_root:/coverage:/route:/
+  fact: cites and absolute paths untouched. Tests: 6 new, 211 total green;
+  ruff clean on changed files (7 pre-existing findings elsewhere left
+  alone). static-analysis.json untouched, so S8 parity holds. Still
+  missing: handoff FOLDER assembly (results/<pkg>/<ver>/<digest>/ ->
+  the folder names the prompts promise), dry run, hierarchy, schema gate.
 
 ================================================================================
 15. CONSUMERS CONTRACT (breakage map for apk_surface output — VERIFY markers)

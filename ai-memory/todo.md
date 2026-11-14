@@ -92,21 +92,48 @@ EOF
 (If run in a harness, background it and redirect; the here-doc process is
 just `.venv/bin/python -`, so pgrep by that string.)
 
+## PENDING USER DECISION (2026-11-14) — READ FIRST ON RESUME
+Uncommitted work in the tree, left deliberately after the user objected to
+edits being made during a direct question:
+```
+ M src/apkworkbench/analysis/apk_surface.py          (emit handoff files)
+ M src/apkworkbench/analysis/surface/workbook.py     (tool_outputs + tree_root note)
+?? src/apkworkbench/analysis/surface/handoff.py      (facts.jsonl + location_map.json)
+?? tests/test_surface_handoff.py                     (6 tests)
+```
+Tests 211 green; ruff clean on changed files. Nothing is committed.
+Options: (a) commit as-is, (b) keep working on it uncommitted, (c) revert.
+Do NOT commit without explicit user approval.
+
+## READINESS VERDICT (agent opinion, full text in INDEX.md + appdev §14)
+Design on track; proof and budgeting not. Right and worth protecting: work
+assignment not summary, enforced evidence discipline, raw-first law, nothing
+hidden. Not on track, ranked: (1) prompt chain 0..6 has never been run by a
+model on a real artifact; (2) no volume hierarchy for large apps (Spotify at
+~31k files: ~4,000 endpoints, ~4,600 findings — location_map.json is not
+model-consumable at that size); (3) four overlapping representations of the
+same evidence invite double counting; (4) no schema gate on the AI's output;
+(5) no feedback loop from closure report to lead generation; (6) DEX capped.
+Recommended order: dry run -> volume hierarchy -> schema gate -> Phase A.
+
 ## NEXT WORK (in order)
-1. **Handoff contract fix — the real blocker for a user active run.**
-   prompts 0/1/2/3/6 reference `surface/facts.jsonl` and
-   `surface/location_map.json`; neither is emitted. Facts are embedded in
-   `static-analysis.json`; `workbook.location_ledger` is the index.
-   Decision default: emit additive `facts.jsonl` + `location_map.json`
-   next to static-analysis.json and map the current
-   `results/<pkg>/<ver>/<digest>/` roots to the prompt folder names
-   (plan v2 §5 already requires facts.jsonl). Fallback: rewrite prompts to
-   the embedded keys (less stable).
-2. **Phase A ceiling removal.** The 64MB androguard cap fired on a NORMAL
+1. **Handoff folder assembly.** Writers now exist (facts.jsonl +
+   location_map.json next to static-analysis.json) but the prompts promise a
+   HANDOFF FOLDER with `apktool/`, `surface/`, `trufflehog/`, `manifest/`,
+   `google-play-bundle.json`, prompts 0..6, and a writable `ai_analysis/`.
+   Nothing assembles that yet. Decide: build a handoff folder (copy/symlink
+   policy) or rewrite prompts to the results layout. Plan v2 §5 favors the
+   additive folder.
+2. **Prompt-chain dry run on one real artifact** (highest-risk unknown).
+   Cheap, will expose path/wording/step-ordering bugs before more code.
+3. **Volume hierarchy**: ranked front page + stable pageable IDs for
+   endpoints/findings, so a 4MB location_map never has to be ingested.
+4. **Phase A ceiling removal.** The 64MB androguard cap fired on a NORMAL
    Antennapod app (dex partial) — empirical proof. Remove caps/timeouts
    per plan.txt Phase A; keep heartbeats.
-3. **Prompt-chain dry run** on one real artifact, then the first active
-   user run.
+5. **Output schema gate** for ai_analysis.json / lead_ledger.json /
+   closure_report.md, so finish_line is enforced rather than suggested.
+6. First active user run.
 
 ## KNOWN-GOOD REPLAY ARTIFACTS
 - /tmp/opencode/antennapod-before.json (pre-change, 03:32)
