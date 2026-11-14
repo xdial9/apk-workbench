@@ -32,7 +32,11 @@ URI_SPECIAL_RE = re.compile(
 )
 SCHEME_NAME_RE = re.compile(r"(?i)^([a-z][a-z0-9+.\-]{0,20})://")
 DOMAIN_RE = re.compile(
-    r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    # ReDoS-hardened (S7 finding): the unbounded (label dot)+ structure is
+    # possessive so a hostile multi-kilobyte label run cannot backtrack;
+    # inner label quantifiers stay plain (bounded <=63, no blowup).
+    r"(?<![A-Za-z0-9_])"
+    r"(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?+)\.++)+"
     r"[A-Za-z]{2,63}(?![A-Za-z0-9_])"
 )
 IPV4_RE = re.compile(
@@ -40,15 +44,18 @@ IPV4_RE = re.compile(
     r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})){3}(?![0-9.])"
 )
 IPV6_RE = re.compile(
+    # bounded repeats (<=7 groups): no ReDoS exposure. The second
+    # alternative carries optional leading groups up to the double-colon.
     r"(?<![0-9A-Fa-f:])("
     r"(?:[A-Fa-f0-9]{1,4}:){2,7}[A-Fa-f0-9]{1,4}"
-    r"|[A-Fa-f0-9]{0,4}::[0-9A-Fa-f:]{1,32}"
+    r"|[A-Fa-f0-9]{1,4}(?::[A-Fa-f0-9]{0,4}){0,4}::[0-9A-Fa-f:]{1,32}"
     r")(?![0-9A-Fa-f:])"
 )
 BRACKET_IPV6_RE = re.compile(r"\[([0-9A-Fa-f:]{2,45})\]")
 HOST_PORT_RE = re.compile(
-    r"(?<![0-9.])((?:\d{1,3}\.){3}\d{1,3}|(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+"
-    r"[A-Za-z]{2,63}):(\d{2,5})(?![0-9])"
+    r"(?<![0-9.])((?:\d{1,3}\.){3}\d{1,3}"
+    r"|(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?+\.++)+[A-Za-z]{2,63})"
+    r":(\d{2,5})(?![0-9])"
 )
 BASE64_RE = re.compile(
     r"(?<![A-Za-z0-9+/=_-])(?:[A-Za-z0-9+/]{24,}={0,2}|[A-Za-z0-9\-_]{24,}={0,2})(?![A-Za-z0-9+/=_-])"
