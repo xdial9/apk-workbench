@@ -486,6 +486,32 @@ Deduction templates (each holds when ALL required facts exist):
   launched with the same run_id (log
   /tmp/opencode/surface_spotify_optimized.log). Never treat the aborted
   run as validation evidence; only its rate baseline is useful.
+2026-11-14 TARGET-SELECTION decision context (user raised bounty value):
+  the in-flight Spotify job is a LOAD/CEILING fixture, not a bounty target.
+  It was chosen because 131MB/112k files/4-APK split bundle stresses the
+  sweeper, the 64MB androguard cap, split handling and wall-clock. Keep it
+  as scale evidence; do not expect payout-grade findings from it.
+  Division of labour (verified in code, not assumed):
+   - surface analyzer = map + indicators. It never contacts endpoints and
+     never claims a secret is live. Its secret-shaped output is
+     "secrets_hint"/"meta_data_key_like_value" (manifest_v2.looks_like_key),
+     i.e. LEADS.
+   - trufflehog stage = the only verified-secret producer
+     (analysis/trufflehog.py: `--results=verified`, `--concurrency=1`,
+     timeout 7200s, max_output 512MB). It is NOT part of the running job
+     because that job calls run_static_surface_analysis directly; the full
+     chain is `apkwb run --package <pkg>` (download -> verify -> decompile ->
+     surface -> trufflehog -> report).
+   - NEW Phase A item found here: trufflehog `--concurrency=1` plus the
+     512MB cap will be very slow on a 1GB+ decoded tree. Revisit with
+     correctness-neutral concurrency and output streaming.
+  Bounty-relevant target profile for the FIRST ACTIVE RUN (not Spotify):
+   mid-size (roughly 5-30MB), completed DEX, public/known-scope program,
+  rich API + deep-link/exported-component surface, and rules that accept
+  static-analysis-led findings. Large consumer apps are rare sources of
+  hardcoded live credentials (OAuth client IDs are public by design), so
+  the paying classes are authorization/logic bugs surfaced by the map and
+  verified secrets from the trufflehog stage.
 2026-11-14 Prompt/data-contract cross-check (queued post-S8): prompts
   0/1/2/3/6 instruct the terminal AI to open surface/facts.jsonl and
   surface/location_map.json; the analyzer emits NEITHER today (facts are
