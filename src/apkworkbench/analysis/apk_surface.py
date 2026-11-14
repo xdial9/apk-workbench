@@ -24,6 +24,11 @@ from apkworkbench.analysis.surface.classify import (
     classify_decoded_tree,
     inventory_apk_zip,
 )
+from apkworkbench.analysis.surface.manifest_v2 import (
+    parse_backup_rules,
+    parse_manifest_v2,
+    parse_network_security_config,
+)
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
 MAX_TEXT_FILE_BYTES = 8 * 1024 * 1024
@@ -220,86 +225,8 @@ def _android_attr(element: ET.Element, name: str) -> str | None:
 
 
 def _parse_manifest(path: Path, relative: str, findings: list[dict[str, Any]]) -> dict[str, Any]:
-    facts: dict[str, Any] = {
-        "package": None, "version_code": None, "version_name": None,
-        "min_sdk": None, "target_sdk": None, "permissions": [],
-        "application": {}, "components": [],
-    }
-    try:
-        root = ET.parse(path).getroot()
-    except (OSError, ET.ParseError) as exc:
-        return {"status": "failed", "error": f"{type(exc).__name__}: {exc}", **facts}
-
-    facts["package"] = root.attrib.get("package")
-    facts["version_code"] = _android_attr(root, "versionCode")
-    facts["version_name"] = _android_attr(root, "versionName")
-    for element in root:
-        tag = _local_name(element.tag)
-        if tag == "uses-sdk":
-            facts["min_sdk"] = _android_attr(element, "minSdkVersion")
-            facts["target_sdk"] = _android_attr(element, "targetSdkVersion")
-        elif tag in {"uses-permission", "uses-permission-sdk-23", "uses-permission-sdk-m"}:
-            name = _android_attr(element, "name")
-            if name:
-                facts["permissions"].append(name)
-                if name in SENSITIVE_PERMISSIONS:
-                    findings.append(_finding(
-                        "sensitive_permission", "permissions", "info",
-                        f"Sensitive permission requested: {name}", 
-                        "Permission request is an exposure indicator, not proof that the permission is used.",
-                        relative, None, ET.tostring(element, encoding="unicode"), 0.99,
-                    ))
-        elif tag == "application":
-            facts["application"] = {
-                "debuggable": _android_attr(element, "debuggable"),
-                "allow_backup": _android_attr(element, "allowBackup"),
-                "uses_cleartext_traffic": _android_attr(element, "usesCleartextTraffic"),
-                "network_security_config": _android_attr(element, "networkSecurityConfig"),
-                "task_affinity": _android_attr(element, "taskAffinity"),
-            }
-            app = facts["application"]
-            if app["debuggable"] == "true":
-                findings.append(_finding(
-                    "manifest_debuggable", "manifest", "high", "Application marked debuggable",
-                    "The decoded manifest sets android:debuggable=true.",
-                    relative, None, ET.tostring(element, encoding="unicode"), 0.99,
-                ))
-            if app["uses_cleartext_traffic"] == "true":
-                findings.append(_finding(
-                    "manifest_cleartext_traffic", "network_security", "high",
-                    "Application explicitly permits cleartext traffic",
-                    "The decoded manifest sets android:usesCleartextTraffic=true.",
-                    relative, None, ET.tostring(element, encoding="unicode"), 0.99,
-                ))
-            for component in element:
-                component_type = _local_name(component.tag)
-                if component_type not in {"activity", "activity-alias", "service", "receiver", "provider"}:
-                    continue
-                name = _android_attr(component, "name") or "(unnamed)"
-                exported = _android_attr(component, "exported")
-                has_intent_filter = any(_local_name(child.tag) == "intent-filter" for child in component)
-                component_permission = _android_attr(component, "permission")
-                entry = {
-                    "type": component_type, "name": name, "exported": exported,
-                    "has_intent_filter": has_intent_filter, "permission": component_permission,
-                }
-                facts["components"].append(entry)
-                if exported == "true":
-                    findings.append(_finding(
-                        "exported_component", "components", "medium",
-                        f"Exported Android component: {name}",
-                        "Review externally reachable component behavior, permissions, input validation, and sensitive operations.",
-                        relative, None, ET.tostring(component, encoding="unicode"), 0.94,
-                    ))
-                elif exported is None and has_intent_filter:
-                    findings.append(_finding(
-                        "component_export_default", "components", "info",
-                        f"Component export behavior depends on platform/target SDK: {name}",
-                        "android:exported is omitted while an intent filter exists; determine effective behavior for supported Android versions.",
-                        relative, None, ET.tostring(component, encoding="unicode"), 0.83,
-                    ))
-    facts["permissions"] = sorted(set(facts["permissions"]))
-    return {"status": "success", **facts}
+    """Thin compat wrapper; the v2 engine lives in surface/manifest_v2.py."""
+    return parse_manifest_v2(path, relative, findings)
 
 
 def analyze_apk_surface(
@@ -366,33 +293,52 @@ def analyze_apk_surface(
         config_name = config_ref.rsplit("/", 1)[-1]
         config_path = next((p for p in files if p.name == config_name + ".xml"), None)
         if config_path:
-            try:
-                config_root = ET.parse(config_path).getroot()
-                coverage["network_security_config"] = "success"
-                for node in config_root.iter():
-                    if _local_name(node.tag) == "base-config" and node.attrib.get("cleartextTrafficPermitted") == "true":
-                        findings.append(_finding(
-                            "network_config_cleartext", "network_security", "high",
-                            "Network security config permits cleartext traffic",
-                            "A base-config explicitly permits cleartext traffic.",
-                            config_path.relative_to(root).as_posix(), None,
-                            ET.tostring(node, encoding="unicode"), 0.99,
-                        ))
-                    if _local_name(node.tag) == "debug-overrides":
-                        findings.append(_finding(
-                            "network_config_debug_overrides", "network_security", "medium",
-                            "Network security config contains debug overrides",
-                            "Review debug trust anchors and ensure they are not included in a production build.",
-                            config_path.relative_to(root).as_posix(), None,
-                            ET.tostring(node, encoding="unicode"), 0.92,
-                        ))
-            except (OSError, ET.ParseError) as exc:
-                coverage["network_security_config"] = "failed"
-                diagnostics.append({"code": "network_config_parse_failed", "message": f"{config_path}: {exc}"})
+            nsc = parse_network_security_config(config_path, config_path.relative_to(root).as_posix())
+            coverage["network_security_config"] = (
+                "success" if nsc["status"] == "parsed" else "failed"
+            )
+            findings.extend(nsc["findings"])
+            manifest_facts.setdefault("network_security_config_facts", nsc["facts"])
+            if nsc["status"] != "parsed":
+                diagnostics.append({
+                    "code": "network_config_parse_failed",
+                    "message": f"{config_path}: {nsc.get('error')}",
+                })
         else:
             coverage["network_security_config"] = "referenced_but_not_found"
     elif manifest_facts.get("status") == "success":
         coverage["network_security_config"] = "not_configured"
+
+    # Backup-rules resolution (S3): same pattern as the NSC reference above.
+    backup_facts: dict[str, Any] = {}
+    for rule_key in ("full_backup_content", "data_extraction_rules"):
+        rule_ref = app.get(rule_key) if isinstance(app, dict) else None
+        if not rule_ref:
+            continue
+        rule_name = rule_ref.rsplit("/", 1)[-1]
+        rule_path = next(
+            (p for p in files if p.name == rule_name or p.name == rule_name + ".xml"),
+            None,
+        )
+        if rule_path is None:
+            backup_facts[rule_key] = {
+                "reference": rule_ref, "status": "referenced_but_not_found",
+            }
+            continue
+        parsed = parse_backup_rules(rule_path, rule_path.relative_to(root).as_posix())
+        backup_facts[rule_key] = parsed
+        for entry in parsed.get("entries", []):
+            if entry.get("domain") in {"external", "file", "database", "sharedpref"} and entry.get("action") == "include":
+                findings.append(_finding(
+                    "backup_include_data_domain", "data_storage", "medium",
+                    f"Backup rule includes data domain: {entry.get('domain')}",
+                    "Backup rules explicitly include a private data domain; "
+                    "review against the sensitivity of stored data.",
+                    parsed["reference"], None, entry.get("path") or entry.get("domain"), 0.85,
+                ))
+    if backup_facts:
+        manifest_facts["backup_rules"] = backup_facts
+        coverage["backup_rules"] = "success"
 
     dependency_evidence: dict[str, list[str]] = {name: [] for name in DEPENDENCY_MARKERS}
     api_clients: dict[str, list[dict[str, Any]]] = {name: [] for name in API_CLIENT_MARKERS}

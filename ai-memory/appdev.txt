@@ -396,6 +396,11 @@ Deduction templates (each holds when ALL required facts exist):
        corpus E; AI handoff D.1 (§8 plan); per-run workspaces F.
 2026-11-14 Tool commands: trufflehog flags verified; apktool flags verified.
 2026-11-14 appdev.txt v2 sentinel: created knowledge bank (this file).
+2026-11-14 S2 speed review (PERFORMANCE LAW): classifier = one walk + one
+  8-byte sniff read per file (cached, negligible); zip inventory = one full
+  streaming pass over the original APK (required by Appendix C; comparable
+  to the existing mandatory hash pass). Adopted: correctness-neutral;
+  no skipped files, no caps. S2 landed commit after S1 (9898217).
 
 ================================================================================
 15. CONSUMERS CONTRACT (breakage map for apk_surface output — VERIFY markers)
