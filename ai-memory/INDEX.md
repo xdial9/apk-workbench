@@ -77,13 +77,13 @@ surface.txt/plan.txt checkboxes if applicable.
   F2 closed; F6/F7 documented; P2-2 pacing deferred to plan item A).
   Tests 156 passing. Remaining acquisition polish: minor.
 - SURFACE OVERHAUL (plan v2): S1 9898217, S2 652a088, S3 7d1cb43, S4 9a55e64,
-  S5 3794764, S6 5077a31 (all pushed; tests 195): S6 = workbook builder
-  (mission/laws/permission map/location ledger/playbook/finish line — the
-  §7A active-agent handoff), finalize_result (distinct-vs-raw metrics),
-  analyzer 0.3.0 + stale-reuse rejection. Next: S7 (driver polish + full
-  test campaign per surface-plan §7: manifest/sweep/facts/deductions/
-  checkpoint/progress/compat/adversarial) then S8 live validation on the
-  Antennapod fixture + one large APK; then reconcile plan.txt.
+  S5 3794764, S6 5077a31, S7 e22faaf (all pushed; tests 203): S7 = adversarial
+  campaign + REAL FIND: catastrophic ReDoS in DOMAIN_RE/HOST_PORT_RE (hostile
+  huge label runs could wedge the sweep forever — violates never-frozen);
+  fixed with possessive quantifiers on the unbounded groups; IPv6 second
+  alternative extended (bounded). Consumer contract asserted on every result.
+  Next: S8 live validation (Antennapod fixture + one large APK, wall-clock
+  delta recorded) then reconcile plan.txt + prompts cross-check.
 - Environment: repo /home/user/APK-Workbench; venv .venv/bin/python; pytest
   all-green baseline 152; apktool 3.0.3; trufflehog 3.99.8; androguard 4.1.4
   pinned; live fixture workspace /tmp/opencode/ws (VERIFY exists before use).

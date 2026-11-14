@@ -419,6 +419,13 @@ Deduction templates (each holds when ALL required facts exist):
 2026-11-14 S6 landed: workbook + finalize_result (distinct metrics) +
   analyzer 0.3.0 with stale-reuse rejection; workchain prompts now have a
   concrete data contract (workbook section) to point the AI at.
+2026-11-14 S7 landed: adversarial campaign FOUND a real ReDoS (DOMAIN_RE/
+  HOST_PORT_RE backtracking on huge label runs -> wedge forever); fixed with
+  possessive quantifiers on unbounded groups only (bounded quantifiers stay
+  plain or they break legitimate matches — lesson: apply possessive to the
+  unbounded repetition, not the bounded inner ones). IPv6 second alternative
+  extended with bounded leading groups. Adversarial fixtures are now a
+  permanent regression gate.
 
 ================================================================================
 15. CONSUMERS CONTRACT (breakage map for apk_surface output — VERIFY markers)
