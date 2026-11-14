@@ -1,0 +1,524 @@
+================================================================================
+APK WORKBENCH — FIRST REPORT
+Program purpose, stage-by-stage pipeline walkthrough, findings produced,
+tool-to-tool handoff mechanics, and an overall engineering opinion.
+Report date: 2026-11-14. Codebase: APK-Workbench (src/apkworkbench).
+NOTE: the auth layer has been upgraded to explicit modes
+(auto | account | anonymous) on branch feature/goopdl-account-auth; the report
+reflects that state.
+================================================================================
+
+--------------------------------------------------------------------------------
+0. WHAT THIS PROGRAM IS
+--------------------------------------------------------------------------------
+APK Workbench is a Linux-native Python CLI (package `apk-workbench` v0.2.0) for a
+sequential, forensically careful analysis pipeline over Android apps from Google
+Play:
+
+    discover -> download -> verify -> decompile -> static surface analysis ->
+    TruffleHog secret scan -> reporting -> reconciliation
+
+Its stated ethos (printed in the CLI banner): "SLOW. SIMPLE. SEQUENTIAL. VERIFIED."
+Every step is bounded, hashed, atomically persisted, fail-closed, and re-verifiable.
+It refuses parallelism that could compromise auditability, refuses symlinks that
+could escape the workspace, and refuses to proceed past a stage whose evidence
+it cannot fully account for.
+
+Acquisition source policy: GOOGLE PLAY ONLY (enforced in code — the CSV ledger
+rejects any other source string). Authentication is via goopdl 2.0.0 in one of
+three explicitly configured modes:
+  - account (recommended): the operator's own Google account via `goopdl auth
+    login` (keyring) or GOOPDL_ACCOUNT_EMAIL/GOOPDL_AAS_TOKEN env vars. goopdl
+    registers a device on the account, exchanges an AAS token for a short-lived
+    FDFE bearer token via Google's Android setup endpoint, and rotates it
+    automatically. The third-party Aurora dispenser is never contacted.
+  - anonymous: Aurora Store's public token dispenser (third-party, frequent
+    outages/rate limits). Fails closed (refuses to run) if account env vars are
+    set — account tokens are never read in this mode.
+  - auto (default): account when configured, anonymous otherwise.
+Extension points that are fully built but NOT yet wired into the CLI runtime:
+a normalized SQLite evidence database (database/evidence.py), an analyzer
+registry/contract/executor framework (analysis/registry.py, contracts.py,
+executor.py) with fork-isolated execution and resource limits.
+
+--------------------------------------------------------------------------------
+1. STAGE-BY-STAGE: WHAT EACH STEP DOES
+--------------------------------------------------------------------------------
+
+=== STAGE 1: doctor ===
+Invoked:   `apkworkbench doctor`
+Module:    src/apkworkbench/cli/main.py (doctor), dependencies/detector.py
+What it does:
+  - Health-checks external executables: playstore-cli, java, apktool,
+    trufflehog (each marked REQUIRED), plus androguard. Each is checked for
+    presence (shutil.which) and health (its version/help command exits 0,
+    8-second timeout). Executable paths can be overridden in config
+    (tools.playstore_cli/java/apktool/trufflehog).
+  - NEW: prints the resolved Google Play session source (AUTH line), using a
+    masked account email, e.g.
+      [AUTH] Play session source: ACCOUNT (goopdl_saved_account; d***@gmail.com)
+    and actionable hints for incomplete/missing credentials.
+Exit: 1 if any REQUIRED dependency is missing/unhealthy.
+Handoff: doctor is purely advisory; no next stage is invoked directly.
+It is the correctness gate the operator uses before running the pipeline.
+
+=== STAGE 2: discover ===
+Invoked:   `apkworkbench discover [--query ...] [--category ...] [--limit N]
+           [--per-category 200] [--per-query 516] [--packages-file F]`
+Modules:   cli/main.py (discover), sources/google_play.py (discover/search/top/
+           categories), sources/google_play_anonymous.py (token/session)
+What it does:
+  1. Builds a GooglePlaySource with the configured auth mode.
+  2. If no categories were given explicitly, first enumerates the full Play
+     category catalogue (all subcategories under APPLICATION and GAME roots)
+     via the internal Play API (PlayApi.categories).
+  3. Executes the discovery channels in order: all search queries first
+     (each up to 516 results), then each category's top-free chart
+     (each up to 200 results). Every Play API call is preceded by a random
+     2-5 s sleep (rate damping) and can retry HTTP 429 up to 4 times with
+     exponential backoff (30/60/120/240 s + jitter). A 401 triggers a forced
+     session re-mint (goopdl rotation) and exactly one retry.
+  4. Results are de-duplicated by Android package ID (regex-validated) and
+     stored as PlayApp records (package_id, title, developer, version_name,
+     version_code).
+  5. CRASH-SAFETY (new): after EVERY query/category channel completes, the
+     source fires an on_batch callback and the CLI merges+rewrites the
+     discovery catalog `database/google_play_discovery.csv` atomically
+     (temp file -> fsync -> os.replace -> directory fsync). The catalog is a
+     ROLLING UNION: reruns only add IDs, so a 429 abort at category 45 of 60
+     keeps the first 44 categories' apps permanently.
+  6. A --packages-file appends exact package IDs (one per line, regex
+     validated, comments allowed).
+
+What it finds: PlayApp rows — app metadata only, no bytes.
+
+What it does NOT do: no pagination walking (search and top charts are bounded
+server-side, hence the per-channel limits), no download.
+
+Handoff to download: the catalog CSV (package_id,title,developer,
+version_name,version_code) is the input contract. download reads it (or a
+single --package synthesizes a one-row catalog) and walks it in order.
+
+=== STAGE 3: download ===
+Invoked:   `apkworkbench download [--apk-count N | --package ID]`
+Modules:   cli/main.py (download, _write_catalog/_read_catalog, _plan_digest),
+           sources/google_play.py (inspect, download), database/workspace.py
+           (history/attempts/manifests), holding the workspace file lock.
+What it does (in strict order):
+  1. FILE LOCK: the whole command runs under WorkspaceDatabase._write_lock()
+     (re-entrant fcntl.flock on database/.workspace.lock).
+  2. SELECTION: reads the discovery catalog; drops packages already present in
+     the immutable download history (a package is acquired once).
+  3. INSPECT (no bytes downloaded yet): for each candidate, source.inspect()
+     calls PlayApi.app_delivery(package) and:
+       - captures the delivery metadata: every APK/asset/obb component with
+         name, size, URL (URLs are NOT persisted), and Play-provided integrity
+         digests — SHA-256 mandatory for APK components (converted from
+         base64url), SHA-1 tolerated for OBBs;
+       - captures the app signer certificate SHA-256 set;
+       - rejects any component with unsafe filenames (path separators),
+         non-.apk/.obb kinds, or missing digests; requires a base.apk;
+       - produces a frozen PlayBundlePlan.
+  4. DEDUPLICATION by content: _plan_digest hashes the frozen delivery
+     metadata (APK files only). Plans whose APK digests all already exist in
+     download history are dropped (content-addressed idempotency).
+  5. MANIFEST FREEZE — BEFORE ANY BYTES MOVE: write_manifest() publishes
+     database/run_manifests/run_<uuid>.csv (one row per APK component) with
+     synthetic download_url values (`google-play://<pkg>/<version>/<name>` —
+     URLs are provenance identifiers, never persisted CDN links) and the
+     expected sha256/size/signer. Manifests are write-once: publish failure
+     refuses overwrite; read failure rejects any malformed row. Run ID is
+     remembered in the CLI context for later stages. This is the spine of the
+     whole reconciliation system: everything after this point is accountable
+     against this frozen manifest.
+  6. DOWNLOAD: for each plan, source.download():
+       - creates downloads/<package>-<versionCode>/ with symlink-hardened
+         directory creation;
+       - uses playstore-cli's Downloader to stream each component; retries up
+         to 3 attempts with capped exponential backoff; a daemon progress
+         monitor polls the .part file's size every 0.5 s for UI progress;
+       - after transfer, re-hashes EVERY file and verifies size + Play digest
+         (algorithm per component);
+       - writes google-play-bundle.json into the bundle directory (atomic,
+         fsynced) recording every component: name, kind, size, local SHA-256,
+         play hash algorithm/digest, and play_hash_verified: True.
+  7. PERSISTENCE: the CLI re-hashes each APK once more, cross-checks against
+     the plan (a mismatch is a hard error) and appends:
+       - one immutable history row per APK into download_history.csv
+         (deduplicated on sha256 — the same bytes can never be recorded twice);
+       - one row per attempt (success or failure) into download_attempts.csv.
+         Any database failure is FATAL (exit 1); a mere download failure marks
+         the attempt and continues.
+  8. EXIT CODES: 0 complete; 2 = shortfall (e.g. --apk-count 10 but only 8
+     acquired due to paid/unavailable apps); 1 = failures present.
+
+What it finds: candidate lists; per-app Play delivery facts (components,
+sizes, digests, signers). Unavailable apps (paid/region/device-incompatible)
+raise NotDownloadable -> skipped silently in batch mode (acknowledged as
+expected; reflected in the shortfall exit code).
+
+Handoff to verification: the frozen manifest (run ID) + on-disk bundle
+directories + the bundle JSON metadata.
+
+=== STAGE 4: verify-downloads / Phase-One verification ===
+Invoked:   standalone `apkworkbench verify-downloads --run-id R`,
+           AND automatically inside `run` after download as a GATE.
+Module:    acquisition/verification.py
+What it does (deliberately independent of the downloader's own checks):
+  1. Loads the immutable manifest and revalidates every row.
+  2. For each APK row: rejects symlinks or path escapes outside downloads/,
+     verifies size, re-computes local SHA-256 (4 MiB streaming chunks, with
+     live progress).
+  3. Groups rows into per-(package, version) bundles; requires exactly one
+     directory per bundle containing google-play-bundle.json; validates the
+     bundle metadata identity against the manifest.
+  4. For EVERY component (APKs and OBBs): re-checks size, local SHA-256, AND
+     the Play-provided digest (sha1/sha256 as recorded); requires
+     play_hash_verified, requires base.apk present, rejects leftover *.part
+     files, and enforces set-equality between bundle APK hashes and manifest
+     hashes.
+  5. Writes reports/phase_one_verification_<run_id>.json and returns a summary.
+
+Findings produced: verification pass/fail per bundle; tampering, truncation,
+hash mismatch, stray part files, bundle identity drift are all loudly rejected.
+
+Handoff: this is a GATE. `run` refuses to proceed to decompilation or analysis
+if verification fails. Nothing unverified can ever reach analysis.
+
+=== STAGE 5: decompile ===
+Invoked:   `apkworkbench decompile [--limit N] [--force] [--run-id R]`
+Module:    decompilation/runner.py (DecompilationRunner)
+What it does:
+  1. Selects APK rows from history (optionally scoped to a run manifest).
+  2. RE-VERIFIES every APK before use — no symlink, resolves strictly inside
+     downloads/, must be a regular .apk, and its SHA-256 is re-computed and
+     compared to the recorded digest + size. A diverging APK is rejected BEFORE
+     any tool runs (this makes the whole pipeline tamper-evident even after
+     acquisition).
+  3. TRANSACTIONAL DECODE: runs `apktool d --jobs 4 --force -o <staging dir>
+     <apk>` where staging is a hidden directory; on success the output is
+     published atomically (backup via os.replace, publish, backup removed;
+     rollback on publish failure). Timeout defaults to 3600 s per APK;
+     process-group SIGTERM -> 10 s -> SIGKILL escalation.
+  4. PARTIAL OUTPUTS ARE KEPT: if apktool dies with usable staged output (or
+     times out with output), the output is published as apktool_status=partial
+     with an explanatory note. The status lives in processing_status.csv
+     (keyed by APK sha256; jadx_status column is legacy and written as
+     "not_used" — JADX was removed from the pipeline).
+  5. Failure preserves the previous good output and falls back to the previous
+     status rather than a bare "failed".
+
+What it finds: the decoded trees — AndroidManifest.xml, resources, smali,
+assets — under results/<package>/<version>/<apk-sha256>/apktool/.
+Also: apktool.log with the exact command, live output, and return code.
+
+Handoff to surface analysis: the apktool output directories (eligible status:
+success or partial) are read by the static surface analyzer; the TruffleHog
+scanner consumes the same directories.
+
+=== STAGE 6: surface (static surface analysis, part of `run`) ===
+Invoked:   inside `run` (no standalone CLI command yet).
+Modules:   analysis/apk_surface.py (run_static_surface_analysis +
+           analyze_apk_surface), analysis/androguard_dex.py
+What it does:
+  1. SELECTS artifacts with apktool_status in {success, partial}; rejects
+     symlinked paths; SKIPS AND REUSES prior successful/partial JSON results
+     for the same analyzer version (0.2.0); re-hashes the original APK to
+     ensure the source bytes still match before analyzing.
+  2. POINTER ANALYSIS over the decoded tree (analyze_apk_surface):
+     - Manifest parsing: package/version, min/target/max SDK, permissions
+       (sensitive-permission findings: e.g. RECEIVE_SMS, ACCESS_FINE_LOCATION,
+       READ_CONTACTS...), application flags (debuggable, cleartext traffic,
+       custom networkSecurityConfig + its resolution), and every component
+       with exported/intent-filter/permission (findings: exported_component,
+       component_export_default).
+     - FILE-BY-FILE regex sweep of all text files within budgets (8 MB per
+       file, 512 MB total, symlink-skipped, sorted deterministic order):
+       * 19 smali/XML security rules (CODE_RULES): WebView
+         addJavascriptInterface, setAllowFileAccess/Universal,
+         setJavaScriptEnabled, mixed content, dynamic code loading
+         (DexClassLoader), Runtime.exec, custom TrustManager trusting all
+         certs, SslErrorHandler.proceed, mutable PendingIntents, world-
+         readable file modes, weak TLS protocols (SSLv3/SSL/TLSv1), weak
+         ciphers (DES/RC4/AES/ECB), java.util.Random for crypto,
+         rawQuery/execSQL SQL injection patterns, external storage access,
+         cleartext http URLs. Each finding carries severity, confidence,
+         rationale, and a snippet.
+       * NETWORK SURFACE: absolute URLs, domains, IPv4 addresses, Retrofit
+         base URLs and route annotations (with HTTP methods), HTTP method
+         literals, generic route paths, API client-library fingerprints
+         (okhttp, Retrofit, Firebase/GMS, SendGrid, etc. via dependency
+         markers), HTTP header candidates, rate-limit/retry indicators
+         (e.g. Retry-After handling, 429 handling, backoff code) each with
+         +/-30 line proximity context and an honest per-endpoint
+         client_rate_limit_status; server-side rate limits are explicitly NOT
+         guessed ("not_determined_from_static_apk").
+       * DEPENDENCY INVENTORY: ~30 known SDK markers detected per file path
+         and content.
+       * NATIVE LIBRARY inventory (.so/.a).
+     - FINDING CAPS: 100k findings max; coverage downgraded to "partial"
+       whenever any diagnostic indicates a truncated view.
+     - DEX ANALYSIS (androguard_dex.py): in an ISOLATED FORKED PROCESS (with
+       pipe-based JSON transfer, 64MB output cap, 1800 s timeout, terminate/
+       kill ladder), androguard (pinned 4.1.4) parses every DEX of the
+       ORIGINAL APK (not the apktool output) and derives:
+       * external API method references with their call sites and API
+         category (network/webview/cryptography/storage/authentication);
+       * the internal call graph (capped at 200k edges);
+       * API-relevant string constants: endpoints, route paths, domains
+         (asset paths suppressed), headers, rate-limit clues — each with
+         cross-reference context (first 100 referencing methods);
+       * permission -> API usage mapping per target SDK.
+  3. PERSISTENCE: results/<package>/<ver>/<digest>/static-analysis.json
+     (atomic 0600 write) + run-level marker
+     results/runs/<run_id>/static-analysis-run.json (running -> final status).
+
+What it finds: the API/network inventory: endpoints, domains, IP hosts,
+Retrofit routes with methods, API client call-sites, headers, rate-limit
+indicators, dependency fingerprints, native libraries, sensitive permissions,
+exported attack surface, and the 19-rule smali security findings — all
+traceable to exact file/line locations. Honest coverage fields record exactly
+what was and was not performed (e.g. runtime_behavior: not_performed).
+
+Handoff to analyze (TruffleHog): after surface, `run` counts usable apktool
+outputs; if zero, TruffleHog is skipped entirely. Otherwise analyze proceeds
+over the same apktool directories.
+
+=== STAGE 7: analyze (TruffleHog verified secret scan) ===
+Invoked:   `apkworkbench analyze [--limit N] [--force] [--run-id R]`
+Modules:   analysis/trufflehog.py (TruffleHogScanner), analysis/trufflehog_adapter.py
+What it does:
+  1. Selects apktool outputs (success/partial only), scoped to the run
+     manifest when given; skip-reuse of prior successful scans; validation of
+     package IDs/version codes/digests; symlink checks everywhere.
+  2. CAPABILITY GATE: before scanning it runs `trufflehog filesystem --help`
+     and requires the safe flag set (--results --no-update --json
+     --concurrency --fail-on-scan-errors) to be advertised by the installed
+     binary; it aborts rather than scanning with unknown behavior. A missing
+     tool version refuses to instantiate the analyzer adapter (no invented
+     versions).
+  3. SCAN: runs `trufflehog filesystem --concurrency=1 --no-update
+     --results=verified --json --fail-on-scan-errors <dir>` in its own process
+     group; streaming stdin/stdout handling with a 512 MB output cap, 2 h
+     timeout, SIGTERM/SIGKILL escalation, and live progress reporting
+     (including "VERIFIED finding #N: <Detector>" lines).
+  4. STRICT RESULT POLICY: only findings with "Verified": true are kept; any
+     malformed JSON line, ANY unverified finding, or a non-zero exit REFUSES
+     to publish results at all. Evidence written (atomic, 0600):
+     findings.json, findings-verified.json, stdout.jsonl (full raw evidence),
+     stderr.log, trufflehog.log. An aggregate reports/findings.csv is rebuilt
+     across all successful scans (complete original finding objects retained
+     by design).
+  5. Optional adapter path: TruffleHogAnalyzer wraps the scanner into the
+     analyzer contract (analyzer_id=trufflehog, verification_state=
+     tool_verified, evidence locations with file/line, raw_data retaining the
+     complete original finding).
+
+What it finds: live-verified credentials — API keys, tokens, signing material
+etc. — with detector name/type, file, line, and full provenance. Verified-only
+means near-zero false positives, at the cost of missing unconfirmed hints.
+
+Handoff to report: the on-disk evidence (findings.json per artifact) plus the
+per-artifact static-analysis.json plus processing_status rows.
+
+=== STAGE 8: report ===
+Invoked:   `apkworkbench report [--run-id R]`
+Modules:   reporting/generator.py (per-APK), reporting/final_run.py (run-level)
+What it does:
+  1. Per-APK reports: for every history row, reads the artifact's trufflehog
+     findings ONLY IF scan_status == success; requires every finding to have
+     Verified: true (a failed scan result cannot leak via stale findings);
+     writes reports/<pkg>/<ver>/<sha>/report.json + report.html (HTML fully
+     escaped, inline CSS, per-finding fingerprints, complete original JSON in
+     details blocks).
+  2. Run-level final report (with --run-id): scope = exactly the frozen
+     manifest; matches artifacts strictly by run/package/version/source
+     identity; aggregates:
+       - stage accounting: acquisition, independent verification, apktool,
+         static surface, trufflehog, report generation, full reconciliation;
+       - api_catalog: the aggregate network/API surface across all artifacts
+         (endpoints, domains, routes, client libraries, smali call-sites,
+         headers, rate-limit indicators) plus dex-derived external API
+         references, call-graph edges, DEX strings, permission->API usage;
+       - explicit interpretation/limitations section (e.g. server-side rate
+         limits not determined from static analysis).
+     Writes reports/runs/<run_id>/final-report.json + .html.
+
+What it finds: consolidated findings inventory + evidence links; the report
+is the human/machine-readable endpoint of the whole pipeline.
+
+Handoff: reporting is terminal; `run` calls it as the last stage after saving
+the run ID.
+
+=== STAGE 9: status / reconcile ===
+Invoked:   `apkworkbench status`, `apkworkbench reconcile --run-id R`
+Modules:   cli/main.py, database/workspace.py (reconcile_run)
+What it does:
+  - status: counts of acquired binaries and apktool/scan outcomes.
+  - reconcile: terminal accounting of EVERY item in the frozen manifest by
+    cross-referencing download history, download attempts, processing status,
+    the phase-one verification report, static-analysis run markers, per-
+    artifact static-analysis.json, and trufflehog findings.json — all under
+    symlink-checked path handling. Produces per-item outcomes such as
+    complete, complete_with_warnings, download_failed,
+    history_commit_failed, interrupted_or_running, history_missing,
+    acquisition_unaccounted, acquisition_conflict, pending_decompilation,
+    decompilation_failed, analysis_failed, static_analysis_failed,
+    awaiting_analysis (etc.). Exit 1 if any item is unresolved.
+
+Findings: accountability — the pipeline's answer to "was anything lost,
+tampered, or left half-done?"
+
+=== STAGE 10: run (full pipeline orchestration) ===
+Invoked:   `apkworkbench run [--apk-count N]`
+What it does: download -> Phase-One verification (gate) -> decompile ->
+surface -> analyze -> report -> reconcile_run, each scoped to the same frozen
+run ID, each stage tolerating individual failures while keeping the ledger
+exact, under one workspace lock. Skips TruffleHog when no usable apktool
+output exists; proceeds to each stage only when the previous evidence is
+adequate. Nonzero exit if any stage reports issues.
+
+--------------------------------------------------------------------------------
+2. HOW TOOLS ARE CALLED (CHAIN MECHANICS SUMMARY)
+--------------------------------------------------------------------------------
+CLI orchestrates everything; each stage's PERSISTED ARTIFACTS are the handoff
+to the next stage (never in-memory state):
+  discover  -> database/google_play_discovery.csv
+  download  -> downloads/*-*/[APKs] + google-play-bundle.json +
+               run manifests (immutable) + history/attempts CSVs
+  verify    -> reports/phase_one_verification_<run>.json (GATE)
+  decompile -> results/<pkg>/<ver>/<sha>/apktool/* + apktool.log
+               + processing_status.csv updates
+  surface   -> results/.../static-analysis.json
+               + results/runs/<run>/static-analysis-run.json
+  analyze   -> results/.../trufflehog/findings.json (+stdout.jsonl, logs)
+               + processing_status.csv + reports/findings.csv (aggregate)
+  report    -> reports/<pkg>/<ver>/<sha>/report.{json,html}
+               + reports/runs/<run>/final-report.{json,html}
+  reconcile -> terminal per-item accounting (exit 1 on unresolved)
+External process invocations used: goopdl (auth/token), Google Play FDFE API
+via playstore-cli (categories/search/charts/delivery/Downloader), apktool,
+trufflehog, androguard (library, in forked child).
+
+INTEGRITY CHAIN (the program's core discipline), 4 independent hash passes for
+acquired APKs: (1) playstore-cli verifies against Play digests while
+streaming; (2) GooglePlaySource.download re-verifies; (3) CLI re-hashes and
+cross-checks against the frozen plan; (4) Phase-One verification re-hashes
+everything once more before any analysis.
+
+--------------------------------------------------------------------------------
+3. WHAT I'D SAY ABOUT THIS TOOL (DETAILED OPINION)
+--------------------------------------------------------------------------------
+
+STRENGTHS (genuinely good engineering, uncommon rigor)
+1. The frozen-manifest-before-download design is the standout idea. Most APK
+   pipelines lose integrity where acquisition meets analysis; this one makes
+   the boundary auditable: everything downstream is accountable against a
+   write-once manifest, and `reconcile` can enumerate any drift, ever.
+2. Fail-closed discipline is consistent, not cosmetic: symlink checks on
+   every path component that crosses a trust boundary (logs, outputs, tool
+   inputs, DB files), strict regex validation everywhere, atomic fsynced
+   0600 writes, immutable append-only history, checksummed schema migrations,
+   process trees killed on timeouts instead of orphan children.
+3. The verified-only TruffleHog posture (refusing to publish when ANY output
+   is malformed or unverified) trades recall for trustworthiness and is the
+   right call for evidence-grade secret scanning.
+4. Duplicate suppression by content (plan digests vs history) makes bulk
+   acquisition idempotent and resumable — an overnight 15k campaign can be
+   re-run repeatedly without re-pulling.
+5. The auth-mode design fixes the prior single-point-of-failure and is the
+   practical difference between "works" and "works tonight at 3am": the
+   operator's own account no longer depends on a third-party dispenser being
+   up. (Validated live: discovery, download, and full hash verification all
+   succeeded through account mode.)
+6. Honest reporting: explicit limitations, "not_determined_from_static_apk",
+   coverage statuses, and an interpretation block in the final report. The
+   tool never overstates what static analysis can know.
+
+WEAKNESSES AND IMPROVEMENT OPPORTUNITIES (ordered by impact)
+
+A. Throughput and pacing (the big one)
+   - Every Play call sleeps a random 2-5 s; a 60-category discovery walk plus
+     per-app inspect resolution makes a 15k crawl extremely slow (days). The
+     2-5 s damping is applied even to pure metadata lookbacks that could be
+     much more aggressive, and there is no request budgeting/burst control
+     beyond the built-in 429 ladder.
+   - Improvement: adaptive pacing (measure server/provider latency and 429
+     history per channel; relax damping for account mode which tolerates far
+     more pressure than the shared dispenser), and/or a persistent dispatch
+     journal so a huge crawl resumes exactly where it stopped rather than
+     re-walking stale channels.
+B. Enumerations are bounded server-side (516 search results, 200 chart rows)
+   and nothing walks pages/cursors beyond that. The 15k target is therefore
+   statistical, not guaranteed. Improvement: channel rotation (query
+   permutation engines), plus per-category pagination where the upstream
+   client exposes cursors (needs playstore-cli API support; else multiple
+   country targets rotate coverage).
+C. Dead delivery data: between inspect (metadata frozen) and download, Play
+   can invalidate the delivery response; a long stalled batch can carry
+   expired data into later components and fail after 3 blind retries.
+   Improvement: on download failure of a specific plan, automatically
+   re-inspect once and compare plan digests (timestamped freshness).
+D. Retry classification: all download exceptions are currently retried
+   equally (timeout, digest mismatch, 5xx). Deterministic failures waste
+   2 extra full-size attempts. Improvement: typed retry ladder
+   (network/transient vs. content/verification fatal).
+E. Unwired architecture is a sail without a wind: the analyzer registry/
+   contracts/executor and the SQLite evidence store are complete and tested
+   but unused by the CLI runtime. Until wired, the "evidence schema" exists
+   only as documentation; findings live in JSON/CSV, not queryable SQLite.
+   Improvement: implement the import path (CSV/JSON -> EvidenceDatabase) and
+   flip `run` to record executions/findings into SQLite as a shadow store —
+   keep the CSV layer as the source of truth until proven equivalent.
+F. Downloader parallelism: strictly sequential downloads are safest for
+   reproduction but a single-component-at-a-time stream on a good connection
+   leaves most bandwidth unused; a bounded (2-4) per-bundle parallelism with
+   the same per-component verification would safely 2-3x throughput.
+G. Accessibility of the evidence: the analysis outputs are many JSON files
+   across results/; there is no cross-artifact query surface yet ("which of
+   3,000 scanned apps contains verified Firebase keys?"). Improvement:
+   per-run aggregate indexes (parquet/SQLite) beside reports/findings.csv.
+H. Coverage gaps in static analysis: the 19 smali/XML rules are strong but
+   pattern-check style (like MobSF's rule set) — no data-flow analysis
+   (taint tracing), no deobfuscation, no dynamic analysis (network capture),
+   no native (JNI) content inspection beyond inventory. The honest coverage
+   fields say as much. Improvements: DEX-level permission/data-flow pushes
+   (androguard is already loaded), and JNI metadata extraction.
+I. The aggregate CSV and report HTML carry the FULL raw finding objects
+   (including secrets) by design; workspace hygiene becomes critical.
+   Improvement: an explicit redaction mode that writes a fingerprint-only
+   variant for sharing, keeping raw findings in 0600-only directories.
+J. OBB verification uses SHA-1 (Play's own limitation, honestly recorded).
+K. Not-yet-implemented: original target architecture items (artifact
+   registry, ArtifactView adapters, planner-driven isolated analyzer
+   executions, correlation layer, versioned exports). Not blocking today,
+   but the codebase carries its architecture in three layers (implemented
+   CSV runtime, unwired analyzer framework, docs/architecture) that WILL
+   drift apart without a deliberate convergence plan.
+L. Minor technical debt: (1) copy-paste duplication of the process-tree
+   termination and atomic-write helpers across trufflehog.py, runner.py,
+   apk_surface.py (extract into a shared core/procs module); (2) the
+   TruffleHog analyzer adapter reaches into scanner private methods
+   (_run_one) — promote a public run_one; (3) ResourceProfile.max_concurrency
+   is declared but the executor is strictly sequential; (4) the androguard
+   version string is hardcoded at ~6 sites; (5) a quadratic domain-vs-
+   endpoints containment check in apk_surface may slow huge apps (bounded by
+   file caps, but worth a set/dict structure).
+M. docs/engineering still contains stale material that should be pruned or
+   clearly marked as planning-only during the next doc pass.
+
+BOTTOM LINE (one paragraph)
+APK Workbench is audit-grade engineering applied to a domain known mostly
+for sloppy "download and grep" tooling: its core loop is slow on purpose, its
+integrity story is quantifiable (4 independent hash passes, frozen manifests,
+write-once publish, append-only ledgers), and its honesty about static
+analysis is its own best feature — it will not pretend to know more than the
+bytes it read. The acquisition side is now genuinely resilient (account-mode
+auth with anonymous fallback, rolling-union discovery, idempotent re-runs).
+Its biggest single future win is throughput/pacing (A/B/F) and its biggest
+structural win is wiring the already-built SQLite/analyzer-framework layers
+into the live CLI (E). Both are tractable; excellent foundation overall.
+
+================================================================================
+END OF FIRST REPORT
+================================================================================

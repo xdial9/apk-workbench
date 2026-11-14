@@ -274,32 +274,40 @@ class GooglePlaySource:
         if total_limit < 1:
             raise ValueError("total_limit must be positive")
 
+        found: dict[str, PlayApp] = {}
+        channels: dict[str, str] = {}
+
         def flush() -> None:
             if on_batch is not None:
-                on_batch(list(found.values()))
+                on_batch(list(found.values()), dict(channels))
 
         categories = list(category_ids) if category_ids is not None else [
             category_id for category_id, _ in self.categories()
         ]
-        found: dict[str, PlayApp] = {}
         for query in queries:
             self._emit_progress(f"[Google Play] Discovery query {query!r}")
+            channel = f"query:{query}"
             for app in self.search(query, limit=per_query_limit):
-                found.setdefault(app.package_id, app)
+                if app.package_id not in found:
+                    found[app.package_id] = app
+                    channels[app.package_id] = channel
                 if len(found) >= total_limit:
                     flush()
                     return list(found.values())
             flush()
         for category_index, category_id in enumerate(categories, start=1):
             self._emit_progress(f"[Google Play] Discovery category {category_index}/{len(categories)}: {category_id}")
+            channel = f"category:{category_id}"
             for app in self.top(category_id, limit=per_category_limit):
-                found.setdefault(app.package_id, app)
+                if app.package_id not in found:
+                    found[app.package_id] = app
+                    channels[app.package_id] = channel
                 if len(found) >= total_limit:
                     flush()
                     return list(found.values())
             flush()
         flush()
-        return list(found.values())
+        return list(found.values()), channels
 
     def inspect(self, package_id: str, *, version_code: int | None = None) -> PlayBundlePlan:
         """Resolve delivery metadata and Play-provided hashes without downloading files."""
@@ -356,6 +364,7 @@ class GooglePlaySource:
         *,
         workspace: str | Path,
         run_id: str,
+        provenance: dict[str, Any] | None = None,
     ) -> AcquiredBundle:
         """Download every APK split and OBB; the upstream client verifies Play's hashes."""
         root = Path(workspace).expanduser().resolve()
@@ -439,9 +448,26 @@ class GooglePlaySource:
                 except Exception as exc:
                     if attempt >= _MAX_RETRIES:
                         raise GooglePlayError(
-                            f"Google Play download failed for {plan.app.package_id}/{item.name}: {exc}"
+                            f"Google Play download failed for {plan.app.package_id}/{item.name} "
+                            f"after {_MAX_RETRIES + 1} attempts (delivery metadata captured at "
+                            f"inspect time may be stale; retrying the run re-inspects): {exc}"
                         ) from exc
                     time.sleep(min(30.0, self.retry_backoff_seconds * (2 ** attempt)))
+
+        # Rerun hygiene: remove our own leftover .part files from an earlier
+        # interrupted attempt; record (never delete) any other unexpected
+        # member in the bundle directory so the handoff can see them.
+        extra_files: list[str] = []
+        for entry in sorted(directory.iterdir()):
+            if entry.name.endswith(".part") and entry.is_file() and not entry.is_symlink():
+                try:
+                    entry.unlink()
+                except OSError as exc:
+                    raise GooglePlayError(
+                        f"Could not remove leftover partial transfer: {entry}"
+                    ) from exc
+            elif entry.name not in {item.name for item in plan.files}:
+                extra_files.append(entry.name)
 
         file_rows: list[dict[str, Any]] = []
         apk_paths: list[Path] = []
@@ -487,6 +513,10 @@ class GooglePlaySource:
             "files": file_rows,
             "downloaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
+        if provenance:
+            metadata["provenance"] = dict(provenance)
+        if extra_files:
+            metadata["extra_files"] = extra_files
         serialized = json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode()
         manifest_sha256 = hashlib.sha256(serialized).hexdigest()
         manifest_path = directory / "google-play-bundle.json"

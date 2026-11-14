@@ -1,0 +1,208 @@
+# SURFACE ANALYZER — STANDALONE WORK FILE
+Scope: src/apkworkbench/analysis/apk_surface.py (+ interface to
+androguard_dex.py and the run_static_surface_analysis driver).
+Goal: catch EVERY single thing from the smallest hint to the biggest
+vulnerability in a .apk, map intelligently, emit a detailed dossier-ready
+report. Reviewed 2026-11-14; author read all 954 lines directly.
+Carryover from plan.txt + firstreport.txt at the end (surface-relevant only).
+
+================================================================================
+PART 1 — LINE-BY-LINE REVIEW VERDICT (what's missing / wrong approach)
+================================================================================
+
+--- 1A. MANIFEST PARSER (_parse_manifest, L221-301) -------------------------
+Right baseline: package/version/SDK facts; all three permission tag forms;
+application flags (debuggable, allowBackup, usesCleartextTraffic,
+networkSecurityConfig, taskAffinity); component types with exported +
+intent-filter presence; sensitive-permission/debuggable/cleartext/export
+findings.
+
+MISSING (each is a coverage hole in "every hint"):
+1. intent-filter DATA not parsed: schemes, hosts, ports, mimeTypes, path
+   patterns. Deep links are a primary attack surface and a top endpoint-hint
+   source; currently only a boolean has_intent_filter exists. MUST extract
+   (scheme, host, port, path) tuples into inventory + hint findings.
+2. <meta-data> values never read: API keys live there
+   (geo API key, maps v2 key, firebase ids, push keys...). Rich hint class;
+   zero coverage today.
+3. <provider> authorities / grantUriPermissions / path-permission —
+   authorities are content:// endpoints; not extracted.
+4. <queries> element (Android 11 package-visibility) not parsed.
+5. custom <permission> definitions + protectionLevel not parsed.
+6. sharedUserId / originalPackage / instrumentation not parsed.
+7. Backup-exposure logic absent: allowBackup defaults TRUE when omitted with
+   no dataExtractionRules/fullBackupContent — real finding class, blind now.
+8. dataExtractionRules / fullBackupContent XML refs never resolved or
+   parsed (mirror the networkSecurityConfig handling that DOES exist).
+9. Cleartext only checked for base-config (L384): domain-config cleartext is
+   missed entirely; also no trust-anchors review (user anchors = hint).
+10. Free anomalies: versionCode not numeric; minSdk > targetSdk; missing
+   allowBackup+targetSdk>=23 combos — deducible from data we already have.
+
+VERDICT: manifest v2 pass = full element/attr map into a normalized fact
+dictionary + the special-case findings above derived from that map.
+
+--- 1B. FILE WALK + INVENTORY (L329-376) ------------------------------------
+1. S2 known: domain containment `any(value in endpoint ...)` (L515) —
+   quadratic AND semantically wrong (a domain seen only inside larger
+   strings loses its own entry). Replace with exact-lowercase VALUE-SET
+   membership + host normalizer.
+2. S3 known: inline imports (L331 __import__("os"); json at L697/L825).
+3. resource_files choice checks parts[:1] in {(res,), (assets,)} — fine
+   for apktool layout; keep, record as an assumption in coverage.
+4. One classification pass routing by suffix instead of many suffix
+   predicates per loop (S6).
+5. NO ZIP-INVENTORY of the ORIGINAL APK (input-policy Appendix C): surface
+   facts must include every APK zip member (name, size, sha256) regardless
+   of decode success + detection of NESTED archives (.zip/.jar/.apk/.dex
+   inside assets/resources) as extractable-container hints.
+
+VERDICT: split into (a) single-pass decode-tree classifier, (b) original-APK
+zip inventory, (c) nested-archive detection.
+
+--- 1C. TEXT SWEEP LOOP (L424-570) ------------------------------------------
+Approach: line-regex backbone is right for recall AND low-hardware speed;
+keep it, add structured per-suffix passes where semantics matter, keep regex
+as the fallback for unknown text.
+
+Gaps:
+1. TEXT_SUFFIXES leniency: add .proto (gRPC interfaces), .env, .pem, .map,
+   .json5, .kts, extensionless text (LICENSE/README), .b64 — better: content
+   sniff for files with unknown suffix (4KB printable-ratio + NUL detection);
+   whitelist becomes routing rules, sniffing is the catch-all.
+2. read_text(errors="replace") (L442): silently mangles non-UTF8; detect BOM,
+   fall back to latin-1; mark per-file degraded in coverage; never sniffs
+   binaries into text.
+3. URL/DOMAIN/IP extraction:
+   - schemes too narrow (http/ws/ftp/grpc only): match generic
+     [a-z][a-z0-9+.-]*:// and CLASSIFY; keep content://, file://, intent://,
+     market://, javascript:, mailto:, tel:, geo:, unknown custom schemes.
+   - user:pass@ in URLs not captured (credential-in-URL hint).
+   - IPv6 missing; ipv4:port host-pair recombination missing.
+   - base64/percent-encoded strings never decoded before matching (encoded
+     endpoint hiding); try decode on long const-strings; record hits.
+   - no normalization: trailing-slash/fragment variants create duplicate
+     endpoints; canonical key = scheme+host+port+path.
+   - no classification: localhost/127./10./192.168./172.16-31/169.254
+     private-range taggings; IDN/xn-- origins.
+4. Retrofit annotation state machine (L457-476) unbounded if ".end
+   annotation" missing; bound to a line window.
+5. CODE_RULES cap aborts the ENTIRE file loop (L564-570): cap-exhausted app
+   silently ends all remaining scanning. Post-ceiling removal this path
+   vanishes; document honestly until then (or per-rule caps).
+6. Performance: 19 re.search with re.IGNORECASE per line; compile ONE
+   alternation (single pass) or per-suffix subsets; same deterministic
+   results, faster on 100k-line smali. Also lowered_text whole-file copy
+   (L452) doubles memory just for dependency markers — per-line lower.
+7. API_HEADER_RE x-[a-z0-9-]{2,60} matches any hyphenated token — noisy;
+   record context class (code/doc) or restrict to code lines.
+8. Rate-limit proximity uses FIRST evidence entry only (L589-601); compute
+   against ALL evidence entries (cheap, more honest relationships).
+9. Findings evidence: single-line snippet only; add ±2-line context window
+   with per-snippet char cap (S4).
+10. NO DEDUP for findings: same rule repeated per file/line inflates count
+    and exhausts caps; aggregate per (rule_id, normalized value/site) with
+    occurrence + multi-evidence lists (endpoints already do this shape).
+11. No "lookalike secret" hints (AIza…, AKIA…, sk_live_, ghp_, xox…, JWT
+    eyJ…) — trufflehog owns this class, but the dossier must work even when
+    trufflehog refuses; record hints here with evidence; correlate with
+    trufflehog fingerprints later (short documented list, no overlap noise).
+
+--- 1D. NETWORK SECURITY CONFIG (L374-406) ----------------------------------
+1. domain-config cleartext, trust-anchors (user anchors), and domain-dialogue
+   with the endpoint inventory all missing.
+2. file basename matching fine for decode dirs; record as assumption.
+3. no config parse attempt when manifest parse failed.
+
+--- 1E. OUTPUT ASSEMBLY (L589-677) ------------------------------------------
+1. Shape is good for machine consumption; NOT dossier-ready lacking
+   synthesis — the Dossier generator (plan Phase D) is the presentation
+   layer; keep data-plane/presentation-plane separation.
+2. metrics counts raw hits only — add DISTINCT finding count alongside (1C.10).
+3. _finding() ET.tostring snippet — no size cap (inflates JSON) → S4 cap.
+
+--- 1F. DRIVER (run_static_surface_analysis, L713-954) ----------------------
+1. marker "running" persists forever after crashes — refresh per artifact
+   (observability + crash forensics + always-alive rule).
+2. reuse gate hardcodes "0.2.0" (L835) — bump with Phase S version change;
+   old-version outputs treated stale.
+3. re-hash loop (L861-871) has no heartbeat — add (2s rule).
+4. `import json` inline at L825 → module-level.
+5. failure JSON is a partial schema — acceptable; include diagnostics chain.
+6. per-artifact exceptions caught (good) — keep Exception-widen with
+   evidence preservation behavior.
+
+--- 1G. SHARED HELPER DEDUP (S5) --------------------------------------------
+_atomic_write_json / progress emitters near-copies of trufflehog.py/
+runner.py — extract after S stabilizes; don't block S.
+
+================================================================================
+PART 2 — COVERAGE MATRIX: does it cover everything in a .apk?
+================================================================================
+Content class              | Covered            | Action
+---------------------------|--------------------|-------------------------
+AndroidManifest            | partial            | full map + deep links +
+                                              | meta-data + providers +
+                                              | queries + backup config (1A)
+resources (decoded XML)    | paths only         | structured XML strategy pass
+                                              | (strings.xml, xml/, arrays)
+assets                     | TEXT_SUFFIXES only | sniff all asset files,
+                                              | nested archive + detect,
+                                              | base64 candidates
+smali code                 | regex only         | add structure facts,
+                                              | obfuscation shape heuristic,
+                                              | const-string map
+DEX (original APK)         | androguard pass    | KEEP as-is (right tool);
+                                              | architecturally separate
+native libs (.so)          | paths only         | add strings extraction
+                                              | (big hint class)
+META-INF / signing         | NOT covered        | Play signer SHA-256 exists at
+                                              | inspect; record into facts;
+                                              | local .RSA/.SF issuer hints
+APK zip members            | NOT covered        | REQUIRED (Appendix C)
+nested containers          | NOT covered        | detect + enumerate (+depth)
+resources binary (arsc)    | NOT covered        | apktool decodes meaningful
+                                              | chunks; zip covers the rest
+encoded strings (base64%)  | NOT covered        | decode + match (1C.3)
+private/dev hosts          | NOT covered        | tag classes (1C.3)
+missing extensions         | NOT covered        | .proto/.env/.pem/.map/sniff
+runtime behavior           | explicitly not performed | stays out (SDBV)
+
+================================================================================
+PART 3 — CARRYOVER (from plan.txt + firstreport.txt, surface-relevant only)
+================================================================================
+- Plan S1-S8 as written (monolith split, endpoint set fix, imports, snippet
+  cap, helper dedupe, one walk/no re-reads, keep skip-reuse + integrity
+  recheck, version bump + stale handling).
+- ALWAYS-ALIVE TERMINAL: <=2s silence bound (L429 heartbeat is 10s now),
+  sub-unit progress in the re-hash loop, emit-contract tests.
+- DOCTRINE: deduce from data, never guess; deductions cite file:line;
+  similarity = hint; nothing unsearched/unlisted.
+- Phase A (post-S): kill budgets/caps here once S stabilizes the shape.
+- Input policy Appendix C: original-APK zip inventory REQUIRED here.
+- firstreport items adopted: finding dedup/aggregation, snippet context with
+  cap, private/IDN classification, proactive hint classes; firstreport's
+  "unwired framework" stays OUT of Phase S except the analyze_apk_dex
+  interface which is already correct.
+
+================================================================================
+PART 4 — EXECUTION ORDER FOR STANDALONE S WORK
+================================================================================
+S-a. Baseline: single-walk classifier prototype + fact-dict scaffolding
+     (no behavior change yet).
+S-b. Manifest v2 (1A): full element map + deep links + meta-data +
+     providers + queries + backup rules + domain-config/TLS anchors.
+S-c. Sweep upgrades (1C): scheme classification, normalization/dedup,
+     private/IDN tags, encoded-decode candidates, context snippets,
+     per-suffix structured passes.
+S-d. Data plane: original-APK zip inventory, nested archive detection,
+     extension update + content sniff, per-file coverage ledger.
+S-e. Output: findings dedup/aggregation, distinct-vs-raw metrics, snippet
+     caps, analyzer version bump 0.2.0 -> 0.3.0 + stale handling.
+S-f. Timing: heartbeats per always-alive contract + emit tests; marker
+     refresh; driver imports.
+S-g. Test campaign: manifest v2 fixtures (deep links/providers/backup/
+     meta-data), endpoint variants, private/IDN, base64, nested archives,
+     text sniff, dedup contract, emit-contract tests.
+THEN: reconcile plan.txt with actual S outcomes + adjust Phase A/C bullets
+     before the full rewrite (plan.txt "current work item" section).

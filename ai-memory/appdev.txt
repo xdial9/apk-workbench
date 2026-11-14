@@ -1,0 +1,495 @@
+================================================================================
+APPDEV v2 — COGNITION BANK FOR THE APK SURFACE ANALYZER WORK
+(agent working memory; read first at every session start; update after every
+session and after every committed item; version-stamp every edit)
+================================================================================
+VERSION: v2.0 | 2026-11-14 | branch: feature/goopdl-account-auth
+
+--------------------------------------------------------------------------------
+0. HOW TO USE THIS FILE (agent protocol; read me, obey me)
+--------------------------------------------------------------------------------
+RECOVERY PROTOCOL (do this at the top of EVERY session):
+  1. Read plan.txt (doctrine + phase ladder + current section).
+  2. Read surface.txt (apk_surface.py verdicts + S-a..S-g order).
+  3. Read THIS file §1 STATE (where work stands), §15 CONSUMERS CONTRACT,
+     §16 DRIFT TRIPWIRES, §17 OPERATIONAL RITUAL before touching code.
+  4. Re-read the code you are about to edit in full; never edit from memory.
+SESSION OUTPUT DISCIPLINE:
+  - Every response touches at least one of: code, test, plan file, or ledger.
+  - Say precisely what changed, what tests cover it, and what VERIFY markers
+    remain. Continually update §1 STATE at end of significant work.
+DECISIONS LOG (§14): append, never rewrite. Every non-obvious choice gets one
+  line + date + reason. If you deviate from a recorded decision, fix plan/§14
+  first or revert the deviation.
+OUTPUT HONESTY: every factual claim in group A (factual technical claims
+  asserted into FILES that affect code) must be verified directly in data
+  (command/output/file) or explicitly tagged VERIFY: in the analysis output.
+  No untagged uncertain claims into code or code plans.
+
+--------------------------------------------------------------------------------
+1. STATE (keep current — agent, update me)
+--------------------------------------------------------------------------------
+Branch: feature/goopdl-account-auth (auth work committed, 63ca287; tests
+152 green at baseline; live account-mode validation succeeded: discover,
+download de.danoeh.antennapod, verification pass 1f6f6be4).
+Workspace working files: plan.txt (master), surface.txt (surface verdicts +
+S-a..S-g), appdev.txt THIS FILE, firstreport.txt (audit baseline).
+CURRENT PHASE: Phase S — surface analyzer fix + optimize; next item S-a.
+PHASE S ITEM STATUS (mark [x] as done):
+  [ ] S-a baseline refactor: single-walk classifier + fact scaffolding
+  [ ] S-b manifest v2 (full element map, deep links, meta-data, providers,
+      queries, backup rules, NSC domain-config/TLS anchors)
+  [ ] S-c sweep upgrades (schemes, normalization/dedup, private/IDN tags,
+      encoded-decode, context snippets, per-suffix structured passes)
+  [ ] S-d data plane (original-APK zip inventory, nested archives, text
+      sniff routing, per-file coverage ledger)
+  [ ] S-e output (findings dedup/aggregation, distinct-vs-raw metrics,
+      snippet caps, version bump 0.2.0 -> 0.3.0 + stale handling)
+  [ ] S-f timing (heartbeats under 2s contract + tests, marker refresh)
+  [ ] S-g test campaign + fixtures (deep links, providers, backup, meta-data,
+      endpoint variants, private IP, base64, nested archives, sniffing)
+OPEN QUESTIONS (decide before warming Phase S):
+  - Branch for Phase S: continue on feature/goopdl-account-auth (matches
+    master plan) or dedicated branch surface-analyzer? DEFAULT: stay.
+  - Keep google-services.json-derived res keys from impacting install set.
+
+--------------------------------------------------------------------------------
+2. ANDROID PLATFORM MENTAL MODEL (what the analyzer must reason about)
+--------------------------------------------------------------------------------
+APPLICATIONS RUN AS PROCESSES WITH COMPONENTS; the OS launches components via
+Intents and holds a registry of them (from the manifest at install time).
+Static analysis must reconstruct what the registry exposes because the OS
+already trusts it: exported components = the OS will start them with
+attacker-supplied Intents. Key mechanics:
+- Components: activity (UI), service (background work, may outlive UI),
+  broadcast receiver (listen for events), content provider (IPC data store
+  with URI authorities), plus aliases of activities. Their correctness and
+  exposure depend on manifest attributes.
+- Intents: explicit (component named) or implicit (action + data + categories
+  resolved against manifest filters). Deep links = implicit intents with
+  data URIs (scheme[://host][:port][/path]). autoVerify = App Links.
+- IPC surfaces: Binder via AIDL (services/providers), ContentProvider URIs
+  (authorities), broadcast receivers with protected broadcasts.
+- Permissions: install-time (normal/dangerous/signature) vs runtime grants
+  (BCM 23+ for dangerous). <uses-permission> is a REQUEST (potentiality); a
+  runtime grant is not visible statically — write it as request + usage
+  evidence, never as granted.
+- Package visibility (API 30+): <queries> gates what packages may be seen;
+  missing visibility can break behavior — a portability hint not a vuln.
+- Multi-user/work-profile: sharedUserIds are deprecated but still expose
+  cross-app identity risk; not common — record, don't chase.
+- Sandbox model: per-UID; data dirs are private unless surfaced (provider,
+  export, world-readable legacy, backups, component exposure). This is the
+  essential lens: any data leaving the sandbox = finding candidate.
+
+================================================================================
+3. BUILD & RELEASE PIPELINE (what produces what lands in the APK)
+================================================================================
+- Gradle: build.gradle(.kts) settings and variants; the APK is the manifest
+  of these decisions: versionCode/versionName/min/target SDKs, signing config
+  (keyAlias), flavor-specific paths/files inherited into the artifact. We
+  DON'T see gradle files in APK but we see their effects.
+- minifyEnabled + shrinkResources + proguard-rules.pro shape release output:
+  obfuscated names (a.a.b), stripped symbols, inlined constants, string
+  pool bubbling to res/strings.
+- Dependencies: every declared gradle dependency gets merged into dex +
+  res + assets. IMPACT: dependency inventory can be derived by package ROOT
+  name histograms (group com.x.y): build the catalogue of 2nd-level
+  packages; anything outside the platform/first-party list is a
+  third-party candidate. This is DATA-DRIVEN (don't rely only on curated
+  marker list; extend markers as hints but don't stop there).
+- App Bundles (AAB) and Play delivery: the Play store splits into
+  base.apk + config.<abi|density|locale> APKs + feature modules. Our
+  acquisition already captures full bundles (APK + OBB); Phase B needs to
+  accept asset-pack delivery components too (our current downloader rejects
+  them — VERIFY google_play.py inspect: rejects non-.apk/.obb). This means
+  the base.apk alone may NOT contain full behavior: feature modules are
+  separate APKs. Surface must record which bundle members were NOT part of
+  base.apk (bundle metadata exists at downloads/<pkg>-<ver>/google-
+  play-bundle.json — read it for provenance rather than guessing).
+- Multi-dex: classes.dex + classes2.dex..classesN.dex; unknown files may
+  may be delayed/packed (packers keep the real dex as a blob in assets/libs).
+- Signing: v1 (JAR, META-INF/*.SF/.RSA), v2/v3 (APK Signing Block), v4
+  (tree). Signer identity is our provenance anchor (already captured at
+  inspect — surface facts should carry it through).
+- The developer's secrets-injection channel: CI injects into BuildConfig
+  constants (public final static String) -> smali const-string. Values also
+  creep into res/values/strings.xml via gradle resValue or manifest
+  placeholders -> meta-data. BOTH places must be swept (they are).
+
+================================================================================
+4. APK ANATOMY — exact extraction checklist (per member)
+================================================================================
+- AndroidManifest.xml: binary XML in the zip; decoded by apktool. All facts
+  per §7 below (manifest v2 parser).
+- classes.dex + classes2.dex..N: dalvik bytecode. apktool exits into smali
+  tree root/smali[-name]/... . androguard reads the ORIGINAL APK's dex.
+  Every dex member belongs in surface's zip inventory.
+- resources.arsc: compiled resource VALUE registry. apktool rebuilds res/.
+  Do not parse ourselves; use decoded outputs; fall back to binary member
+  hash in inventory.
+- res/: decoded tree. Values worth more than names: strings.xml (keys +
+  values — secret hints), arrays, xml/ (NSC, backup rules, provider paths),
+  layout/.xml (password/input fields feature hints, known attributes like
+  android:password or inputType=textPassword), drawable names (branding
+  vocabulary), raw/ contents (arbitrary files), menu/, navigation.
+- assets/: VERBATIM developer files. KEY: nobody obfuscates assets. Parse
+  text (sniff), detect nested archives (.zip/.jar/.apk/.dex), .so blobs
+  (packed code), sqlite DBs, JSON/YAML/property configs, HTML/JS bundles
+  (Flutter libapp.so/assets, RN index.android.bundle (Hermes bytecode -
+  detect magic, don't text-garbage-scan), Cordova www/ JS).
+- META-INF/: MANIFEST.MF, *.SF, *.RSA (.DSA/.EC) — v1 signature presence +
+  cert identity hints (CN/O strings are inspectable text). With v2-only
+  apps META-INF may be absent — record where identity came from (Play
+  signer set is authoritative at inspect).
+- lib/<abi>/*.so: native code. Extract: symbol names (nm/objdump via
+  subprocess wherever needed), embedded strings (strings-equivalent scan in
+  our python), Java_ prefixed JNI symbols = exported native surface,
+  packer signatures (blob && encrypted sections — generic hints only).
+- APK Signing Block: not decoded; member hash suffices.
+- kotlin metadata (META-INF/*.kotlin_module + in-dex annotations): can reveal
+  renamed param names/classes; low priority, inventory-only.
+- INSTALL-time extras: stamp files/junk from toolchains: record as
+  toolchain artifacts, keep in inventory (invisible-elsewhere hints).
+
+================================================================================
+5. DEX/SMALI — SYNTAX + RECOGNITION SHAPES (recall sheet; risk of drift)
+================================================================================
+Smali essentials (verify with a real decoded file before relying):
+- classes are dirs/files: com/foo/Bar.smali; header: .class public final
+  Lcom/foo/Bar; -> .super Ljava/lang/Object; .source "Bar.java".
+- fields: .field public static final API_KEY:Ljava/lang/String; = "abc"
+- methods: .method public onCreate(Landroid/os/Bundle;)V ... .end method
+- strings: const-string v1, "literal text" (b64/URLs/keys live here);
+  const-string/jumbo for >64KB pool entries.
+- invokes: invoke-virtual {v0, v1}, Lcom/x/A;->m(Ljava/lang/String;)V;
+  variants: invoke-static, invoke-super, invoke-direct, invoke-interface,
+  invoke-custom, invoke-polymorphic.
+- annotations: inside methods/fields: .annotation [runtime] Lretrofit2/http/GET;
+  value = "endpoint/path" ... .end annotation. RETROFIT: interface methods
+  with @GET/@POST carry value = path; BaseUrl is a const-string near
+  Retrofit.Builder().baseUrl("https://host/") mostly http scheme literal.
+- line info: .line N — CRITICAL for evidence (our file:line cites from smali
+  need line numbers; KEEP BUILD DEBUG INFO: we decode WITH debug info (we do
+  not pass --no-debug-info). VERIFY these smali shapes against real decode
+  output once in S-a (protect against version/decoder drift).
+- R8 renaming shapes: short classes a, b, c inside top-level packages;
+  fields a/b/c; packages collapsed (com.app. -> a.a. with map absent).
+  My obfuscation heuristic must be a DEDUCED metric (ratio of 1-2 char
+  names to total in code-owned packages) — never claim without a ratio.
+
+Known smali fingerprints worth coding as markers:
+- OkHttp client usage: Lcom/squareup/okhttp3/... ; interceptor chains.
+- Retrofit: Lretrofit2/Retrofit; + .annotation Lretrofit2/http/GET;
+- Firebase messaging: Lcom/google/firebase/messaging/FirebaseMessagingService;
+- Room/SQLite: Landroidx/room/... + rawQuery or ROOM_SQL constants.
+- JWT/token: classes manipulating Jwt / Auth or base64 decode chains.
+- Ad SDK classes: Lcom/google/ads/... etc. (markers list, extendable).
+
+================================================================================
+6. MANIFEST SCHEMA v2 — FULL ELEMENT/ATTR INVENTORY (surface parser target)
+================================================================================
+Element classes and attributes to capture (counts as FACTS, each from
+attribute names verified at parse time):
+- Root: package, android:versionCode (int), android:versionName,
+  android:installLocation, android:sharedUserId, android:sharedUserLabel.
+- uses-permission / -sdk-23 / -sdk-m: android:name; plus maxSdkVersion.
+- uses-sdk: minSdkVersion, targetSdkVersion, maxSdkVersion (legacy).
+- permission / permission-group / permission-tree: name, protectionLevel
+  (normal/dangerous/signature/signatureOrSystem), icon/description.
+- uses-feature: glEsVersion, name, required; supports-screens;
+  compatible-screens; supports-gl-texture; uses-configuration; uses-library
+  (application child; required attr).
+- application: name (custom Application class = lifecycle entry point,
+  FIRST code to run), theme, label, icon, allowBackup (DEFAULT TRUE!),
+  allowClearUserData, backupAgent (+ fullBackupOnly), fullBackupContent,
+  dataExtractionRules, debuggable (default false), description, enabled,
+  directBootAware, extractNativeLibs, hasCode, hardwareAccelerated,
+  largeHeap, killAfterRestore, requestLegacyExternalStorage, persistent,
+  supportsRtl, taskAffinity, theme, usesCleartextTraffic, networkSecurityConfig,
+  vmSafeMode, gwpAsan, appComponentFactory, testOnly, multiArch? (VERIFY),
+  process, resizeableActivity, localeConfig, minSdk/targetSdk shorthand.
+- components (activity / activity-alias / service / receiver / provider):
+  name, exported (default logic: pre-API-31 TRUE if intent-filter else
+  FALSE; >=31 must be explicitly declared when filters exist),
+  permission, process, taskAffinity, launchMode (standard/
+  singleTop/singleTask/singleInstance), excludeFromRecents, configChanges,
+  screenOrientation, windowSoftInputMode, grantUriPermissions,
+  readPermission/writePermission, authorities, multiprocess, initOrder,
+  targetActivity (alias), foregroundServiceType, stopWithTask,
+  isolatedProcess, directBootAware, roundIcon, parentActivityName,
+  maxRecents, adjustViewBounds n/a (skip UI-only attrs; keep behavioral).
+- intent-filter children: <action android:name=.../> (MAIN/VIEW/SEND...),
+  <category .../>, <data scheme/host/port/mimeType/path/pathPrefix/
+  pathPattern/sp/> : THE DEEP LINK SURFACE (scheme://host:port[/path patterns]).
+  Must ALWAYS be extracted as tuples - not just counted.
+- <queries>: <package android:name>, <intent> (with action/data), <provider
+  android:authorities>.
+- <meta-data android:name .../>: values via android:value or android:resource;
+  name conventions matter (see §9 known-keys list).
+- <instrumentation android:name targetPackage functionalTest
+  handleProfilerConnection waitForDebug: instrumentation is a coupling and a
+  dynamic injection surface — flag as test-coupling hint.
+- Anomaly deductions (data we will already have): versionCode non-int,
+  minSdk > targetSdk, allowBackup missing + backup rules refs missing,
+  allowBackup="true" + NSS absent + cleartext enabled = combined posture
+  notes; anything weird = postures covering trust boundaries.
+
+================================================================================
+7. RESOURCE SYSTEM GROUND TRUTH (what res/ and selectors mean)
+================================================================================
+- res/values/strings.xml: string resources (values may embed anything:
+  base URLs, keys, tokens); also res/values-XX/ per-locale variants;
+  IMPORTANT: same name in different locale = potential divergence;
+  we scan ALL values-* (not only default) — locale fallback hints.
+- arrays/plurals: seed lists.
+- xml/: conventions: network_security_config.xml (exact shape:
+  <network-security-config> base-config / domain-config / trust-anchors),
+  backup rules (full-backup-content / data-extraction-rules), provider
+  paths (paths file for FileProvider), swarm settings, remote config
+  defaults (xml/remote_config_defaults), firebase_analytics_*. Note exact
+  schema shapes into knowledge; VERIFY by parsing real decoded trees in S-b.
+- layout/ attrs: password input types, webview IDs, ad views, feature
+  presence hints (does the UI support skeleton behaviors).
+- drawable/mipmap names: branding + feature vocabulary hints.
+- menu/navigation: screen graph map of UX (low risk but useful dossier
+  sections).
+- locales list: geographic posture hints.
+
+================================================================================
+8. NETWORKING STACK SHAPES IN CODE (call-site recognition targets)
+================================================================================
+- Retrofit (biggest): interface methods with annotations; base URL const
+  string; converters (Gson/Moshi/kotlinx); on smali: annotation blocks per
+  method. Routes fully describe API surface (path + method) — extract.
+- OkHttp: clients + interceptors; app may mirror endpoints in-request; list
+  {{headers Authorization}} header builders (values can carry tokens).
+- HttpURLConnection / java.net.URL: generic (SDKs and hand-rolled code).
+- Volley, Apache HttpClient (legacy), Ktor, gRPC (Lio/grpc/, proto files in
+  assets for descriptor sets), WebSocket (ws:// wss://).
+- WebView hosts re-host entire web apps: JS in assets calling bridges.
+- Cert pinning: OkHttp CertificatePinner pin patterns; NSC pins (digest
+  attribute) — the pinned keys/hashes themselves are facts and can reveal
+  internal PKI (self-signed CA cert fingerprints). Extract pins as facts.
+- Hand-rolled X509TrustManager (often trusts all) — sev HIGH lead.
+- DNS-over-HTTPS endpoints, STUN/TURN for WebRTC (custom stun: scheme).
+
+================================================================================
+9. CATALOGS — KNOWN META-DATA KEYS, SDK MARKERS, COMMON PATHS (extendable)
+================================================================================
+Known meta-data keys (whenever seen, produce a hint with the name + value
+shape classified — NOT guessing what the value means):
+- com.google.android.geo.API_KEY / .maps.v2.API_KEY — a Google Maps key;
+  value shape starts with AIza — correlate to lookalike rules.
+- com.google.firebase.messaging.default_notification_channel_id
+- firebase_crashlytics_collection_enabled, firebase_analytics_collection_deid
+- androidx.camera.*CameraX variants, androidx.work.*, androidx.startup.*
+- com.google.android.gms.ads.APPLICATION_ID (ca-app-pub-... — the value
+  shape = ad unit identity + publisher ID) — extract! (value tells
+  cloud account).
+- com.facebook.sdk.ApplicationId, com.twitter.sdk.*
+- io.sentry.dsn (embeds project id + token — strong hint), sentry dsn
+- branch/adjust/appsflyer tokens often in strings.xml or meta-data.
+- api keys provisioned by vendors (google_cloud_project etc.).
+VERIFY formatting rules; these are conventions not guarantees; note each
+instance as key+value category, and DON'T conclude semantics beyond shape.
+
+SDK marker catalog: extend DEPENDENCY_MARKERS with evidence-based additions
+whenever a decoded corpus shows a new root package (NEVER assume a library
+name w/o string evidence in the artifact). Categories to keep in mind:
+analytics, crash reporting, ads, push, payments, auth, storage/BaaS, map,
+AB-testing/feature flags, social login, APM/tracing, VPN/tunnel, QR, biometrics.
+
+Common hidden-path conventions (hints, never conclusions):
+- /debug, /dev/, /staging, /qa/, /test, /swagger, /docs/, localhost/127./
+  10.x/192.168./172.16-31/169.254; *.test/.local; DE1 on 3xxx ports.
+- Firebase RTDB: https://<project>.firebaseio.com; Firestore: firestore().
+- Auth0: https://<tenant>.auth0.com; Okta: *.okta.com; Azure MSAL:
+  login.microsoftonline.com; Supabase: *.supabase.co; Appwrite:
+  *.appwrite.io; Stripe: api.stripe.com; Twilio: *.twilio.com.
+- Zoom/WebRTC config endpooints; S3 buckets (s3.amazonaws.com and bucket
+  names); Azure blob: *.blob.core.windows.net; GCS: *.storage.googleapis.com.
+
+================================================================================
+10. HIDING CATEGORIES — obfuscation/packing/encryption taxonomy
+================================================================================
+- R8/ProGuard: class/method renames; no string encryption by default.
+- DexGuard/custom string encryption: const-string replaced by decrypt-on-use
+  blobs -> hint: heavy base64/hex literals + Cipher in same class.
+- Packers: visible stub + packed real dex in assets/ (or .so) loaded via
+  DexClassLoader; indicators: tiny visible app code + DexClassLoader +
+  large binary assets + native unzipping. Record packer presence as a
+  TOP-TIER context finding ("packed — visibility limited") since it downranks
+  the reliability of all other facts for THIS member.
+- Runtime-dynamic endpoints: RemoteConfig/AB/test links; only class hints.
+- Multi-scheme deep-link hijacks; file provider paths with ../ coverage.
+- Certificates: local pinned keys, user CA trust acceptance (allow user
+  CA to MITM) — a config class fact.
+- Language-level hiding: reflection (Class.forName on concatenation),
+  MethodHandles/anonymous classes.
+
+================================================================================
+11. DATA FORMATS ENCOUNTERED INSIDE APPS (parser targets)
+================================================================================
+- JSON (config, Firebase remote defaults, model classes); YAML; properties;
+  .env key=value; XML; PEM (-----BEGIN ...-----) and DER certs/bins;
+  SQLite (header "SQLite format 3") with schema text for
+  dossier; protobuf wire detection (byte shape); protobuf descriptor sets
+  from gRPC; JWT (eyJ segments 3 parts); protobuf-ish hex blobs;
+  GZIP (1f 8b) zip (PK\x03\x04) — nested containers; APK/DEX magic; ELF;
+  native platform files  — just inventory or dispatch.
+- Detect ARCHIVE/BINARY via magic-bytes first, THEN text-sniff content
+  only if no known container — routing law.
+
+================================================================================
+12. THE SURFACE ANALYZER DESIGN CROSSWALK (knowledge -> analyzer mapping)
+================================================================================
+Facts (dedup by value-fingerprint; evidence lists with file:line) -> rules —>
+deduction chains (with proofs) -> dossier sections (identity, architecture,
+network, security posture, secrets, behaviors, relationships, unknowns).
+Deduction templates (each holds when ALL required facts exist):
+- PERIODIC BEACONING: service/receiver + (location permission OR mic/camera
+  perms) + HTTP client call + endpoint from that class + timer markers
+  (handler.postDelayed/AlarmManager/Timer) => "likely periodic X-reporting"
+  Confidence from conjunction size; no runtime claims.
+- SMS OTP INTERCEPT: RECEIVE_SMS/RECV permission + code-extraction
+  (regex/const) + network upload => messaging automatic reading (HIGH).
+- CLIPBOARD: clipboard manager usage + upload without user action event.
+- CREDENTIAL EXPORT: keystore/password APIs + external storage paths.
+- PROTOCOL RECONSTRUCTION: retrofit routes + endpoints => "API surface X
+  at host Y with route set Z" (HIGH, verified lineage from dec annotations).
+- SDK RECONSTRUCTION: dependency root histogram + marker hits => stack.
+- CSP-like policy reconstruction: NSC rules => "trusted domains incl X".
+- WEBVIEW CLIENT features: file access + JS enable + cleartext = WebView
+  risk bundle.
+- PACKED/VISIBLE-LIMITED: (see §10) => downgrades ALL other confidence for
+  that artifact with a coverage note.
+- OBFUSCATION LEVEL: ratio of short names; report as metric + hint.
+- MISMATCH DETECTION: sensitive permission BUT no evidence of any related
+  API call anywhere => note as "requested but no static usage found"
+  (negative deduction — data we already have).
+
+================================================================================
+13. FACTS DATA MODEL + DEDUP LAW
+================================================================================
+- Fact = (kind, normalized_value, fingerprint=sha256(normalized_value),
+  evidence[list of {path, line?, snippet?}], first_seen_path, count).
+  Dedup: identical fingerprint merges; counts aggregate; representative
+  evidence = first 3; full evidence kept in per-artifact evidence file but
+  summary caps at 3 occurrences in dossier. New endpoints/values always
+  fingerprint-normalized (URL decomposition: scheme+host+port+path).
+- Deduction = (template_id, inputs[fingerprints], narrative, confidence,
+  evidence chains). A deduction without cited input fingerprints is
+  FORBIDDEN (deduce-not-guess doctrine).
+- Coverage ledger: per-content-class + per-file route decision (scanned/
+  skipped-binary/undecodable/packed). "Given evidence of skipped areas,
+  state them in dossier's unknowns."
+- Confidence scale: tool_verified / deduced / hint ; each carries severity
+  as interpretation only (never pretends runtime proof).
+
+================================================================================
+14. DECISIONS LOG (append-only)
+================================================================================
+2026-11-13 Auth modes replaced anonymous-only session (account-first).
+2026-11-14 discover: rolling-union catalog with per-channel flush.
+2026-11-14 Plan: Phase S before A; then A/then C full rewrite; Dossier D;
+       corpus E; AI handoff D.1 (§8 plan); per-run workspaces F.
+2026-11-14 Tool commands: trufflehog flags verified; apktool flags verified.
+2026-11-14 appdev.txt v2 sentinel: created knowledge bank (this file).
+
+================================================================================
+15. CONSUMERS CONTRACT (breakage map for apk_surface output — VERIFY markers)
+    [verify each line against current source before relying at commit time]
+--------------------------------------------------------------------------------
+Consumers of static-analysis.json / driver outputs:
+- cli/main.py run: calls run_static_surface_analysis(... dex_timeout_seconds
+  from config key analysis.androguard_timeout_seconds (default hardcoded
+  1800) — VERIFY main.py line numbers at edit time); uses summary keys:
+  eligible/completed/partial/failed/skipped/finding_count/artifacts.
+- reporting/final_run.py: reads static-analysis.json per artifact:
+  inventory.endpoints (objects with value/host/port/kind/evidence),
+  inventory.api_routes, inventory.api_call_sites, inventory.api_headers,
+  inventory.rate_limit_indicators, inventory.dependencies, dex_analysis
+  (external method refs, callgraph edges, API strings, permissions usage),
+  plus finding_count. CHANGING THESE FIELD NAMES = breaking final report.
+- database/workspace.py reconcile_run: reads results/runs/<run_id>/
+  static-analysis-run.json statuses and per-artifact
+  results/<pkg>/<ver>/<digest>/static-analysis.json "status" field in
+  {success, partial} to call items complete vs complete_with_warnings.
+- analyze_apk_dex signature: (apk_path, timeout_seconds=1800,
+  progress=None) — driver passes.
+- tests/test_apk_surface.py + integration pipeline: assert endpoint
+  sorting, status computation, symlink skip semantics, manifest findings
+  set. Any schema/format change must update tests in same commit;
+  breaking changes require version bump + reuse-gate update (S-e).
+- trufflehog scanner does NOT consume surface output (independent).
+
+================================================================================
+16. DRIFT TRIPWIRES (my known failure modes -> countermeasure)
+--------------------------------------------------------------------------------
+1. Confident specifics (smali syntax, schema fields): VERIFY against real
+   decoded output/fixtures before coding. In file work only memorize what
+   fixtures have shown.
+2. Schema breakage: changing inventory/findings fields w/o updating §15
+   consumers = cross-cutting breakage — always map change -> consumers
+   first (checklist per edit).
+3. Non-determinism: avoid sets for ordering (sort everywhere); sort
+   evidence lists; stable dict ordering (insertion) everywhere; stable
+   temp-file names; datetime formats.
+4. Regex drift: keep case-sensitivity explicit per rule; unify IGNORECASE
+   policy in one place (a compilation table), not per call site.
+5. Memory bloat: avoid whole-file lower casing (1C.7); avoid oversized
+   snippets; keep evidence capped in summary but complete on disk.
+6. Fatigue drift: scope creep / rewriting entire modules mid-item — STOP,
+   re-read plan.txt phase boundaries, itemize changes, get discipline
+   back with a checklist before next edit.
+7. Progress silence: always respect <=2s heartbeat (Appendix D); long
+   units emit sub-progress (chunk/method counts).
+8. Losing tests green: run pytest after each small change; never batch
+   multiple behavior changes without running.
+9. Hallucinated file:line references in narratives: cite ONLY pointers
+   that the code produced in the same run (never from memory).
+10. Scope: surface.txt (S-a..S-g) governs surface work; if an edit seems
+   needed elsewhere, note it in §14 and CONTINUE S, don't drift.
+
+================================================================================
+17. OPERATIONAL RITUAL (per work item)
+--------------------------------------------------------------------------------
+1. Read target module fully; enumerate exact change list; check §15 map.
+2. Write failing/adversarial tests when a change implies new behavior;
+   keep old tests passing or justifiedly update them with a log line in §14.
+3. Implement in small coherent commits; run pytest each step.
+4. Update surface.txt checkboxes + §1 STATE + decisions log with each item.
+5. Never push without explicit need to (user says commit/push).
+6. Live verify against a sample decoded tree when touching parse logic
+   (workspace has Antennapod bundle from the live acquisition for fixtures
+   at /tmp/opencode/ws — VERIFY it still exists before using).
+7. If a change implies a new file type / parser — check §4 checklist for
+   what facts it MUST produce.
+
+================================================================================
+18. GLOSSARY (shared vocabulary; keep names exact — never paraphrase)
+--------------------------------------------------------------------------------
+surface analyzer = apk-surface analyzer (id "apk-surface", version 0.2.0
+NOW, 0.3.0 after S-e). Phase One verification = acquisition verification run.
+plan digest = frozen Play delivery metadata hash (index_sha256).
+Work cache = content-addressed tree currently under results/<pkg>/<ver>/
+<digest>/ (Phase C moves the Record into runs/<run_id>/ per §8F of plan).
+BRIEFING.md = AI handoff entrypoint (Phase D). ai_deduced = AI finding label.
+
+================================================================================
+19. CROSS-CHECK (capabilities/shortfalls <-> the work)
+--------------------------------------------------------------------------------
+Work demands: exhaustive extraction (every hint), dedup, evidence citability,
+determinism, low-hardware performance, silent-run resilience (resumable,
+never silent), token-efficiency for the AI consumer.
+My guarantee mechanism: (a) fixtures verified facts stay in THIS file only
+once confirmed by data (no memory-only claims), (b) consumer contract map
+before every schema edit, (c) pytest-per-step, (d) deterministic ordering
+discipline, (e) scope guard via phase ladder, (f) ALWAYS-ALIVE emit rule,
+(g) progress/coverage ledger honesty. Where the work demands knowledge this
+file lacks (new file format, new SDK), the law is: extract evidence first —
+build catalog entries from observed data, then codify here (never guess).
+================================================================================
+END APPDEV v2
+================================================================================

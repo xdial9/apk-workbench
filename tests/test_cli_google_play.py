@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -35,7 +36,8 @@ def test_discover_writes_google_play_package_catalog(monkeypatch, tmp_path):
 
         def discover(self, **kwargs):
             assert kwargs["category_ids"] == ("FINANCE",)
-            return [PlayApp("com.example.bank", "Example Bank", "Example Inc.", "1.0", 1)]
+            app = PlayApp("com.example.bank", "Example Bank", "Example Inc.", "1.0", 1)
+            return [app], {"com.example.bank": "category:FINANCE"}
 
     monkeypatch.setattr(cli, "Config", lambda: config)
     monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-discover"))
@@ -50,6 +52,8 @@ def test_discover_writes_google_play_package_catalog(monkeypatch, tmp_path):
     with catalog.open(encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     assert rows[0]["package_id"] == "com.example.bank"
+    assert rows[0]["discovery_channel"] == "category:FINANCE"
+    assert rows[0]["discovery_time"], rows[0]
     assert "GOOGLE PLAY STORE" in result.output
 
 
@@ -79,7 +83,11 @@ def test_discover_merges_reruns_and_persists_batches_incrementally(monkeypatch, 
                 on_batch(batch)
                 writes.append(catalog_ids())
             assert kwargs["category_ids"] is None
-            return [app for batch in batches for app in batch]
+            channels = {}
+            for batch in batches:
+                for app in batch:
+                    channels.setdefault(app.package_id, "category:TEST")
+            return [app for batch in batches for app in batch], channels
 
     monkeypatch.setattr(cli, "Config", lambda: config)
     monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-merge"))
@@ -126,7 +134,7 @@ def test_download_skips_unavailable_apps_and_records_verified_play_artifact(monk
                 raise GooglePlayUnavailableError("paid app")
             return plan
 
-        def download(self, selected_plan, *, workspace, run_id):
+        def download(self, selected_plan, *, workspace, run_id, provenance=None):
             database = WorkspaceDatabase(workspace)
             frozen = database.read_manifest(run_id)
             assert frozen and frozen[0]["source"] == "google_play"
@@ -181,7 +189,7 @@ def test_exact_package_download_does_not_require_a_discovery_catalog(monkeypatch
             assert package_id == "com.example.direct"
             return plan
 
-        def download(self, selected_plan, *, workspace, run_id):
+        def download(self, selected_plan, *, workspace, run_id, provenance=None):
             database = WorkspaceDatabase(workspace)
             assert database.read_manifest(run_id)
             directory = Path(workspace) / "downloads" / "com.example.direct-1"
@@ -220,7 +228,7 @@ def test_discover_accepts_valid_package_ids_from_packages_file(monkeypatch, tmp_
             pass
 
         def discover(self, **_kwargs):
-            return []
+            return [], {}
 
     monkeypatch.setattr(cli, "Config", lambda: config)
     monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-packages-file"))
@@ -251,7 +259,7 @@ def test_discover_rejects_invalid_package_ids_from_packages_file(monkeypatch, tm
             pass
 
         def discover(self, **_kwargs):
-            return []
+            return [], {}
 
     monkeypatch.setattr(cli, "Config", lambda: config)
     monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-packages-file-invalid"))
@@ -373,3 +381,54 @@ def test_full_run_continues_to_trufflehog_when_some_apktool_output_exists(monkey
     assert calls == ["download", "verify", "decompile", "count", "surface", "count", "analyze", "report"]
     assert "Continuing to TruffleHog for those artifacts" in result.output
     assert "Starting TruffleHog for 1 APK(s) with saved Apktool output" in result.output
+
+
+def test_download_records_provenance_and_rerun_hygiene(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    catalog = cli._catalog_path(config)
+    payload = b"provenance-run apk bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    app = PlayApp("com.example.prov", "Prov App", "Example", "1.0", 7)
+    plan = SimpleNamespace(
+        app=app,
+        files=(SimpleNamespace(
+            name="base.apk", kind="apk", sha256=digest, size=len(payload)
+        ),),
+        signer_sha256=("b" * 64,),
+    )
+
+    captured = {}
+
+    class FakeSource:
+        def __init__(self, **_kwargs):
+            pass
+
+        def inspect(self, package_id):
+            return plan
+
+        def download(self, selected_plan, *, workspace, run_id, provenance=None):
+            captured["run_id"] = run_id
+            captured["provenance"] = provenance
+            directory = Path(workspace) / "downloads" / "com.example.prov-7"
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "base.apk").write_bytes(payload)
+            (directory / "google-play-bundle.json").write_text('{"source":"google_play"}')
+            return SimpleNamespace(
+                apk_files=(directory / "base.apk",),
+                obb_files=(),
+                manifest_path=directory / "google-play-bundle.json",
+            )
+
+    monkeypatch.setattr(cli, "Config", lambda: config)
+    monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-prov"))
+    monkeypatch.setattr(cli, "GooglePlaySource", FakeSource)
+
+    result = CliRunner().invoke(cli.main, ["download", "--package", "com.example.prov"])
+
+    assert result.exit_code == 0, result.output
+    provenance = captured["provenance"]
+    assert provenance.get("discovered_via") == "direct:com.example.prov"
+    assert provenance.get("run_id") == captured["run_id"]
+    assert provenance.get("run_manifest", "").endswith(".csv")
+    assert provenance.get("phase_one_verification_report", "").endswith(".json")
+    assert provenance.get("pipeline_version") == cli.__version__

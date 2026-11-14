@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -132,3 +133,58 @@ def test_download_preserves_and_verifies_base_split_and_obb(monkeypatch, tmp_pat
     assert result.manifest_path.is_file()
     assert len(result.manifest_sha256) == 64
     assert (result.directory / "google-play-bundle.json").is_file()
+
+
+def test_download_records_provenance_and_cleans_stale_partial_files(monkeypatch, tmp_path):
+    payloads = {"base.apk": b"prov payload"}
+    play_files = [FakePlayFile("base.apk", payloads["base.apk"])]
+    monkeypatch.setattr(gp.play_download, "play_files", lambda _package, _delivery: play_files)
+
+    class FakeDownloader:
+        def __init__(self, _delivery):
+            pass
+
+        def fetch(self, item, directory):
+            (directory / item.name).write_bytes(payloads[item.name])
+            return True
+
+    monkeypatch.setattr(gp.play_download, "Downloader", FakeDownloader)
+    plan = gp.PlayBundlePlan(
+        app=gp.PlayApp("com.example.app", "Example App", "Example Developer", "2.4.1", 241),
+        files=(
+            gp.PlayFile(
+                name="base.apk",
+                size=len(payloads["base.apk"]),
+                sha256=hashlib.sha256(payloads["base.apk"]).hexdigest(),
+                expected_algorithm="sha256",
+                expected_digest=hashlib.sha256(payloads["base.apk"]).hexdigest(),
+                kind="apk",
+            ),
+        ),
+        signer_sha256=("a" * 64,),
+        _doc=_doc(),
+        _delivery=object(),
+    )
+    bundle_dir = tmp_path / "downloads" / "com.example.app-241"
+    bundle_dir.mkdir(parents=True)
+    # Simulate an earlier interrupted attempt: our stale partial file only.
+    (bundle_dir / "base.apk.part").write_bytes(b"partial leftover")
+    (bundle_dir / "operator-note.txt").write_text("keep me")
+
+    provenance = {
+        "discovered_via": "query:banking",
+        "discovered_at": "2026-11-14T00:00:00+00:00",
+        "run_id": "run-prov-1",
+    }
+    result = gp.GooglePlaySource().download(
+        plan, workspace=tmp_path, run_id="run-prov-1", provenance=provenance
+    )
+
+    assert not (bundle_dir / "base.apk.part").exists()
+    assert (bundle_dir / "operator-note.txt").exists()
+    metadata = json.loads(
+        (result.directory / "google-play-bundle.json").read_text(encoding="utf-8")
+    )
+    assert metadata["provenance"] == provenance
+    assert metadata["extra_files"] == ["operator-note.txt"]
+    assert metadata["run_id"] == "run-prov-1"

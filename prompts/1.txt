@@ -1,0 +1,61 @@
+1.txt — STAGE 1: MAP THE RAW APPLICATION (do this first; anti-anchoring)
+================================================================================
+GOAL
+Form your own understanding of this application from the raw decompiled tree
+BEFORE you read any tool output. This stage produces your independent map.
+
+INPUTS
+  apktool/            the decoded application tree (see layout key below)
+  manifest/           provenance metadata (source hash; bundle components)
+  location_map.json   machine index of files (read for orientation only;
+                      its tool conclusions sections are OFF-LIMITS until
+                      stage 2 — do not open surface/ facts yet)
+layout key (typical; verify per app):
+  apktool/AndroidManifest.xml     the app's identity + component registry
+  apktool/smali*/                 bytecode as text (classes2+ = other dexes)
+  apktool/res/                    decoded resources (values/strings.xml...)
+  apktool/assets/                 verbatim developer files — unobfuscated
+  apktool/lib/<abi>/*.so          native libraries
+  apktool/unknown/                anything apktool could not decode
+
+METHOD (work through ALL of it; write to ai_analysis/memory/ as you go)
+1. CREATE YOUR MEMORY BANK (mandatory first step):
+   mkdir-equivalent: ai_analysis/memory/ ; create ai_analysis/NOTES.md
+   (running log) + ai_analysis/memory/raw_map.md (the independent map).
+2. READ THE ENTIRE AndroidManifest.xml. Record: package identity, all
+   permissions requested, every component (activity/service/receiver/
+   provider/activity-alias) with exported flags, every intent-filter
+   (action/category/data scheme+host+path = deep links), <meta-data> keys
+   AND values (keys are frequently credential delivery), <queries>, backup
+   config, networkSecurityConfig reference, custom <permission> definitions,
+   sharedUserId/instrumentation if present. Quote line numbers.
+3. WALK THE FULL DIRECTORY TREE of apktool/. For each directory: what it
+   contains, size, and whether it looks third-party (SDK) vs app-owned.
+   Build a package ROOT histogram from smali paths (com/foo vs com/google/
+   etc.) — this is how uncurated third-party SDKs become visible.
+4. FILE CLASSES: note every unusual member: nested archives (zip/jar/apk/
+   dex inside assets or res/raw), sqlite DBs, .so native libs (count+size),
+   HTML/JS web bundles, protobuf-ish blobs, models, fonts, cert/key files,
+   large binary blobs (possible packed code).
+5. SELECTED DEEP READS (judgment): open and skim representative files from
+   each notable region; favorite targets: assets configs (JSON/YAML/
+   properties), constants in BuildConfig-style classes (const-string),
+   res/values/strings.xml keys that look like secrets/keys/URLs.
+6. WRITE raw_map.md: the app's architecture as YOU see it (components,
+   network clients, storage, SDKs, native, oddities), with evidence
+   citations for every claim, plus a "things worth deeper digging" list.
+
+DEFINITION-OF-DONE (checklist; do not proceed until every line is true)
+ [ ] memory bank exists with NOTES.md + memory/raw_map.md
+ [ ] manifest fully mapped with citations (components + filters + meta-data)
+ [ ] full tree walked; every directory accounted for in raw_map.md
+ [ ] package histogram written (roots found, app vs third-party annotated)
+ [ ] unusual members inventory written (archives, DBs, blobs, native, JS)
+ [ ] independent "worth digging" list written
+SAVE ALL intermediate data you generate (dumps, listings, greps) into
+ai_analysis/memory/. Seed anything suspicious into a new leads list:
+ai_analysis/memory/my_leads.txt (you will reconcile with the tool's own
+lead list in stage 3).
+
+NOW READ 2.txt.
+================================================================================

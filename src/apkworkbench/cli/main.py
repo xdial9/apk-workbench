@@ -79,25 +79,35 @@ def _catalog_path(config: Config) -> Path:
     return Path(config.get("workspace")).expanduser() / "database" / "google_play_discovery.csv"
 
 
-def _write_catalog(path: Path, apps: list[PlayApp]) -> None:
+def _write_catalog(
+    path: Path,
+    apps: list[PlayApp],
+    channels: dict[str, tuple[str, str]] | None = None,
+) -> None:
+    """Write the discovery catalog; channels maps pkg -> (channel, discovered_at)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(
         prefix=".google-play-discovery.", suffix=".tmp", dir=path.parent
     )
     temporary = Path(temporary_name)
     try:
+        fieldnames = [
+            "package_id", "title", "developer", "version_name", "version_code",
+            "discovery_channel", "discovery_time",
+        ]
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(
-                handle, fieldnames=["package_id", "title", "developer", "version_name", "version_code"]
-            )
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             for app in apps:
+                channel_entry = (channels or {}).get(app.package_id) or ("", "")
                 writer.writerow({
                     "package_id": app.package_id,
                     "title": app.title,
                     "developer": app.developer,
                     "version_name": app.version_name,
                     "version_code": app.version_code,
+                    "discovery_channel": channel_entry[0],
+                    "discovery_time": channel_entry[1],
                 })
             handle.flush()
             os.fsync(handle.fileno())
@@ -131,6 +141,21 @@ def _read_catalog(path: Path) -> list[PlayApp]:
             for row in csv.DictReader(handle)
             if row.get("package_id")
         ]
+
+
+def _read_catalog_channels(path: Path) -> dict[str, tuple[str, str]]:
+    """Read discovery provenance columns; missing columns (legacy files) become blanks."""
+    if path.is_symlink() or not path.is_file():
+        return {}
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        return {
+            row["package_id"]: (
+                row.get("discovery_channel") or "",
+                row.get("discovery_time") or "",
+            )
+            for row in csv.DictReader(handle)
+            if row.get("package_id")
+        }
 
 
 def _file_sha256(path: Path) -> str:
@@ -283,20 +308,31 @@ def discover(
     click.echo("Discovering applications from Google Play Store...")
     catalog = _catalog_path(config)
     apps = []
+    existing_channels: dict[str, tuple[str, str]] = {}
 
-    def persist_batch(batch_apps: list[PlayApp]) -> None:
+    def persist_batch(
+        batch_apps: list[PlayApp],
+        batch_channels: dict[str, str] | None = None,
+    ) -> None:
         # Crash-safe discovery: merge what exists with every completed channel
         # so a rate-limit abort at category 45 of 60 keeps the first 44.
+        # First-seen channel wins (provenance stability across reruns).
+        now = utc_now()
         for app in batch_apps:
             existing.setdefault(app.package_id, app)
-        _write_catalog(catalog, list(existing.values()))
+            if app.package_id not in existing_channels and batch_channels:
+                existing_channels[app.package_id] = (
+                    batch_channels.get(app.package_id, ""), now
+                )
+        _write_catalog(catalog, list(existing.values()), existing_channels)
 
     existing: dict[str, PlayApp] = {}
     if catalog.is_file() and not catalog.is_symlink():
         for app in _read_catalog(catalog):
             existing[app.package_id] = app
+        existing_channels.update(_read_catalog_channels(catalog))
     try:
-        apps = source.discover(
+        apps, session_channels = source.discover(
             queries=queries,
             category_ids=category_ids or None,
             per_category_limit=per_category,
@@ -306,6 +342,7 @@ def discover(
         )
         if packages_file:
             session_packages = {app.package_id for app in apps}
+            packages_note = f"packages-file:{packages_file.name}"
             for raw in packages_file.read_text(encoding="utf-8").splitlines():
                 package_id = raw.strip()
                 if not package_id or package_id.startswith("#") or package_id in session_packages:
@@ -314,7 +351,9 @@ def discover(
                     raise click.ClickException(f"Invalid Android package ID in {packages_file}: {package_id!r}")
                 contributed = PlayApp(package_id, package_id, "", "", 0)
                 apps.append(contributed)
-                existing.setdefault(package_id, contributed)
+                if package_id not in existing:
+                    existing[package_id] = contributed
+                existing_channels.setdefault(package_id, (packages_note, utc_now()))
                 session_packages.add(package_id)
                 if len(apps) >= limit:
                     break
@@ -323,9 +362,15 @@ def discover(
         # crash/rate-limit only ever add apps and never delete them.
         for app in apps:
             existing.setdefault(app.package_id, app)
+        for app in apps:
+            # First-seen provenance wins; pins stability for the AI handoff.
+            if app.package_id not in existing_channels and session_channels:
+                existing_channels[app.package_id] = (
+                    session_channels.get(app.package_id, ""), utc_now()
+                )
         catalog = _catalog_path(config)
         apps = list(existing.values())
-        _write_catalog(catalog, apps)
+        _write_catalog(catalog, apps, existing_channels)
     except (GooglePlayError, OSError, ValueError) as exc:
         logger.error("Google Play discovery failed: %s", exc)
         click.echo(f"Discovery failed: {exc}", err=True)
@@ -474,6 +519,27 @@ def download(apk_count: int | None, package_id: str | None) -> None:
         shortfall = max(0, requested_count - len(plans))
         manifest_path = database.write_manifest(run_id, manifest_rows)
         context.meta["apkworkbench_run_id"] = run_id
+        # Provenance for the AI handoff: per-package channels recorded at
+        # discovery time + workspace-relative pointers to run-scoped records
+        # that will exist after verification/reconciliation.
+        catalog_channels = _read_catalog_channels(_catalog_path(config)) \
+            if _catalog_path(config).is_file() and not _catalog_path(config).is_symlink() else {}
+        provenance_by_package = {}
+        for plan in plans:
+            channel, channel_time = catalog_channels.get(
+                plan.app.package_id,
+                (f"direct:{plan.app.package_id}", selected_at),
+            )
+            provenance_by_package[plan.app.package_id] = {
+                "discovered_via": channel,
+                "discovered_at": channel_time,
+                "selected_at": selected_at,
+                "run_id": run_id,
+                "run_manifest": f"database/run_manifests/run_{run_id}.csv",
+                "phase_one_verification_report":
+                    f"reports/phase_one_verification_{run_id}.json",
+                "pipeline_version": str(__version__),
+            }
     except click.exceptions.Exit:
         raise
     except (DatabaseError, GooglePlayError, OSError, ValueError, TypeError) as exc:
@@ -491,7 +557,12 @@ def download(apk_count: int | None, package_id: str | None) -> None:
     for index, plan in enumerate(plans, start=1):
         click.echo(f"[{index}/{len(plans)}] {plan.app.package_id} versionCode={plan.app.version_code}")
         try:
-            bundle = source.download(plan, workspace=workspace, run_id=run_id)
+            bundle = source.download(
+                plan,
+                workspace=workspace,
+                run_id=run_id,
+                provenance=provenance_by_package.get(plan.app.package_id),
+            )
             for apk_path in bundle.apk_files:
                 digest = _file_sha256(apk_path)
                 try:

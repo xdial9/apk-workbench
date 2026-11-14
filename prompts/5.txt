@@ -1,0 +1,59 @@
+5.txt — STAGE 5: WRITE THE DELIVERABLES (the dossier + machine findings)
+================================================================================
+GOAL
+Produce the final outputs from your memory bank. These are the artifacts the
+operator reads — polished, cited, complete.
+
+INPUTS
+  ai_analysis/memory/*    everything from stages 1-4
+  trufflehog/ findings (included in the dossier with their label)
+
+DELIVERABLE 1: ai_analysis/dossier.md (human-facing; use this structure)
+  # App Dossier: <package> v<version>
+  1. Executive summary (5-15 lines; the answer first; severity posture)
+  2. Identity & provenance (signer, lineage, obfuscation level, delivery)
+  3. Attack surface (components, deep links, providers, activities)
+  4. Network life (host groups, protocols, cleartext, API surface, rate
+     limit posture, DNS/D1 behavior)
+  5. Secrets (verified: quote file + context; hints: quote + why labeled)
+  6. Behaviors & deductions (each: narrative + confidence label +
+     the facts it rests on)
+  7. What was verified vs what remains unknown (from cross_check +
+     lead_ledger + coverage)
+  8. Operator next steps (what a user of this dossier should do)
+  TONE: dense, factual, no padding. Every factual claim cites a path/line
+  or an entry from the machine output. Where you infer, state the chain.
+
+DELIVERABLE 2: ai_analysis/ai_analysis.json (machine-facing; exact schema)
+  {
+    "schema_version": 1,
+    "package": "<pkg>", "version_code": "<n>",
+    "confidence_labels": ["tool_verified","deduced","hint","open_question"],
+    "findings": [
+      { "id": "A1", "type": "secret|behavior|endpoint|anomaly|dispute",
+        "title": "...", "confidence": "<label>",
+        "verification_state": "ai_deduced",   // or tool_verified passthrough
+        "evidence": ["apktool/.../file.smali:123", "trufflehog/findings.json#n"],
+        "narrative": "...", "related_findings": ["A2"],
+        "fingerprint_basis": ["surface fact id / value"] }
+    ],
+    "deductions": [ { "id": "D1", "narrative": "...", "confidence": "...",
+                      "facts": ["A1", "E5"...], "cites": [...] } ],
+    "lead_ledger": [...as stage 3 wrote...],
+    "cross_check": { "disputed": [...], "missed": [...] }  // summary
+  }
+  RULES: every finding id referenced elsewhere must exist; every evidence
+  path must be inside this folder; unknowns remain entries with label
+  open_question rather than being dropped.
+
+DELIVERABLE 3: finalize ai_analysis/lead_ledger.json (from stage 3), and
+  ai_analysis/decision_log.md (append: major judgment calls + reasons).
+
+DEFINITION-OF-DONE
+ [ ] dossier.md complete per structure, every claim cited
+ [ ] ai_analysis.json valid against the schema above (ids consistent)
+ [ ] lead_ledger.json complete; decision_log.md written
+ [ ] top-level ai_analysis/ contains ONLY deliverables (scratch is in
+     ai_analysis/memory/)
+NOW READ 6.txt (closure).
+================================================================================

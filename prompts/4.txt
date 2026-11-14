@@ -1,0 +1,46 @@
+4.txt — STAGE 4: DEDUCTIONS & CORRELATIONS (behavior of the whole app)
+================================================================================
+GOAL
+Turn per-lead facts into app-level intelligence: how this app behaves,
+what its ecosystem is, where its risks concentrate, and what to tell the
+operator next.
+
+INPUTS
+  ai_analysis/memory/ (all stage-1..3 notes, raw map, leads, decoded data)
+  surface/static-analysis.json inventory + deductions (for correlation)
+  trufflehog/ verified findings (usage context from stage 2)
+
+METHOD
+1. BUILD THE BEHAVIOR MODEL (write ai_analysis/memory/behavior.md):
+   - Identity & provenance: package lineage, signer, obfuscation level
+     (state the evidence pattern — short names ratio; never a guess).
+   - Architecture: components that matter, background machinery, IPC
+     surfaces, storage, custom Application class behavior.
+   - Network life: endpoint groups (host-level), which component talks to
+     which, schemes, cleartext posture, pinning, rate-limit posture.
+   - Data flows: what user/device data is collected, where it goes, and
+     where that knowledge is vulnerable.
+2. CROSS-CORRELATE (facts the tool cannot hold together):
+   - endpoints <-> components <-> permissions (which surface uses what)
+   - verified secrets <-> usage sites (what key protects what)
+   - disputed items from cross_check.md — resolve or carry as open
+     questions; recorded disputes ARE part of the final report.
+   - SDK stack reconstruction: dependency roots -> what each SDK implies
+     (data collection, backends, identifiers you already have).
+3. DEDUCTION LEDGER: write ai_analysis/memory/deductions.md:
+   each deduction = template id (if used), conjunctive facts (cited),
+   your chain of reasoning, confidence (Law L4), and the narrative in
+   operator-meaningful language ("this app likely collects ... because
+   ...", NEVER "this app does X" without a complete cited chain — unclear
+   pieces stay hints). Recorded uncertainty is a feature, not a weakness:
+   label it explicitly.
+4. RISK SYNTHESIS: global severity narrative: the 3-10 things that define
+   this app's risk posture for an operator; grounded in the above.
+
+DEFINITION-OF-DONE
+ [ ] behavior.md complete (identity/architecture/network/data flows)
+ [ ] every deduction traceable to cited conjunctive facts
+ [ ] risk synthesis written; every cross_check dispute resolved or open
+ [ ] NOTES.md updated
+NOW READ 5.txt (deliverables).
+================================================================================

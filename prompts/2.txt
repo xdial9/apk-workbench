@@ -1,0 +1,60 @@
+2.txt — STAGE 2: INTEGRATE THE PROGRAM'S OUTPUT (after your raw map is done)
+================================================================================
+GOAL
+Read the deterministic pipeline's established facts and separate: (a) claims
+you can confirm from your own raw read, (b) claims you DISAGREE with or find
+incomplete, (c) things the tool marked as unknown. Group (b) and (c) are the
+reasons you exist — record them prominently.
+
+INPUTS
+  surface/static-analysis.json   summary: facts, findings, coverage ledger,
+                                 deductions, limitations
+  surface/facts.jsonl            one line per extracted fact with full
+                                 evidence (path/line/cited occurrences)
+  surface/location_map.json      index of every entry (exact file:line)
+  trufflehog/                    verified secret findings (evidence-grade)
+  manifest/google-play-bundle.json (if present): delivery bundle components
+  your stage-1 products: ai_analysis/memory/raw_map.md, my_leads.txt
+
+METHOD
+1. SKIM static-analysis.json section headers first (manifest_facts,
+   inventory, findings kinds, deductions, coverage), then facts.jsonl only
+   for kinds relevant to your leads. Do not dump the entire file into
+   context: follow cited locations into apktool/ files when detail matters.
+2. CONFIRMATION PASS: for each tool claim you sampled in stage 1 territory
+   (permissions, components, endpoints, SDK inventory), verify against your
+   raw map. Record agreement/in disagreement into
+   ai_analysis/memory/cross_check.md:
+     confirmed   — tool said X, my raw read agrees (cite both)
+     disputed    — tool said X, raw read disagrees or contradicts (cite
+                   both; this is a finding — create a lead
+                   "reconcile: <topic>")
+     missed      — tool has no record of something notable from stage 1
+                   (also a finding/lead)
+     expected_unknown — tool flagged unknown; judge if you can close it.
+3. INVENTORY THE LEADS LEDGER: the tool's open leads live in
+   surface/static-analysis.json under deductions/coverage (and location
+   map entries). Merge them with your stage-1 my_leads.txt into
+   ai_analysis/memory/all_leads.md (dedup by topic; keep citations).
+   You will work through this merged list in stage 3.
+4. TOOL-VERIFIED SECRETS: read trufflehog/ findings; cross reference each
+   with your raw understanding (context of the file, what system uses it);
+   note the usage context — verified secret + usage inference is one of
+   the highest-value dossier items.
+5. PROVENANCE + VERSION/DELIVERY NOTES: read google-play-bundle.json
+   provenance (discovered_via, run_id, run manifest + verification report
+   references) into NOTES.md — selection context the dossier identity
+   section should carry. Note signer identity and
+   whether this bundle had splits/asset packs not present in the artifact
+   folder (coverage implication: some code/resources not analyzable here).
+
+DEFINITION-OF-DONE
+ [ ] cross_check.md written with confirmed + disputed + missed sections,
+     every line cited
+ [ ] all_leads.md merged and deduplicated (mine + tool's), each lead has a
+     priority guess (high/med/low) and a one-line reason
+ [ ] trufflehog findings read and usage-context annotated
+ [ ] NOTES.md updated (stage 2 complete, notable agreements/disputes)
+
+NOW READ 3.txt.
+================================================================================

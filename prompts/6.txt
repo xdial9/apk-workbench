@@ -1,0 +1,51 @@
+6.txt — STAGE 6: CLOSURE — SET YOUR AGENTS FREE
+================================================================================
+GOAL
+Assume you missed something. Prove that you did not. This is the final stage:
+adversarial self-audit, free exploration, verification/fixing, and a clean
+accountable finish.
+
+PHASE A — ADVERSARIAL AUDIT (structured; must complete)
+For each question, answer in ai_analysis/memory/closure_audit.md with
+citations:
+  - Traversal: did stage 1 truly cover 100% of the apktool/ tree? (spot
+    check random directories not in your notes — do the deferred ones)
+  - The ones that got away: any region you skipped as "boring"? Look again:
+    assets, native .so strings, obscure res/ xml files, META-INF.
+  - Cross-cutting misses: did any finding conclude WITHOUT its second
+    half (e.g., endpoint found — was its source component ever traced?)
+  - Stage 2 disputes: is every cross_check.md dispute resolved, or
+    explicitly carried as an open question?
+  - Lead ledger completeness: every entry has a status + reason?
+  - Were there tool outputs you read only partially? (large facts.jsonl
+    sweeps you skipped; do a targeted re-sweep by fact kind)
+  - Anything in location_map.json you never opened?
+Fix what the audit finds: open new mini-leads, settle them with stage-3
+method, reflect in dossier/ai_analysis.json.
+
+PHASE B — FREE EXPLORATION LICENSE (your agents, your rules)
+If your environment permits spawning agents/workers, fan out across
+unresolved threads now (one thread each; report back into memory/). If not,
+iterate solo. Suggested free-hunting grounds (non-exclusive):
+  - decode anything still undecoded (base64, protobuf, custom encodings)
+  - enumerate version deltas if sibling artifact folders are accessible
+    from the workspace you were handed (otherwise skip conditionally)
+  - string-mine native libs for endpoints/keys (strings-equivalent scan)
+  - call-graph hunting: pick 3 sensitive APIs and trace their call sites
+    end-to-end; note where static mappings pay off.
+Anything new -> new leads -> stage-3 method -> reflect in deliverables.
+
+PHASE C — CONVERGENCE (required stop condition; linear/finishable doctrine)
+The stage is DONE only when ALL of these are true:
+ [ ] every lead in lead_ledger.json: pursued | dismissed (with reason)
+ [ ] every coverage surface line: expanded by your work or marked unknown
+     with an honest reason
+ [ ] dossier.md + ai_analysis.json updated with everything found in Phase A/B
+ [ ] closure_report.md written: final accounting — (verified fixed /
+     discovered now / still open + why) + resources used
+ [ ] decision_log.md final entries written
+STOP when the stop condition is met: no new lead deserves creation.
+END OF WORKLOAD. Leave the folder: apktool/, surface/, trufflehog/,
+manifest/ byte-identical to arrival (proof of a clean run: you may keep
+copies of anything inside ai_analysis/memory/).
+================================================================================
