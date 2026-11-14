@@ -26,6 +26,25 @@ first; this file holds the hands-on details for resuming.
    2,351s (~10.8 files/s baseline only; it is NOT validation evidence).
    Restarted the optimized run.
 
+## CONFIRMED ANSWER: Spotify acquisition + scan state (2026-11-14 04:36)
+- ACQUISITION COMPLETE, not in progress: `/tmp/opencode/ws/downloads/
+  com.spotify.music-148387875/` holds 4 APKs, 131 MB total (base 101,256,400 B,
+  arm64 split 34,145,588 B, en 1,069,465 B, xxhdpi 545,870 B) + 
+  google-play-bundle.json. Acquired 03:08-03:09, signer 6505b181..., all
+  hashes recorded in run_c79180cf-...csv.
+- DECODE COMPLETE for all 4: results/com.spotify.music/148387875/<digest>/
+  apktool/ trees exist (1.1 GB base, 33 MB arm64, 2.0 MB en, 844 KB xxhdpi).
+- SCAN IN PROGRESS but only artifact 1 of 4 (base.apk, digest a6bded...).
+  Evidence: log line "112,254 text files (108,190 smali)"; base tree has
+  112,366 files total. Splits not yet analyzed.
+- NO static-analysis.json written yet (find cmd returns nothing) and the run
+  marker is still eligible:0/status:running, because the driver writes the
+  artifact only AFTER sweep -> APK re-hash -> androguard DEX -> finalize.
+  Absence of the file is expected, not a failure.
+- Remaining driver stages for artifact 1: hash 101 MB base.apk (2s heartbeat),
+  androguard DEX (dex_timeout_seconds=1800, and the 64 MB output cap will
+  likely make it partial -> status partial, Phase A proof), then splits 2-4.
+
 ## RUNNING NOW (optimized Spotify heavy case)
 - PID 42219, launched 2026-11-14 ~04:26, run
   c79180cf-01ab-4b2b-a507-4e238f24c1d1.
