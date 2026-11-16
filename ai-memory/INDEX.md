@@ -50,6 +50,19 @@ END: update STATE (phase item moved? decisions? VERIFYs resolved?) + tick
 surface.txt/plan.txt checkboxes if applicable.
 
 ## STATE (as of 2026-11-16, updated by agent)
+- SCANNER AUDIT + P0 STARTED 2026-11-16 (commit a88eac2, 282 tests green).
+  A line-by-line audit of the scanner (driver + all of analysis/surface/* +
+  androguard_dex) found it is NOT 360-ready: only 20 text suffixes are read,
+  there is no per-file ledger, no class/method/resource model, no link graph,
+  no certificate facts, and caps drop data instead of sharding. The full
+  audit + 8-phase plan (P0..P8) is in the operator handoff folder as
+  "98-scanner-audit.md"; it is NOT in this repo yet.
+  DONE in a88eac2 (P0a+P0b): files.jsonl per-file coverage ledger
+  (status+reason per entry, symlinks/unreadable named), magic table extended
+  (png/jpeg/gif/riff/pdf/font/arsc), resource_inventory now reports
+  counted_not_parsed instead of a false "success", two dead diagnostic codes
+  removed. NEXT scanner step is P0c (shard instead of drop for native
+  symbol/string/finding overflow) unless the user reorders.
 - VERIFIED SNAPSHOT 2026-11-16 (git + pytest, not memory): working branch
   feat/native-elf-reader; tests 271 green; native N1-N13 all committed
   (N13 asset/container-embedded .so = f1b921d). Before this snapshot those
