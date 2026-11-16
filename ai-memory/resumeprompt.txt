@@ -1,0 +1,61 @@
+You are taking over an in-progress project at /home/user/APK-Workbench from a previous session. The project is too large to read in one pass, so we will read it in chunks and keep notes on disk. Right now you are only planning and reading the memory file.
+
+RULES FOR THIS WHOLE TASK:
+- Do NOT modify, create, or delete anything inside /home/user/APK-Workbench. Read-only commands only (ls, find, cat, sed -n, wc, grep, git log, git status, git diff).
+- The ONLY place you may write is the notes folder /home/user/oc-handoff/ (create it if needed).
+- Never invent files, functions, or behavior. If unsure, write "unverified".
+
+STEP 1: MEMORY FILE
+Find the handoff file (any file with "ai-memory" in its name, any extension or folder). Read it COMPLETELY, every line. If it is long, read it in ranges with sed -n. Write a faithful summary to /home/user/oc-handoff/00-memory-summary.md covering: what the project is, what was done, decisions made, known bugs, and what the previous session said comes next. Quote exact file names and task names from it.
+
+STEP 2: INVENTORY
+1. Run git status, git log --oneline -20, and git diff --stat. Record the results in /home/user/oc-handoff/01-inventory.md.
+2. List every source, config, build, and test file in the project with its line count (use find and wc -l). Ignore .git, node_modules, build outputs, virtualenvs, caches, and vendored or generated folders. Put the full list with line counts in 01-inventory.md.
+
+STEP 3: CHUNK PLAN
+Group the files into chunks of roughly 3,000 lines each, keeping related files together (same module or folder). If a single file exceeds 3,000 lines, split it into line ranges such as "bigfile.py lines 1-2500". Write the plan to /home/user/oc-handoff/02-chunk-plan.md as a numbered checklist where every chunk is "[ ] Chunk N: file list (line count)". Put the files that the memory file marks as in-progress or broken, and the main entry points, in the earliest chunks.
+
+When finished, print the chunk plan and the memory summary, then STOP. Do not start reading chunks.
+------
+You are continuing a chunked read of the project at /home/user/APK-Workbench. Your state lives in /home/user/oc-handoff/.
+
+RULES: Do NOT modify anything inside /home/user/APK-Workbench. Read-only commands only. You may write ONLY inside /home/user/oc-handoff/. Never invent anything; write "unverified" when unsure.
+
+STEPS:
+1. Read /home/user/oc-handoff/00-memory-summary.md and /home/user/oc-handoff/02-chunk-plan.md. Also read any existing chunk notes (files named 10-chunk-*.md) so you know what earlier chunks found.
+2. Find the FIRST chunk in the plan marked "[ ]". If every chunk is marked "[x]", print "ALL CHUNKS DONE" and stop.
+3. Read EVERY line of every file in that chunk. For long files, read in ranges (sed -n 'START,ENDp') until you have covered all of it. Do not skim and do not guess from file names.
+4. Write /home/user/oc-handoff/10-chunk-N.md (N = the chunk number) containing, for each file:
+   - Purpose, in one or two sentences.
+   - Key functions, classes, and data structures, with file:line references.
+   - What it imports or calls, and what calls it, if you can tell.
+   - Anything half-finished, TODO or FIXME, dead code, likely bugs, hardcoded values, or fragile spots, with file:line references.
+   - Anything that agrees or disagrees with the memory summary.
+5. Change that chunk's checkbox in 02-chunk-plan.md from "[ ]" to "[x]". Do not change anything else in that file.
+6. Print a short summary of what you found in this chunk and which chunks remain, then STOP. Do not continue to the next chunk.
+----
+You are finishing a chunked read of the project at /home/user/APK-Workbench. Read ALL the notes in /home/user/oc-handoff/ (00-memory-summary.md, 01-inventory.md, 02-chunk-plan.md, and every 10-chunk-*.md). Do NOT re-read the whole codebase. You may open specific source files to verify a claim or settle a conflict between notes.
+
+RULES: Do NOT modify anything inside /home/user/APK-Workbench. You may write ONLY inside /home/user/oc-handoff/. Cite file:line for non-trivial claims. Write "unverified" when unsure.
+
+Write /home/user/oc-handoff/99-briefing.md and also print it. Sections:
+1. One-paragraph project summary.
+2. Architecture map: modules, how they connect, data flow, entry points, and any external tools or services it wraps.
+3. Conventions: language and version, style, naming, error handling, how it is built and tested.
+4. Current state: done, in progress, broken.
+5. Discrepancies between the memory file and the actual code.
+6. Risks: dead code, duplicated logic, fragile spots, missing tests, likely bugs.
+7. Open questions for me.
+8. Proposed next 3 to 5 steps, in priority order, each small and specific, naming the files involved.
+9. A draft updated version of the ai-memory file, shown as text only. Do not write it into the project.
+
+Then STOP and wait for my instructions. Do not start implementing anything.
+----
+Paste Prompt 1 and let it finish.
+Start a new session (/new, or quit and relaunch opencode).
+Paste Prompt 2. When it finishes, start a new session and paste Prompt 2 again. Keep repeating until it reports ALL CHUNKS DONE.
+In a new session, paste Prompt 3.
+
+Prompt 2: process the next chunk (reuse this one every time)
+
+You are resuming work on /home/user/APK-Workbench. First read the ai-memory file completely, then read /home/user/oc-handoff/99-briefing.md. Do not modify anything yet. Tell me in a few sentences what the project is, where we left off, and what you propose to do next, then wait for my instructions.

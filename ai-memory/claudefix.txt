@@ -1,0 +1,62 @@
+Make a small, additive change to this APK analysis pipeline. Follow the existing code style and patterns exactly — do not refactor anything else.
+
+CONTEXT: apkworkbench/analysis/androguard_dex.py already extracts every external
+API call site (external_method_references, with caller/callee + offsets) and
+categorizes each by owner class via API_OWNER_PREFIXES (e.g. "network",
+"cryptography", "webview"). apkworkbench/analysis/surface/deductions.py already
+has deduction templates like packed_or_obfuscated() that turn facts into a
+prioritized lead with next_steps for the AI handoff. apkworkbench/analysis/
+surface/apk_surface.py assembles the final per-APK result and already calls
+permission_mismatch() using dex_result data.
+
+TASK 1 — androguard_dex.py:
+Add a new category "trust_decision" to API_OWNER_PREFIXES covering:
+  - "Ljava/util/Random;" and "Ljava/security/SecureRandom;" (outcome/RNG)
+  - "Landroid/content/pm/PackageManager;" and "Landroid/content/pm/Signature;"
+    (signature/integrity checks)
+These currently fall through to "platform_or_framework" and lose this signal.
+Do not remove java/security or javax/crypto from "cryptography" — a class can
+only match one category, so order trust_decision's prefixes so Random/
+SecureRandom/PackageManager/Signature are not already caught elsewhere first.
+
+TASK 2 — deductions.py:
+Add a new function `trust_decision_surface(facts: FactStore, external_method_references: list[dict]) -> dict | None`,
+same structure as packed_or_obfuscated(). For each entry in
+external_method_references whose "category" == "trust_decision", add a fact
+via facts.add("trust_decision_call", entry["full_name"], evidence=<first call
+site's caller/caller_class/offset as a dict with "path" and no "line" since
+DEX offsets aren't source lines>, extra={"owner": entry["owner"], "call_site_count": len(entry["call_sites"])}).
+If no such entries exist, return None. Otherwise return a deduction (reuse
+the existing _deduction() helper) with:
+  - id "D-TRUST-DECISION-SURFACE", template "trust_decision_surface"
+  - confidence "hint"
+  - narrative listing the distinct full_name values found (same truncate-at-12
+    pattern as sdk_stack())
+  - next_steps:
+    1. "For each cited call site, trace the returned/produced value forward
+       through the caller using the internal call graph: does it reach a
+       network call before being used, does it reach UI/rendering directly,
+       or is it discarded? Record which for each."
+    2. "If any such value determines a user-facing outcome (e.g. a game result,
+       a license/entitlement check) without an intervening server round-trip,
+       record this as a client-authoritative trust violation with full
+       citation."
+  - cites: list of the facts' evidence-based locations, same style as other
+    deduction cites lists
+
+TASK 3 — apk_surface.py:
+In run_static_surface_analysis(), right next to the existing permission_mismatch
+call (search for "mismatch = permission_mismatch"), add a call to
+trust_decision_surface(fact_store, dex_result.get("external_method_references", []))
+and, if it returns non-None, append it the same way the permission_mismatch
+result is appended to result.setdefault("deductions", []). Note fact_store
+here needs to be the one already built earlier in analyze_apk_surface — check
+whether it's accessible at this point or whether you need to pass/return it;
+if it's out of scope, create a local FactStore() just for this call, matching
+how permission_mismatch() already defaults facts=FactStore() when not given one.
+
+VERIFY WHEN DONE:
+1. Run the existing test suite (check tests/ directory) and make sure nothing
+   that already covers deductions.py or apk_surface.py breaks.
+2. Show me a diff of all three files before considering this done.
+3. Do not touch any other file, rule, or deduction template.
