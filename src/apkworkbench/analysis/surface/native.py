@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from apkworkbench.analysis.surface.classify import ARCHIVE_KINDS, sniff_file_magic
 from apkworkbench.analysis.surface.native_elf import (
     ElfParseResult,
     ElfSymbol,
@@ -64,6 +65,7 @@ UNMAPPED_REASONS = frozenset({
     "unreferenced",
     "dependency_of_other_lib",
     "not_elf_archive",
+    "not_elf_payload",
     "obfuscated_path",
     "no_load_site",
     "no_library_literal",
@@ -328,6 +330,7 @@ class NativeLibraryReport:
     relative: str
     state: str  # parsed | stripped_symbols | parse_failed | not_elf
     reason: str = ""
+    observed_content_kind: str | None = None
     parsed: ElfParseResult | None = None
     strings: StringScan | None = None
     jni_entries: list[dict[str, Any]] = field(default_factory=list)
@@ -343,6 +346,7 @@ class NativeLibraryReport:
             "path": self.relative,
             "state": self.state,
             "reason": self.reason or None,
+            "observed_content_kind": self.observed_content_kind,
             "elf": (
                 {
                     "class": parsed.header.class_type,
@@ -434,10 +438,35 @@ def analyze_native(
         report.parsed = parsed
         if parsed.reason == "not_elf_file":
             report.state = "not_elf"
-            report.reason = parsed.reason
+            # A .so that is not ELF is either a packer container (zip/apk/dex)
+            # or an unknown binary. Name the observed kind and use the closed
+            # reason for it; "parse failed" alone is not evidence.
+            observed = sniff_file_magic(lib_path) or "unknown"
+            report.observed_content_kind = observed
+            report.reason = (
+                "not_elf_archive" if observed in ARCHIVE_KINDS else "not_elf_payload"
+            )
             analysis.diagnostics.append({
                 "code": "native_not_elf",
-                "message": f"{relative}: ELF magic absent ({parsed.reason})",
+                "message": (
+                    f"{relative}: ELF magic absent; observed payload kind "
+                    f"'{observed}' (reason {report.reason})"
+                ),
+            })
+            analysis.facts.append({
+                "kind": "native_payload_not_elf",
+                "value": relative,
+                "evidence": {"path": relative, "offset": 0},
+                "extra": {
+                    "library": relative,
+                    "observed_content_kind": observed,
+                    "reason": report.reason,
+                    "note": (
+                        "This file is named .so but is not ELF. Container formats "
+                        "can hide native code that this pass cannot parse; the "
+                        "payload is inventoried, not analysed."
+                    ),
+                },
             })
             reports.append(report)
             continue

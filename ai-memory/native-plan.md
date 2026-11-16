@@ -216,6 +216,10 @@ DECISIONS / CONSTRAINTS (append-only)
   numbers to real byte offsets (_retarget_native_evidence). An endpoint found
   inside a string cites the START of the containing string: a substring's own
   offset would require a second search and adds no traceability.
+- 2026-11-16: a `.so` that is not ELF is now NAMED, not just failed: magic is
+  sniffed with classify.sniff_file_magic and the payload gets
+  native_payload_not_elf + observed_content_kind + reason not_elf_archive
+  (zip/apk/gzip/dex/java_class) or not_elf_payload (anything else).
 - 2026-11-16: a non-ELF file named `.so` flips status to partial (coverage law),
   recorded as native_not_elf; it is never reported as "no symbols".
 

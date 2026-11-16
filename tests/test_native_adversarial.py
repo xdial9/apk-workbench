@@ -20,7 +20,9 @@ def test_zip_named_so_is_skipped_with_a_reason(tmp_path):
 
     inventory = result["inventory"]["native_analysis"]
     assert [item["state"] for item in inventory] == ["not_elf"]
-    assert inventory[0]["reason"] == "not_elf_file"
+    # The payload is named by observation (zip container), not just "failed".
+    assert inventory[0]["reason"] == "not_elf_archive"
+    assert inventory[0]["observed_content_kind"] == "zip"
     assert result["metrics"]["native_files_skipped"] == 1
     assert result["status"] == "partial"
     assert any(item["code"] == "native_not_elf" for item in result["diagnostics"])
@@ -133,3 +135,35 @@ def test_no_manifest_still_reports_native_state(tmp_path):
     assert result["coverage"]["native_libraries"] == "analyzed"
     assert (root / "AndroidManifest.xml").exists() is False
     assert MANIFEST  # fixture constant is intentionally available to other tests
+
+
+def test_packer_wrapped_so_is_named_not_just_failed(tmp_path):
+    """A zip/dex payload named .so must say WHAT it is, with a closed reason."""
+    root = make_tree(tmp_path)
+    (root / "lib/arm64-v8a/libpacked.so").write_bytes(b"PK\x03\x04" + b"\x00" * 64)
+    (root / "lib/arm64-v8a/libopaque.so").write_bytes(b"\xde\xad\xbe\xef" + b"\x00" * 64)
+
+    result = analyze_apk_surface(root)
+
+    payloads = {
+        fact["value"]: fact for fact in result["facts"]
+        if fact["kind"] == "native_payload_not_elf"
+    }
+    packed = payloads["lib/arm64-v8a/libpacked.so"]
+    opaque = payloads["lib/arm64-v8a/libopaque.so"]
+    assert packed["observed_content_kind"] == "zip"
+    assert packed["reason"] == "not_elf_archive"
+    assert opaque["observed_content_kind"] == "unknown"
+    assert opaque["reason"] == "not_elf_payload"
+    assert packed["evidence"] == [{"path": "lib/arm64-v8a/libpacked.so", "offset": 0}]
+
+    inventory = {item["path"]: item for item in result["inventory"]["native_analysis"]}
+    assert inventory["lib/arm64-v8a/libpacked.so"]["observed_content_kind"] == "zip"
+    assert inventory["lib/arm64-v8a/libopaque.so"]["observed_content_kind"] == "unknown"
+    # The diagnostic now carries the observed kind, not a bare failure.
+    messages = [
+        item["message"] for item in result["diagnostics"]
+        if item["code"] == "native_not_elf"
+    ]
+    assert any("'zip'" in message and "not_elf_archive" in message for message in messages)
+    assert result["coverage"]["native_libraries"] == "partial"
