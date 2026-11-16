@@ -49,6 +49,10 @@ from apkworkbench.analysis.surface.manifest_v2 import (
     parse_manifest_v2,
     parse_network_security_config,
 )
+from apkworkbench.analysis.surface.identity import (
+    identity_findings,
+    parse_apk_identity,
+)
 
 ANALYZER_ID = "apk-surface"
 ANALYZER_VERSION = "0.3.0"
@@ -246,6 +250,7 @@ def analyze_apk_surface(
     progress: Callable[[str], None] | None = None,
     tree_root: str = "apktool/",
     output_dir: str | Path | None = None,
+    apk_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Inspect decoded XML/Smali/resources and produce inventory plus static leads.
 
@@ -254,6 +259,10 @@ def analyze_apk_surface(
     ``shards-index.json``. Both summaries always land in the result; the files
     are written only when a directory is supplied, so direct callers (tests) do
     not write into the evidence tree.
+
+    ``apk_path`` (optional) is the original APK. It supplies the identity
+    plane: signing schemes, certificates, ABIs and zip totals. Without it the
+    identity coverage is reported as ``not_found`` rather than guessed.
     """
     root = Path(apktool_dir).expanduser().resolve(strict=True)
     root = Path(os.fspath(root))
@@ -272,6 +281,7 @@ def analyze_apk_surface(
         "dependency_fingerprints": "not_scanned",
         "native_libraries": "not_found",
         "resource_inventory": "not_scanned",
+        "apk_identity": "not_found",
         "runtime_behavior": "not_performed",
         "dynamic_network_testing": "not_performed",
     }
@@ -371,6 +381,28 @@ def analyze_apk_surface(
     if backup_facts:
         manifest_facts["backup_rules"] = backup_facts
         coverage["backup_rules"] = "success"
+
+    manifest_relative = next(
+        (path.relative_to(root).as_posix() for path in files if path.name == "AndroidManifest.xml"),
+        "AndroidManifest.xml",
+    )
+
+    # ---- P1: APK identity + signing (from the original APK bytes) ---------
+    # The decoded tree cannot answer "who signed this". Without an APK the
+    # coverage says not_found instead of guessing from the package name.
+    identity: dict[str, Any] = {
+        "status": "not_found", "schemes": [], "certificates": [], "abis": [],
+    }
+    if apk_path is not None:
+        identity = parse_apk_identity(apk_path)
+        coverage["apk_identity"] = {
+            "success": "success",
+            "unsigned": "success",   # determined, and reported as a finding
+            "partial": "partial",
+            "failed": "failed",
+        }.get(str(identity.get("status")), "failed")
+        findings.extend(identity_findings(identity, manifest_relative))
+        diagnostics.extend(identity.get("diagnostics") or [])
 
     dependency_evidence: dict[str, list[str]] = {name: [] for name in DEPENDENCY_MARKERS}
     api_clients: dict[str, list[dict[str, Any]]] = {name: [] for name in API_CLIENT_MARKERS}
@@ -547,10 +579,40 @@ def analyze_apk_surface(
 
     # ---- S5: fingerprint fact store + deduction templates -----------------
     fact_store = FactStore()
-    manifest_relative = next(
-        (path.relative_to(root).as_posix() for path in files if path.name == "AndroidManifest.xml"),
-        "AndroidManifest.xml",
-    )
+    # ---- P1 identity facts ------------------------------------------------
+    apk_cite = f"apk:{identity.get('source', '')}" if identity.get("source") else "apk:"
+    for scheme in identity.get("schemes") or []:
+        fact_store.add("apk_signing_scheme", scheme, evidence={"path": apk_cite})
+    for certificate in identity.get("certificates") or []:
+        fact_store.add(
+            "apk_signing_certificate", certificate.get("sha256", ""),
+            evidence={"path": apk_cite},
+            extra={
+                "subject": certificate.get("subject_text"),
+                "issuer": certificate.get("issuer_text"),
+                "scheme": certificate.get("scheme"),
+                "serial": certificate.get("serial"),
+                "not_before": certificate.get("not_before"),
+                "not_after": certificate.get("not_after"),
+                "self_issued": certificate.get("self_issued"),
+                "min_sdk": certificate.get("min_sdk"),
+                "max_sdk": certificate.get("max_sdk"),
+            },
+        )
+    for abi in identity.get("abis") or []:
+        fact_store.add("apk_abi", abi, evidence={"path": apk_cite})
+    for entry in manifest_facts.get("uses_library", []) or []:
+        if entry.get("name"):
+            fact_store.add(
+                "uses_library", entry["name"], evidence={"path": manifest_relative},
+                extra={"required": entry.get("required")},
+            )
+    for entry in manifest_facts.get("uses_native_library", []) or []:
+        if entry.get("name"):
+            fact_store.add(
+                "uses_native_library", entry["name"], evidence={"path": manifest_relative},
+                extra={"required": entry.get("required")},
+            )
     for record in api_endpoints.values():
         # CAP-FREE + EVIDENCE-COMPLETE: was evidence[0] only (count=1 even when
         # occurrences=9). Add once per evidence so count == occurrences and
@@ -674,6 +736,7 @@ def analyze_apk_surface(
         ),
         "coverage": coverage,
         "manifest": manifest_facts,
+        "identity": identity,
         "facts": fact_store.export(),
         "deductions": deductions,
         "sdk_histogram": histogram,
@@ -959,12 +1022,6 @@ def run_static_surface_analysis(
         if progress:
             progress(f"[surface {index}/{len(eligible)}] Inspecting {package_id} v{version_code}")
         try:
-            result = analyze_apk_surface(
-                decoded,
-                progress=progress,
-                tree_root=citation_root,
-                output_dir=output_root,
-            )
             source_value = row.get("local_path", "")
             source_candidate = Path(source_value).expanduser()
             downloads_root = root / "downloads"
@@ -1001,6 +1058,13 @@ def run_static_surface_analysis(
             _emit_progress(
                 progress,
                 f"  Source APK integrity rechecked: SHA-256 matches ({actual_size:,} bytes)",
+            )
+            result = analyze_apk_surface(
+                decoded,
+                progress=progress,
+                tree_root=citation_root,
+                output_dir=output_root,
+                apk_path=source_apk,
             )
             _emit_progress(
                 progress,

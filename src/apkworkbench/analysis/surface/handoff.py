@@ -32,6 +32,7 @@ VALUE_PREVIEW = None  # deprecated, do not use to truncate
 TREE_ROOT_PREFIX = "apktool/"
 NON_PATH_CITE_PREFIXES = (
     "sdk_root:", "permission:", "coverage:", "endpoint:", "route:", "fact:",
+    "apk:",
 )
 
 

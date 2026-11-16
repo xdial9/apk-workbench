@@ -258,6 +258,7 @@ def parse_manifest_v2(
         "queries": [], "permission_definitions": [], "uses_feature": [],
         "intent_filters": [], "instrumentation": None,
         "shared_user_id": None, "backup": {"allow_backup": None},
+        "uses_library": [], "uses_native_library": [],
     }
     try:
         root = ET.parse(path).getroot()
@@ -305,6 +306,10 @@ def parse_manifest_v2(
             })
         elif tag == "uses-feature":
             facts["uses_feature"].append(stripped_attrs(element))
+        elif tag == "uses-library":
+            facts["uses_library"].append(stripped_attrs(element))
+        elif tag == "uses-native-library":
+            facts["uses_native_library"].append(stripped_attrs(element))
         elif tag == "instrumentation":
             facts["instrumentation"] = stripped_attrs(element)
         elif tag == "queries":

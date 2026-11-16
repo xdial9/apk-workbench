@@ -230,8 +230,8 @@ def build_workbook(
             "note": (
                 "locations are relative to tree_root unless they begin with a "
                 "known scheme prefix (endpoint:, permission:, sdk_root:, "
-                "coverage:, route:, fact:). location_map.json carries the same "
-                "citations already prefixed with tree_root, so either form "
+                "coverage:, route:, fact:, apk:). location_map.json carries the "
+                "same citations already prefixed with tree_root, so either form "
                 "resolves to the same file."
             ),
             "facts": _fact_locations(facts),
