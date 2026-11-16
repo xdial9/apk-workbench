@@ -1,4 +1,7 @@
-"""Adapter exposing the existing safe TruffleHog scanner through the analyzer contract."""
+"""Adapter exposing TruffleHog through the analyzer contract - hand AI everything.
+
+One pass, verified + unverified. Never drop unverified.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,7 +19,7 @@ from apkworkbench.analysis.trufflehog import AnalysisError, TruffleHogScanner
 
 
 class TruffleHogAnalyzer:
-    """Run the existing local scanner for one artifact and normalize its safe output.
+    """Run the existing local scanner for one artifact and normalize ALL its output.
 
     The installed TruffleHog version is supplied by the caller so execution provenance
     never substitutes an invented or generic version string.
@@ -33,7 +36,8 @@ class TruffleHogAnalyzer:
         if not tool_version or not tool_version.strip():
             raise ValueError("tool_version must be the detected installed TruffleHog version.")
         timeout = timeout_seconds or float(scanner.timeout_seconds)
-        output_limit = max_output_bytes or min(scanner.max_output_bytes, 64 * 1024 * 1024)
+        # CAP-FREE: was min(scanner.max_output_bytes, 64MB) - that choked the executor pipe. Use scanner's full limit.
+        output_limit = max_output_bytes or scanner.max_output_bytes
         self.scanner = scanner
         self.definition = AnalyzerDefinition(
             analyzer_id="trufflehog",
@@ -44,13 +48,15 @@ class TruffleHogAnalyzer:
             resource_profile=ResourceProfile(
                 timeout_seconds=timeout,
                 max_output_bytes=output_limit,
-                max_findings=100_000,
+                # CAP-FREE: was 100k, executor fails the whole analyzer if findings exceed this.
+                # TruffleHog can emit >100k in a large APK. Set high so we hand AI everything, not fail.
+                max_findings=10_000_000,
                 max_concurrency=1,
             ),
             default_enabled=False,
             description=(
                 "Local TruffleHog filesystem scan of decompiled output; "
-                "only explicitly verified findings are retained."
+                "all findings retained, verified + unverified, split for AI handoff."
             ),
         )
 
@@ -83,8 +89,8 @@ class TruffleHogAnalyzer:
         )
         findings = []
         for item in original_findings:
-            if item.get("Verified") is not True:
-                raise AnalysisError("TruffleHog adapter received a finding that is not explicitly verified.")
+            # CAP-FREE: was raise if not verified. Now keep unverified, mark its state.
+            is_verified = item.get("Verified") is True
             fingerprint = TruffleHogScanner._finding_fingerprint(item)
             detector_name = item.get("DetectorName") or "TruffleHog finding"
             detector_type = item.get("DetectorType") or detector_name
@@ -104,7 +110,7 @@ class TruffleHogAnalyzer:
                         line_start=line_number,
                         extractor_coordinate={
                             "decoder_name": item.get("DecoderName"),
-                            "verification": "verified",
+                            "verification": "verified" if is_verified else "unverified",
                         },
                     ),
                 )
@@ -115,8 +121,12 @@ class TruffleHogAnalyzer:
                     title=str(detector_name),
                     value_fingerprint=fingerprint,
                     sensitive=True,
-                    verification_state="tool_verified",
-                    rationale="TruffleHog marked this finding as verified.",
+                    verification_state="tool_verified" if is_verified else "static_unverified",
+                    rationale=(
+                        "TruffleHog marked this finding as verified."
+                        if is_verified
+                        else "TruffleHog emitted this finding as unverified - retained for AI handoff, not dropped."
+                    ),
                     rule_id=str(detector_name),
                     rule_version=self.definition.version,
                     dedup_key=fingerprint,
@@ -130,9 +140,14 @@ class TruffleHogAnalyzer:
             diagnostics=(
                 AnalyzerDiagnostic(
                     code="credential_verification_enabled",
-                    message="TruffleHog verification was enabled.",
+                    message="TruffleHog verification was enabled, results NOT filtered - verified + unverified retained.",
                     severity="info",
                 ),
             ),
-            metrics={"finding_count": len(findings)},
+            metrics={
+                "finding_count": len(findings),
+                "verified": sum(1 for f in findings if f.verification_state == "tool_verified"),
+                "unverified": sum(1 for f in findings if f.verification_state != "tool_verified"),
+                "total_seen": len(findings),
+            },
         )

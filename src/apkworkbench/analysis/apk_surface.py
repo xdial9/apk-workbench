@@ -232,6 +232,31 @@ def _parse_manifest(path: Path, relative: str, findings: list[dict[str, Any]]) -
     return parse_manifest_v2(path, relative, findings)
 
 
+_NATIVE_STRING_RE = re.compile(rb"[ -~]{4,}")
+
+def _extract_native_strings(path: Path, *, max_bytes: int = 50_000_000) -> str | None:
+    """Extract printable ASCII strings from a .so/.a file (ELF strings, not a full parse).
+
+    Returns newline-joined strings, or None if the file cannot be read.
+    Caps at max_bytes read to avoid OOM on huge libs; the cap is recorded
+    by the caller as a diagnostic, never silently hidden.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    try:
+        with path.open("rb") as handle:
+            data = handle.read(max_bytes + 1)
+    except OSError:
+        return None
+    if len(data) > max_bytes:
+        # Truncated read: caller records diagnostic; strings still swept from first max_bytes.
+        pass
+    parts = _NATIVE_STRING_RE.findall(data)
+    return "\n".join(part.decode("ascii", errors="replace") for part in parts)
+
+
 def analyze_apk_surface(
     apktool_dir: str | Path,
     *,
@@ -362,6 +387,12 @@ def analyze_apk_surface(
     )
     sweep = SweepState(DEPENDENCY_MARKERS)
     sweep.api_clients = {name: [] for name in API_CLIENT_MARKERS}
+    # DOMAIN filter needs the manifest package (com.example.smoke is not a domain).
+    # Manifest is parsed above, so package is known before sweeping.
+    if isinstance(manifest_facts, dict):
+        pkg = manifest_facts.get("package")
+        if isinstance(pkg, str) and pkg:
+            sweep.manifest_package = pkg
     for path in files:
         relative = path.relative_to(root).as_posix()
         if path.suffix.lower() not in TEXT_SUFFIXES:
@@ -389,6 +420,38 @@ def analyze_apk_surface(
             relative=relative,
             path=path,
             text=text,
+            code_rules=COMPILED_CODE_RULES,
+            api_client_markers=API_CLIENT_MARKERS,
+            api_invoke_owner_re=API_INVOKE_OWNER_RE,
+            smali_invoke_re=SMALI_INVOKE_RE,
+            header_re=API_HEADER_RE,
+            rate_limit_re=RATE_LIMIT_RE,
+            dependency_markers=DEPENDENCY_MARKERS,
+            emit=lambda message: None,
+        )
+    # ---- Native .so/.a strings sweep (G4) ----
+    # Surface previously listed .so paths only (inventory_only). Extract
+    # printable strings and sweep them with the same SweepState so native
+    # URLs/domains/secrets appear in endpoints/facts, not just in a path list.
+    native_strings_scanned = 0
+    native_strings_bytes = 0
+    native_secret_hints: list[dict[str, Any]] = []
+    for lib_rel in native_libraries:
+        lib_path = root / lib_rel
+        strings_text = _extract_native_strings(lib_path)
+        if strings_text is None:
+            diagnostics.append({"code": "native_strings_read_failed", "message": f"{lib_rel}: could not read native library"})
+            continue
+        native_strings_scanned += 1
+        native_strings_bytes += len(strings_text)
+        for _line in strings_text.splitlines():
+            _low = _line.lower()
+            if any(k in _low for k in ("secret", "passwd", "password", "api_key", "apikey", "api-key", "private_key", "private-key", "credential", "auth_token", "access_token")):
+                native_secret_hints.append({"value": _line.strip()[:500], "path": lib_rel})
+        sweep.sweep_text(
+            relative=lib_rel,
+            path=lib_path,
+            text=strings_text,
             code_rules=COMPILED_CODE_RULES,
             api_client_markers=API_CLIENT_MARKERS,
             api_invoke_owner_re=API_INVOKE_OWNER_RE,
@@ -463,14 +526,28 @@ def analyze_apk_surface(
         "AndroidManifest.xml",
     )
     for record in api_endpoints.values():
-        evidence = record["evidence"][0] if record["evidence"] else None
-        fact_store.add("endpoint", record.get("canonical") or record["value"], evidence=evidence, extra={
-            "kind": record["kind"], "host": record.get("host"),
+        # CAP-FREE + EVIDENCE-COMPLETE: was evidence[0] only (count=1 even when
+        # occurrences=9). Add once per evidence so count == occurrences and
+        # ALL path:line pairs reach the AI. Also: extra used key "kind" which
+        # FactStore.add() overwrote the fact's own kind ("endpoint" -> "url"/
+        # "domain_candidate"). Renamed to "endpoint_kind" so fact kind stays "endpoint".
+        value = record.get("canonical") or record["value"]
+        extra = {
+            "endpoint_kind": record["kind"], "host": record.get("host"),
             "host_class": record.get("host_class"), "flags": record.get("flags", []),
-        })
+        }
+        if record.get("evidence"):
+            for ev in record["evidence"]:
+                fact_store.add("endpoint", value, evidence=ev, extra=dict(extra))
+        else:
+            fact_store.add("endpoint", value, evidence=None, extra=dict(extra))
     for route, route_data in api_routes.items():
-        evidence = route_data["evidence"][0] if route_data["evidence"] else None
-        fact_store.add("api_route", f"{route_data.get('http_method') or '?'} {route}", evidence=evidence)
+        route_value = f"{route_data.get('http_method') or '?'} {route}"
+        if route_data.get("evidence"):
+            for ev in route_data["evidence"]:
+                fact_store.add("api_route", route_value, evidence=ev)
+        else:
+            fact_store.add("api_route", route_value, evidence=None)
     if isinstance(manifest_facts.get("deep_links"), list):
         for link in manifest_facts["deep_links"]:
             fact_store.add(
@@ -492,10 +569,15 @@ def analyze_apk_surface(
             "path": item["path"], "line": item["line"],
         }, extra={"encoded": item["encoded"], "reveals": item["reveals"]})
     for dependency in dependencies:
-        evidence = {"path": dependency["evidence_paths"][0]} if dependency["evidence_paths"] else None
-        fact_store.add("dependency_sdk", dependency["name"], evidence=evidence)
+        if dependency.get("evidence_paths"):
+            for ev_path in dependency["evidence_paths"]:
+                fact_store.add("dependency_sdk", dependency["name"], evidence={"path": ev_path})
+        else:
+            fact_store.add("dependency_sdk", dependency["name"], evidence=None)
     for library in native_libraries:
         fact_store.add("native_library", library, evidence={"path": library})
+    for hint in native_secret_hints:
+        fact_store.add("native_secret_hint", hint["value"], evidence={"path": hint["path"]})
 
     histogram = package_root_histogram(tree.entries, manifest_facts.get("package"))
     smali_entries = [
@@ -529,6 +611,9 @@ def analyze_apk_surface(
         if deduction is not None:
             deductions.append(deduction)
     deductions.sort(key=lambda item: item["id"])
+    # Deduction facts now carry evidence from deductions.py directly. No post-hoc enrichment (re-adding would double-count).
+    if native_libraries:
+        coverage["native_libraries"] = "strings_scanned" if native_strings_scanned else "read_failed"
     result = {
         "schema_version": 1,
         "analyzer": {"id": ANALYZER_ID, "version": ANALYZER_VERSION},
@@ -589,6 +674,8 @@ def analyze_apk_surface(
             "rate_limit_indicator_count": len(rate_limit_indicators),
             "dependency_fingerprint_count": len(dependencies),
             "native_library_count": len(native_libraries),
+            "native_strings_scanned": native_strings_scanned,
+            "native_strings_bytes": native_strings_bytes,
         },
     }
     return finalize_result(result, tree_root=tree_root)
