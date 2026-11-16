@@ -107,7 +107,9 @@ def test_location_map_cites_every_fact_line_finding_and_deduction(tmp_path):
     facts = {entry["facts_jsonl_line"]: entry
              for entry in location_map["entries"] if entry["source"] == "facts.jsonl"}
     assert set(facts) == {1, 2}
-    assert facts[1]["entry_id"] == "FACT-" + ("f" * 12)
+    # CAP-FREE: was FACT- + 12-char prefix. Now FULL 64-char fingerprint.
+    assert facts[1]["entry_id"] == "FACT-" + ("f" * 64)
+    assert facts[1]["fingerprint"] == "f" * 64
     assert facts[1]["locations"] == [
         "apktool/smali/com/example/A.smali:12",
         "apktool/smali/com/example/B.smali:88",

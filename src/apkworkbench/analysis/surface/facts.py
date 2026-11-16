@@ -1,16 +1,18 @@
 """Fingerprint fact store (plan v2 S5) — dedup law implementation.
 
 Fact = (kind, normalized value, fingerprint, evidence, count). Identical
-fingerprints merge; representative evidence is capped (≤3) while counts
-stay exact. This is the shape the AI handoff consumes (plan §8B: dense,
-deduped, pointerized).
+fingerprints merge; evidence is NOT capped — all evidence retained for AI
+ handoff (plan §8B: dense, deduped, pointerized). Counts stay exact.
+CAP-FREE: was capped at 3 representative evidence items, which hid evidence from AI.
 """
 from __future__ import annotations
 
 import hashlib
 from typing import Any
 
-REPRESENTATIVE_EVIDENCE_CAP = 3
+# CAP-FREE: REPRESENTATIVE_EVIDENCE_CAP deleted. No evidence cap. All evidence retained.
+# Kept as alias for backwards compat imports, but not used to truncate.
+REPRESENTATIVE_EVIDENCE_CAP = None  # deprecated, do not use to truncate
 
 
 def fingerprint(value: Any) -> str:
@@ -19,9 +21,10 @@ def fingerprint(value: Any) -> str:
 
 
 class FactStore:
-    def __init__(self, *, evidence_cap: int = REPRESENTATIVE_EVIDENCE_CAP):
+    def __init__(self, *, evidence_cap: int | None = None):
+        # CAP-FREE: evidence_cap param kept for compat, ignored. No truncation.
         self._by_key: dict[tuple[str, str], dict[str, Any]] = {}
-        self._evidence_cap = evidence_cap
+        self._evidence_cap = None
 
     def add(
         self,
@@ -69,14 +72,14 @@ class FactStore:
         return chosen
 
     def export(self) -> list[dict[str, Any]]:
-        """Sorted, capped-evidence export (machine plane; summary shape)."""
+        """Sorted, FULL-evidence export (machine plane; AI handoff shape)."""
         exported: list[dict[str, Any]] = []
         for record in self.records():
             entry = dict(record)
-            entry["evidence"] = record["evidence"][: self._evidence_cap]
-            entry["evidence_truncated"] = (
-                len(record["evidence"]) > self._evidence_cap
-            )
+            # CAP-FREE: was capped at 3 evidence items, evidence_truncated=True if over 3. Now keep ALL evidence.
+            entry["evidence"] = list(record["evidence"])
+            entry["evidence_truncated"] = False
+            entry["evidence_count"] = len(record["evidence"])
             exported.append(entry)
         return exported
 
@@ -98,6 +101,7 @@ def package_root_histogram(
         "org/intellij", "org/jetbrains",
     }
     counts: dict[str, int] = {}
+    first_path: dict[str, str] = {}
     for entry in tree_entries:
         relative = entry.relative
         if not relative.startswith("smali"):
@@ -110,6 +114,8 @@ def package_root_histogram(
             continue
         root = "/".join(parts[1:-1][:3])
         counts[root] = counts.get(root, 0) + 1
+        if root not in first_path:
+            first_path[root] = relative
     app_roots: set[str] = set()
     if app_package:
         app_roots.add(app_package.replace(".", "/"))
@@ -123,5 +129,5 @@ def package_root_histogram(
             owner = "platform"
         else:
             owner = "third_party_candidate"
-        histogram[root] = {"class_count": count, "owner": owner}
+        histogram[root] = {"class_count": count, "owner": owner, "evidence_path": first_path.get(root)}
     return histogram

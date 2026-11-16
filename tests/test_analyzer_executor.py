@@ -154,13 +154,20 @@ def test_executor_terminates_analyzer_that_exceeds_wall_clock_limit():
 
 
 def test_executor_enforces_finding_and_serialized_output_limits():
+    # CAP-FREE: old test asserted failed + dropped findings on limit. New behavior:
+    # never drop. Keep all findings, add warning diagnostic, keep success status.
     finding_outcome = AnalyzerExecutor().execute(TooManyFindingsAnalyzer(), make_context())
     output_outcome = AnalyzerExecutor().execute(LargeOutputAnalyzer(), make_context())
 
-    assert finding_outcome.status == "failed"
-    assert finding_outcome.result.diagnostics[0].code == "finding_limit_exceeded"
-    assert output_outcome.status == "failed"
-    assert output_outcome.result.diagnostics[0].code == "output_limit_exceeded"
+    assert finding_outcome.status == "success"
+    assert len(finding_outcome.result.findings) == 2
+    assert any(
+        d.code == "finding_count_exceeds_profile"
+        for d in finding_outcome.result.diagnostics
+    )
+    assert output_outcome.status == "success"
+    assert len(output_outcome.result.findings) == 1
+    assert output_outcome.result.findings[0].rationale == "x" * 1000
 
 
 def test_execute_plan_continues_after_one_analyzer_fails():

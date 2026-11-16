@@ -7,16 +7,17 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import os
 import re
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-MAX_ANALYSIS_OUTPUT_BYTES = 64 * 1024 * 1024
-MAX_EXTERNAL_METHODS = 100_000
-MAX_INTERNAL_CALL_EDGES = 200_000
-MAX_STRING_CANDIDATES = 100_000
+# CAP-FREE: No MAX_* caps. No truncation. Overflow is handled by writing
+# the full payload to disk (see _worker_entry) instead of shrinking it to fit a pipe.
+# Empty means empty. If count > 0, data must be present.
 URL_RE = re.compile(r"""(?:https?|wss?|ftp|grpc)://[^\s"'<>\\]+""", re.IGNORECASE)
 DOMAIN_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
@@ -163,28 +164,19 @@ def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
     external_methods = [method for method in dx.get_external_methods()]
     internal_call_graph: list[dict[str, Any]] = []
     diagnostics: list[dict[str, str]] = []
-    truncated_internal = False
+    # CAP-FREE: no cap on call edges. Every edge is preserved.
     for caller in internal_methods:
         for _class_obj, callee, offset in caller.get_xref_to():
-            if len(internal_call_graph) >= MAX_INTERNAL_CALL_EDGES:
-                truncated_internal = True
-                break
             internal_call_graph.append({
                 "caller": _method_name(caller),
                 "callee": _method_name(callee),
                 "offset": int(offset),
+                # Deduction link: caller -> callee, for Crown Jewel mapping (DEX logic)
             })
-        if truncated_internal:
-            break
-    if truncated_internal:
-        diagnostics.append({
-            "code": "internal_call_graph_limit",
-            "message": f"Internal method-call graph was capped at {MAX_INTERNAL_CALL_EDGES} edges.",
-        })
 
     external_references: list[dict[str, Any]] = []
-    truncated_external = False
     network_caller_names: set[str] = set()
+    # CAP-FREE: no cap on external methods. Every referenced method is preserved.
     for method in external_methods:
         callers = _safe_xrefs(method)
         if not callers:
@@ -209,18 +201,10 @@ def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
                 "offset": int(offset),
             })
         external_references.append(entry)
-        if len(external_references) >= MAX_EXTERNAL_METHODS:
-            truncated_external = True
-            break
-    if truncated_external:
-        diagnostics.append({
-            "code": "external_method_limit",
-            "message": f"External method inventory was capped at {MAX_EXTERNAL_METHODS} referenced methods.",
-        })
 
     dex_api_strings: list[dict[str, Any]] = []
     seen_strings: set[str] = set()
-    truncated_strings = False
+    # CAP-FREE: no cap on string candidates. Every candidate is preserved.
     for string_item in dx.get_strings():
         value = str(string_item.get_value())
         url_matches = [match.group(0).rstrip(".,);]}:") for match in URL_RE.finditer(value)]
@@ -245,7 +229,9 @@ def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
             continue
         seen_strings.add(value)
         references = []
-        for class_obj, caller, offset in string_xrefs[:100]:
+        # CAP-FREE: was capped at 100 callers per string — that dropped callers. Keep ALL callers.
+        # Deduction link: string value -> every method that references it.
+        for class_obj, caller, offset in string_xrefs:
             references.append({
                 "caller": _method_name(caller),
                 "caller_class": str(getattr(caller, "class_name", "")),
@@ -263,14 +249,6 @@ def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
             "http_header_candidates": headers,
             "references": references,
             "reference_count": len(string_xrefs),
-        })
-        if len(dex_api_strings) >= MAX_STRING_CANDIDATES:
-            truncated_strings = True
-            break
-    if truncated_strings:
-        diagnostics.append({
-            "code": "dex_string_candidate_limit",
-            "message": f"DEX API/config string inventory was capped at {MAX_STRING_CANDIDATES} candidates.",
         })
 
     permission_api_usage = []
@@ -327,11 +305,13 @@ def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
         },
         "coverage": {
             "dex_parsing": "success",
-            "method_cross_references": "partial" if truncated_internal else "success",
-            "external_api_usage": "partial" if truncated_external else "success",
-            "dex_api_strings": "partial" if truncated_strings else "success",
+            "method_cross_references": "success",
+            "external_api_usage": "success",
+            "dex_api_strings": "success",
             "permission_api_usage": permission_mapping_status,
             "runtime_behavior": "not_performed",
+            # 100% = file-coverage: every DEX file accounted, every edge/string/method preserved.
+            # Not runtime proof: reflection / dynamic loading / server behavior still not proven.
         },
         "external_method_references": external_references,
         "internal_call_graph": internal_call_graph,
@@ -347,43 +327,48 @@ def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
     }
 
 
-def _worker_entry(apk_path: str, send_connection) -> None:
+def _worker_entry(apk_path: str, send_connection, output_path: str) -> None:
+    """Worker: analyze, write FULL payload to disk, send only a tiny ack via pipe.
+
+    CAP-FREE FIX: The old code did json.dumps(payload) then if >64MB replaced
+    the whole payload with [] + metrics={}. That lied: AI read [] as "no API usage"
+    when truth was "too much API usage to fit a pipe."
+    New behavior: payload is written to output_path on disk (no size limit).
+    Pipe carries only b"OK" (or b"FAIL"). Parent reads the file. No truncation.
+    """
     try:
-        payload = _analyze_in_worker(apk_path)
-    except Exception as exc:  # noqa: BLE001 - child process serializes parser exceptions for the parent
-        payload = {
-            "status": "failed",
-            "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
-            "metrics": {},
-            "coverage": {"dex_parsing": "failed"},
-            "external_method_references": [],
-            "internal_call_graph": [],
-            "dex_api_strings": [],
-            "permission_api_usage": [],
-            "diagnostics": [{"code": "androguard_failed", "message": f"{type(exc).__name__}: {str(exc)[:2000]}"}],
-            "limitations": ["Androguard DEX analysis did not complete."],
-        }
-    try:
-        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        if len(encoded) > MAX_ANALYSIS_OUTPUT_BYTES:
-            encoded = json.dumps({
-                "status": "partial",
+        try:
+            payload = _analyze_in_worker(apk_path)
+        except Exception as exc:  # noqa: BLE001 - child serializes parser exceptions
+            payload = {
+                "status": "failed",
                 "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
                 "metrics": {},
-                "coverage": {"dex_parsing": "success", "report_serialization": "partial"},
+                "coverage": {"dex_parsing": "failed"},
                 "external_method_references": [],
                 "internal_call_graph": [],
                 "dex_api_strings": [],
                 "permission_api_usage": [],
-                "diagnostics": [{
-                    "code": "androguard_output_limit",
-                    "message": f"DEX analysis output exceeded {MAX_ANALYSIS_OUTPUT_BYTES} bytes.",
-                }],
-                "limitations": ["The DEX analysis output was too large to serialize within the configured bound."],
-            }, separators=(",", ":")).encode("utf-8")
-        send_connection.send_bytes(encoded)
+                "diagnostics": [{"code": "androguard_failed", "message": f"{type(exc).__name__}: {str(exc)[:2000]}"}],
+                "limitations": ["Androguard DEX analysis did not complete."],
+            }
+        # Write full payload to disk — no cap, no truncation, no empty replacement.
+        with open(output_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, separators=(",", ":"))
+        try:
+            send_connection.send_bytes(b"OK")
+        except Exception:
+            pass
+    except Exception as exc:  # noqa: BLE001 - worker must not hang parent
+        try:
+            send_connection.send_bytes(b"FAIL:" + str(exc)[:500].encode("utf-8", "ignore"))
+        except Exception:
+            pass
     finally:
-        send_connection.close()
+        try:
+            send_connection.close()
+        except Exception:
+            pass
 
 
 def _emit(progress: Callable[[str], None] | None, message: str) -> None:
@@ -401,7 +386,12 @@ def analyze_apk_dex(
     timeout_seconds: int = 1800,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Analyze original APK DEX with bounded time and process isolation."""
+    """Analyze original APK DEX with bounded time and process isolation.
+
+    CAP-FREE: Worker writes full result to a temp file on disk, parent reads it.
+    Pipe carries only a tiny ack. No 64MB pipe cap, no empty replacement.
+    API is unchanged for callers (apk_surface.py): still returns a dict.
+    """
     if timeout_seconds < 1:
         raise ValueError("timeout_seconds must be positive.")
     path = Path(apk_path).expanduser()
@@ -412,10 +402,19 @@ def analyze_apk_dex(
     except ValueError as exc:
         raise RuntimeError("Androguard analysis requires Linux fork support.") from exc
 
+    # Temp file on disk for the full payload — this is the shard, not a pipe.
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix="androguard_dex_", suffix=".json")
+    os.close(tmp_fd)
+    # Ensure empty file exists so worker can overwrite it
+    try:
+        os.unlink(tmp_path)
+    except FileNotFoundError:
+        pass
+
     receive_connection, send_connection = process_context.Pipe(duplex=False)
     process = process_context.Process(
         target=_worker_entry,
-        args=(str(path.resolve(strict=True)), send_connection),
+        args=(str(path.resolve(strict=True)), send_connection, tmp_path),
         daemon=True,
     )
     started = time.monotonic()
@@ -425,13 +424,20 @@ def analyze_apk_dex(
     except (OSError, RuntimeError) as exc:
         receive_connection.close()
         send_connection.close()
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
         raise RuntimeError(f"Cannot start Androguard analysis: {exc}") from exc
 
-    payload_bytes: bytes | None = None
+    ack: bytes | None = None
     try:
         while True:
             if receive_connection.poll(0.5):
-                payload_bytes = receive_connection.recv_bytes(MAX_ANALYSIS_OUTPUT_BYTES + 4096)
+                try:
+                    ack = receive_connection.recv_bytes()
+                except EOFError:
+                    ack = None
                 break
             if not process.is_alive():
                 process.join(timeout=0.1)
@@ -459,7 +465,8 @@ def analyze_apk_dex(
                     "limitations": ["DEX semantic analysis timed out; other static analysis results were retained."],
                 }
             _emit(progress, f"[Androguard] DEX cross-reference analysis active — {int(elapsed)}s elapsed")
-        if payload_bytes is None:
+        # Parent reads FULL payload from disk — no size cap.
+        if ack is None or not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
             return {
                 "status": "failed",
                 "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
@@ -475,9 +482,11 @@ def analyze_apk_dex(
                 }],
                 "limitations": ["DEX semantic analysis did not return a complete result."],
             }
-        result = json.loads(payload_bytes.decode("utf-8"))
+        with open(tmp_path, "r", encoding="utf-8") as fh:
+            result = json.load(fh)
         if not isinstance(result, dict):
             raise ValueError("Androguard worker returned a non-object JSON payload.")
+        # Safety: if worker wrote a failed payload, return it as-is (it is honest, not a cap lie)
         return result
     except (EOFError, OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         return {
@@ -494,6 +503,10 @@ def analyze_apk_dex(
         }
     finally:
         receive_connection.close()
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
         if process.is_alive():
             process.terminate()
             process.join(timeout=2)

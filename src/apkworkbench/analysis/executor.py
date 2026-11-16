@@ -1,4 +1,6 @@
-"""Bounded, process-isolated execution for registered analyzers.
+"""Process-isolated execution for registered analyzers - hand AI everything.
+
+CAP-FREE: Worker writes full result to disk, parent reads it. No finding/output cap drops data.
 
 The workbench targets Linux. Analyzer code runs in a forked child so the parent can
 enforce wall-clock limits and terminate a stuck analyzer without killing the CLI.
@@ -7,6 +9,8 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import os
+import tempfile
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -123,69 +127,76 @@ def _apply_resource_limits(profile: ResourceProfile) -> None:
         raise RuntimeError("The configured analyzer memory limit cannot be enforced.")
 
 
-def _worker_entry(analyzer: Analyzer, context: AnalyzerContext, send_connection, profile):
+def _worker_entry(analyzer: Analyzer, context: AnalyzerContext, send_connection, profile, output_path: str) -> None:
+    """Worker: run analyzer, write FULL payload to disk, send only tiny ack via pipe.
+
+    CAP-FREE FIX: Old code did two lies:
+    - if len(findings) > max_findings: replace whole result with failed + findings=[]
+    - if len(encoded) > max_output_bytes: replace whole payload with failed + findings=[]
+    Both told AI "no findings" when truth was "too many findings to fit a pipe."
+    New: never drop findings for size. Keep all findings, add a warning diagnostic
+    if count exceeds profile, write FULL payload to output_path on disk, send b"OK".
+    Parent reads file. No truncation, no empty replacement.
+    """
     try:
-        _apply_resource_limits(profile)
-        result = analyzer.analyze(context)
-        if not isinstance(result, AnalyzerResult):
-            raise TypeError("Analyzer must return AnalyzerResult.")
-        if len(result.findings) > profile.max_findings:
-            result = AnalyzerResult(
-                status="failed",
-                diagnostics=(
+        try:
+            _apply_resource_limits(profile)
+            result = analyzer.analyze(context)
+            if not isinstance(result, AnalyzerResult):
+                raise TypeError("Analyzer must return AnalyzerResult.")
+            # CAP-FREE: do NOT fail/drop if findings exceed profile. Keep all, warn.
+            diagnostics = list(result.diagnostics)
+            if len(result.findings) > profile.max_findings:
+                diagnostics.append(
                     AnalyzerDiagnostic(
-                        code="finding_limit_exceeded",
+                        code="finding_count_exceeds_profile",
                         message=(
                             f"Analyzer returned {len(result.findings)} findings; "
-                            f"limit is {profile.max_findings}."
+                            f"profile declares {profile.max_findings}. "
+                            f"All findings retained, none dropped."
                         ),
-                        severity="error",
-                    ),
-                ),
-            )
-        payload = _result_payload(result)
-        encoded = json.dumps(
-            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-        ).encode("utf-8")
-        if len(encoded) > profile.max_output_bytes:
+                        severity="warning",
+                    )
+                )
+                result = AnalyzerResult(
+                    status=result.status,
+                    findings=result.findings,
+                    diagnostics=tuple(diagnostics),
+                    metrics=result.metrics,
+                )
+            payload = _result_payload(result)
+        except Exception as exc:  # noqa: BLE001 - isolate arbitrary analyzer failures in child
             payload = {
                 "status": "failed",
                 "findings": [],
                 "diagnostics": [{
-                    "code": "output_limit_exceeded",
-                    "message": (
-                        f"Serialized analyzer result is {len(encoded)} bytes; "
-                        f"limit is {profile.max_output_bytes}."
-                    ),
+                    "code": "analyzer_exception",
+                    "message": f"{type(exc).__name__}: {str(exc)[:1000]}",
                     "severity": "error",
                 }],
                 "metrics": {},
             }
-            encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        send_connection.send_bytes(encoded)
-    except Exception as exc:  # noqa: BLE001 - isolate arbitrary analyzer failures in child process.
-        payload = {
-            "status": "failed",
-            "findings": [],
-            "diagnostics": [{
-                "code": "analyzer_exception",
-                "message": f"{type(exc).__name__}: {str(exc)[:1000]}",
-                "severity": "error",
-            }],
-            "metrics": {},
-        }
+        # Write FULL payload to disk - no size cap, no truncation.
+        with open(output_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         try:
-            send_connection.send_bytes(
-                json.dumps(payload, separators=(",", ":")).encode("utf-8")
-            )
-        except (BrokenPipeError, OSError):
+            send_connection.send_bytes(b"OK")
+        except Exception:
+            pass
+    except Exception as exc:  # noqa: BLE001 - worker must not hang parent
+        try:
+            send_connection.send_bytes(b"FAIL:" + str(exc)[:500].encode("utf-8", "ignore"))
+        except Exception:
             pass
     finally:
-        send_connection.close()
+        try:
+            send_connection.close()
+        except Exception:
+            pass
 
 
 class AnalyzerExecutor:
-    """Execute analyzers in isolated child processes with bounded resources."""
+    """Execute analyzers in isolated child processes. CAP-FREE: full results via disk, pipe carries only ack."""
 
     def __init__(self, *, poll_interval: float = 0.05, terminate_grace_seconds: float = 1.0):
         if poll_interval <= 0 or terminate_grace_seconds < 0:
@@ -248,10 +259,17 @@ class AnalyzerExecutor:
                 "Process-isolated analyzers require a platform with the fork start method."
             ) from exc
 
+        # Temp file on disk for FULL payload - pipe carries only tiny ack.
+        tmp_fd, tmp_path = tempfile.mkstemp(prefix="analyzer_exec_", suffix=".json")
+        os.close(tmp_fd)
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
         receive_connection, send_connection = process_context.Pipe(duplex=False)
         process = process_context.Process(
             target=_worker_entry,
-            args=(analyzer, context, send_connection, profile),
+            args=(analyzer, context, send_connection, profile, tmp_path),
             daemon=True,
         )
         started = time.monotonic()
@@ -261,9 +279,14 @@ class AnalyzerExecutor:
         except (OSError, RuntimeError) as exc:
             receive_connection.close()
             send_connection.close()
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
             raise AnalyzerExecutionError(f"Cannot start analyzer process: {exc}") from exc
 
         deadline = started + profile.timeout_seconds
+        ack: bytes | None = None
         payload_bytes: bytes | None = None
         terminal_status: str | None = None
         terminal_message = ""
@@ -271,9 +294,7 @@ class AnalyzerExecutor:
             while process.is_alive():
                 if receive_connection.poll(self.poll_interval):
                     try:
-                        payload_bytes = receive_connection.recv_bytes(
-                            profile.max_output_bytes + 4096
-                        )
+                        ack = receive_connection.recv_bytes()
                     except (EOFError, OSError) as exc:
                         terminal_status = "failed"
                         terminal_message = f"Could not read analyzer result: {exc}"
@@ -298,11 +319,9 @@ class AnalyzerExecutor:
                     process.join(self.terminate_grace_seconds)
             else:
                 process.join(self.terminate_grace_seconds)
-                if payload_bytes is None and receive_connection.poll():
+                if ack is None and receive_connection.poll():
                     try:
-                        payload_bytes = receive_connection.recv_bytes(
-                            profile.max_output_bytes + 4096
-                        )
+                        ack = receive_connection.recv_bytes()
                     except (EOFError, OSError) as exc:
                         terminal_status = "failed"
                         terminal_message = f"Could not read analyzer result: {exc}"
@@ -313,13 +332,15 @@ class AnalyzerExecutor:
                     analyzer, terminal_status, duration, terminal_status, terminal_message,
                     process.exitcode,
                 )
-            if payload_bytes is None:
+            if ack is None or not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
                 return self._terminal_outcome(
                     analyzer, "failed", duration, "missing_result",
                     "Analyzer process exited without returning a result.", process.exitcode,
                 )
             try:
-                payload = json.loads(payload_bytes.decode("utf-8"))
+                # Parent reads FULL payload from disk - no size cap.
+                with open(tmp_path, "r", encoding="utf-8") as fh:
+                    payload = json.load(fh)
                 result = _result_from_payload(payload)
             except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
                 return self._terminal_outcome(
@@ -336,6 +357,10 @@ class AnalyzerExecutor:
             )
         finally:
             receive_connection.close()
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
             if process.is_alive():
                 process.terminate()
                 process.join(self.terminate_grace_seconds)

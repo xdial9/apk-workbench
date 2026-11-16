@@ -22,7 +22,7 @@ def test_fingerprint_is_stable_and_normalized():
     assert fingerprint("HTTPS://API.Example.com/v2 ") == fingerprint("https://api.example.com/v2")
 
 
-def test_fact_store_merges_and_caps_representative_evidence():
+def test_fact_store_merges_and_retains_all_evidence():
     store = FactStore()
     for index in range(5):
         store.add("endpoint", "https://a.b/x", evidence={"path": f"f{index}", "line": index})
@@ -30,8 +30,10 @@ def test_fact_store_merges_and_caps_representative_evidence():
     assert len(exported) == 1
     record = exported[0]
     assert record["count"] == 5
-    assert len(record["evidence"]) == 3
-    assert record["evidence_truncated"] is True
+    # CAP-FREE: was capped at 3 evidence + evidence_truncated=True. Now keep ALL 5.
+    assert len(record["evidence"]) == 5
+    assert record["evidence_truncated"] is False
+    assert record["evidence_count"] == 5
     assert record["fingerprint"] == fingerprint("https://a.b/x")
 
 

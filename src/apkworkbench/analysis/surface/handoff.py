@@ -22,7 +22,9 @@ from typing import Any
 FACTS_FILENAME = "facts.jsonl"
 LOCATION_MAP_FILENAME = "location_map.json"
 LOCATION_MAP_SCHEMA = 1
-VALUE_PREVIEW = 160
+# CAP-FREE: VALUE_PREVIEW deleted. Location map must carry FULL value for AI matching.
+# Was 160 chars, hid full URLs/values from AI. Keep full.
+VALUE_PREVIEW = None  # deprecated, do not use to truncate
 
 # Analyzer evidence paths are relative to the decoded tree root, while the
 # prompt chain cites folder-relative paths inside apktool/. Non-path cites
@@ -97,11 +99,13 @@ def _fact_entry(
     }
     locations = _locations(fact.get("evidence"), tree_root)
     return {
-        "entry_id": f"FACT-{str(fact.get('fingerprint', ''))[:12]}",
+        # CAP-FREE: was 12-char fingerprint prefix - can collide, AI cannot match full fingerprint. Use FULL fingerprint.
+        "entry_id": f"FACT-{str(fact.get('fingerprint', ''))}",
         "source": "facts.jsonl",
         "facts_jsonl_line": line_number,
         "kind": fact.get("kind"),
-        "value": str(fact.get("value"))[:VALUE_PREVIEW],
+        # CAP-FREE: was capped at 160 chars - hid full value. Keep FULL value.
+        "value": str(fact.get("value")),
         "fingerprint": fact.get("fingerprint"),
         "occurrences": fact.get("count"),
         "has_location": bool(locations),

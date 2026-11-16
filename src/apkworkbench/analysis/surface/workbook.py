@@ -34,7 +34,7 @@ CONFIDENCE_LABELS = ["tool_verified", "deduced", "hint", "open_question", "ai_de
 IMMUTABLE_EVIDENCE = [
     "apktool/ (decoded application tree)",
     "surface/static-analysis.json + surface/facts.jsonl (tool output)",
-    "trufflehog/ (verified secret findings)",
+    "trufflehog/ (verified + unverified secret findings - both, never drop unverified)",
     "manifest/ + google-play-bundle.json (acquisition provenance)",
 ]
 
@@ -77,7 +77,8 @@ def _fact_locations(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         entries.append({
             "kind": fact.get("kind"),
-            "value": str(fact.get("value"))[:160],
+            # CAP-FREE: was capped at 160 chars - hid full value from AI. Keep FULL.
+            "value": str(fact.get("value")),
             "fingerprint": fact.get("fingerprint"),
             "occurrences": fact.get("count"),
             "locations": locations,
@@ -110,7 +111,8 @@ def _deduction_leads(deductions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for deduction in deductions:
         leads.append({
             "id": deduction.get("id"),
-            "title": str(deduction.get("narrative"))[:200],
+            # CAP-FREE: was capped at 200 chars - hid deduction narrative. Keep FULL.
+            "title": str(deduction.get("narrative")),
             "priority": "high" if deduction.get("confidence") == "hint" else "normal",
             "suggested_method": deduction.get("next_steps") or [],
             "cites": deduction.get("cites") or [],
@@ -163,8 +165,10 @@ def _flagged_fact_leads(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
             for item in (fact.get("evidence") or [])
         ]
         leads.append({
-            "id": f"FACT-{fact.get('fingerprint', '')[:12]}",
-            "title": f"Flagged fact ({fact.get('kind')}): {str(fact.get('value'))[:120]}",
+            # CAP-FREE: was 12-char fingerprint prefix - collision risk, AI cannot match full fingerprint. Use FULL.
+            "id": f"FACT-{fact.get('fingerprint', '')}",
+            # CAP-FREE: was capped at 120 chars - hid flagged value. Keep FULL.
+            "title": f"Flagged fact ({fact.get('kind')}): {str(fact.get('value'))}",
             "priority": "normal",
             "suggested_method": [
                 (
@@ -231,7 +235,7 @@ def build_workbook(
                     "surface/location_map.json — generated index of every fact, "
                     "finding and deduction with file:line evidence"
                 ),
-                "trufflehog/ — verified secret findings (evidence-grade)",
+                "trufflehog/ — verified + unverified secret findings (both, never drop unverified)",
                 "google-play-bundle.json — acquisition provenance + hashes",
             ],
         },

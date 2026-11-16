@@ -42,15 +42,15 @@ def sdk_stack(facts: FactStore, histogram: dict[str, dict[str, Any]]) -> dict[st
     ]
     if not candidates:
         return None
-    fingerprints = [
-        facts.add("sdk_root", item["root"], extra={"class_count": item["class_count"]})
-        for item in candidates
-    ]
+    fingerprints: list[str] = []
+    for item in candidates:
+        ev = {"path": item["evidence_path"]} if item.get("evidence_path") else None
+        fingerprints.append(facts.add("sdk_root", item["root"], evidence=ev, extra={"class_count": item["class_count"]}))
     named = sorted((item["root"] for item in candidates), key=str)
     narrative = (
+        # CAP-FREE: was capped at 12 names + "(and more)" - hid SDK roots from AI. List ALL.
         "Third-party SDK roots observed in the bytecode: "
-        + ", ".join(named[:12])
-        + (" (and more)" if len(named) > 12 else "")
+        + ", ".join(named)
         + "."
     )
     return _deduction(
@@ -70,7 +70,8 @@ def sdk_stack(facts: FactStore, histogram: dict[str, dict[str, Any]]) -> dict[st
                 "collect and cross-check against the endpoint inventory."
             ),
         ],
-        cites=[f"sdk_root:{root}" for root in named[:12]],
+        # CAP-FREE: was capped at 12 roots, now all roots cited.
+        cites=[f"sdk_root:{root}" for root in named],
     )
 
 
@@ -207,14 +208,15 @@ def api_surface(
     ]
     if not public_urls and not routes:
         return None
-    fingerprints = [
-        facts.add(
-            "api_endpoint",
-            record.get("canonical") or record["value"],
-            extra={"host": record.get("host"), "host_class": record.get("host_class")},
-        )
-        for record in public_urls
-    ]
+    fingerprints: list[str] = []
+    for record in public_urls:
+        value = record.get("canonical") or record["value"]
+        extra = {"host": record.get("host"), "host_class": record.get("host_class")}
+        if record.get("evidence"):
+            for ev in record["evidence"]:
+                fingerprints.append(facts.add("api_endpoint", value, evidence=ev, extra=dict(extra)))
+        else:
+            fingerprints.append(facts.add("api_endpoint", value, evidence=None, extra=dict(extra)))
     fingerprints.extend(
         facts.add("api_route", f"{route_data.get('http_method') or '?'} {route}")
         for route, route_data in sorted(routes.items())
@@ -223,8 +225,9 @@ def api_surface(
         {str(record.get("host")) for record in public_urls if record.get("host")}
     )
     narrative = (
+        # CAP-FREE: was capped at 10 hosts - hid hosts from AI. List ALL.
         "Static API surface: "
-        + (", ".join(hosts[:10]) if hosts else "routes without hosts")
+        + (", ".join(hosts) if hosts else "routes without hosts")
         + f"; {len(routes)} route candidates."
     )
     return _deduction(
@@ -244,8 +247,9 @@ def api_surface(
                 "matches verified-secrets findings for correlation."
             ),
         ],
+        # CAP-FREE: was capped at 12 endpoints, now all endpoints cited.
         cites=[
             f"endpoint:{record.get('canonical') or record['value']}"
-            for record in public_urls[:12]
+            for record in public_urls
         ],
     )
