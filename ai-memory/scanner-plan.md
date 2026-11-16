@@ -1,7 +1,7 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
-Status: **P0 DONE, P1 DONE, P2 NEXT.** Verified 2026-11-16 at commit `50bb2d0`
-(+ `ec9419d`), 301 tests green.
+Status: **P0 DONE, P1 DONE, P2a DONE, P2b NEXT.** Verified 2026-11-16,
+308 tests green, tree clean, branch pushed.
 This file is the resume point for the scanner track. Read it after
 `ai-memory/INDEX.md` §STATE and before touching `analysis/`.
 
@@ -36,7 +36,8 @@ Everything below is the fix ladder. P0-P1 are done and verified.
 |---|---|---|---|
 | P0 | Truth in the data plane: per-file ledger, honest coverage, shard not drop | **DONE** | `a88eac2`, `131fd69` |
 | P1 | Identity/trust: signing schemes, certificates, ABIs, uses-library | **DONE** | `50bb2d0`, `ec9419d` |
-| P2 | Resource model: `resources.arsc` -> id/name/value/file, file_paths, layouts | **NEXT** | — |
+| P2a | Resource table: `resources.arsc` -> id/type/name/value -> `resources.jsonl` | **DONE** | (this commit) |
+| P2b | Resource links: smali id cross-ref, `file_paths.xml`, layouts, decoded-XML file attribution | **NEXT** | — |
 | P3 | Code model: class/method/field inventory, call graph v2, reflection sites | queued | — |
 | P4 | Link graph: typed edges with two cites each + entry_points | queued | — |
 | P5 | Detection breadth: 11 deduction templates, rule catalog 19 -> ~60 | queued | — |
@@ -91,19 +92,36 @@ Everything below is the fix ladder. P0-P1 are done and verified.
   `xmlns:android="http://schemas.android.com/apk/res/android"`. It fired on
   every manifest ever scanned.
 
-### P2 — NEXT (resource model)
-Scope:
-- parse `resources.arsc` from the original APK (the scanner already has
-  `source_apk`): package, type, key, id, value, config;
-- emit `resources.jsonl`: `0x7f0b0012 -> string/app_name -> "Foo" ->
-  res/values/strings.xml`;
-- parse `res/xml/file_paths.xml` (FileProvider roots) and layouts into a
-  view/id inventory;
-- cross-check against apktool's decoded `res/values/*.xml` when present.
+### P2a — DONE (resource table)
+- `surface/resources.py`: stdlib ResTable reader. Chunk header walk, UTF-8 and
+  UTF-16 string pools, package/typeSpec/type chunks, sparse and offset16
+  entry tables, `Res_value` decoding (string, reference, attribute, int dec /
+  hex, boolean, float, dimension, fraction). Complex (bag) entries are
+  recorded as `value_type: "complex"`; compact entries (Android 14 flag) are
+  counted with a diagnostic instead of being misparsed.
+- Records stream to `resources.jsonl` (atomic: temp + fsync + replace, 0600)
+  while parsing, so a 200k-record table never exists twice in memory.
+  Record shape: `id, package, type, name, config, value, value_type,
+  reference` — same keys every run.
+- Summary in `inventory.resource_model` (status, entry_count, type_counts,
+  packages, string_pool_size, resources_jsonl); full diagnostics go to the
+  artifact diagnostics.
+- New coverage key `resource_model` (success/partial/not_found/failed).
+  `resource_inventory` now says `parsed` when the table parsed, so the old
+  `counted_not_parsed` is no longer a lie.
+- No records are emitted without an APK: `resource_model = not_found`.
+
+### P2b — NEXT (resource links)
+- collect `const`/`sget` resource-id literals during the smali sweep
+  (`0x7f......`) and resolve them against `resources.jsonl`; unresolved ids
+  become facts with reason `resource_id_unresolved`;
+- parse `res/xml/file_paths.xml` -> FileProvider roots as facts
+  (`file_provider_path`) with the provider component;
+- layout inventory: `res/layout*/*.xml` -> view ids / custom views;
+- attach a source file to each resource record by cross-checking apktool's
+  decoded `res/values*/*.xml` (ARSC has no file attribution).
 Exit: every resource id referenced from smali resolves to a name and a file,
-or is recorded unresolved with a reason. New coverage key `resource_model`.
-Decisions already taken: ARSC primary, decoded XML cross-check; new file
-`resources.jsonl` (do not inflate `static-analysis.json`).
+or is recorded unresolved with a reason.
 
 ### P3 — Code model
 Class/method/field inventory with DEX index + smali path (name, access,
@@ -237,3 +255,4 @@ file and the briefing **before** the final commit of a phase.
 | facts / handoff / workbook | `tests/test_surface_facts.py`, `test_surface_handoff.py`, `test_surface_serialize.py` | 22 |
 | native | `tests/test_native_*.py` (4 files) | 51 |
 | DEX | `tests/test_androguard_dex.py` | 4 |
+| resources | `tests/test_resources.py` | 7 |

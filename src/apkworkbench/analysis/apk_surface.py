@@ -53,6 +53,7 @@ from apkworkbench.analysis.surface.identity import (
     identity_findings,
     parse_apk_identity,
 )
+from apkworkbench.analysis.surface.resources import parse_resource_table
 
 ANALYZER_ID = "apk-surface"
 ANALYZER_VERSION = "0.3.0"
@@ -281,6 +282,7 @@ def analyze_apk_surface(
         "dependency_fingerprints": "not_scanned",
         "native_libraries": "not_found",
         "resource_inventory": "not_scanned",
+        "resource_model": "not_found",
         "apk_identity": "not_found",
         "runtime_behavior": "not_performed",
         "dynamic_network_testing": "not_performed",
@@ -403,6 +405,22 @@ def analyze_apk_surface(
         }.get(str(identity.get("status")), "failed")
         findings.extend(identity_findings(identity, manifest_relative))
         diagnostics.extend(identity.get("diagnostics") or [])
+
+    # ---- P2a: resource table (resources.arsc -> id/type/name/value) -------
+    resource_model: dict[str, Any] = {"status": "not_found", "entry_count": 0}
+    if apk_path is not None:
+        resource_model = _parse_resources_to_disk(apk_path, output_dir)
+        coverage["resource_model"] = {
+            "success": "success",
+            "partial": "partial",
+            "not_found": "not_found",
+            "failed": "failed",
+        }.get(str(resource_model.get("status")), "failed")
+        if coverage["resource_model"] == "success" and resource_files:
+            # The table is parsed, so the file-level statement is no longer
+            # "counted but not parsed".
+            coverage["resource_inventory"] = "parsed"
+        diagnostics.extend(resource_model.get("diagnostics") or [])
 
     dependency_evidence: dict[str, list[str]] = {name: [] for name in DEPENDENCY_MARKERS}
     api_clients: dict[str, list[dict[str, Any]]] = {name: [] for name in API_CLIENT_MARKERS}
@@ -748,6 +766,14 @@ def analyze_apk_surface(
             "classification": tree.summary(),
             "file_ledger": file_ledger_summary,
             "smali_file_count": len(smali_files),
+            "resource_model": {
+                "status": resource_model.get("status"),
+                "entry_count": resource_model.get("entry_count", 0),
+                "type_counts": resource_model.get("type_counts", {}),
+                "packages": resource_model.get("packages", []),
+                "string_pool_size": resource_model.get("string_pool_size", 0),
+                "resources_jsonl": resource_model.get("resources_jsonl"),
+            },
             "resource_and_asset_file_count": len(resource_files),
             "resource_and_asset_paths": [path.relative_to(root).as_posix() for path in resource_files],
             "native_libraries": native_libraries,
@@ -840,6 +866,60 @@ def _retarget_native_evidence(
         fix(evidence)
     for finding in findings:
         fix(finding.get("evidence"))
+
+
+def _parse_resources_to_disk(
+    apk_path: str | Path, output_dir: str | Path | None
+) -> dict[str, Any]:
+    """Stream the resource table to resources.jsonl, or count it if no sink.
+
+    The table can be hundreds of thousands of records, so it is written while
+    it is parsed; static-analysis.json only carries the summary.
+    """
+    target: Path | None = None
+    temporary: Path | None = None
+    handle: Any = None
+    try:
+        if output_dir is not None:
+            target = Path(output_dir) / "resources.jsonl"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary = target.with_name(f".{target.name}.tmp-{os.getpid()}")
+            handle = temporary.open("w", encoding="utf-8")
+
+            def sink(record: dict[str, Any]) -> None:
+                handle.write(
+                    json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    + "\n"
+                )
+        else:
+            def sink(record: dict[str, Any]) -> None:
+                # No output dir: the table is still parsed for its counts.
+                return None
+
+        summary = parse_resource_table(apk_path, sink=sink)
+        if handle is not None:
+            handle.flush()
+            os.fsync(handle.fileno())
+            handle.close()
+            handle = None
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, target)
+            summary["resources_jsonl"] = "resources.jsonl"
+        return summary
+    except OSError as exc:
+        return {
+            "status": "failed",
+            "entry_count": 0,
+            "diagnostics": [{
+                "code": "resource_table_write_failed",
+                "message": f"{type(exc).__name__}: {exc}",
+            }],
+        }
+    finally:
+        if handle is not None:
+            handle.close()
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _emit_progress(progress: Callable[[str], None] | None, message: str) -> None:
