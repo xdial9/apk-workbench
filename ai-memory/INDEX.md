@@ -63,6 +63,16 @@ surface.txt/plan.txt checkboxes if applicable.
   counted_not_parsed instead of a false "success", two dead diagnostic codes
   removed. NEXT scanner step is P0c (shard instead of drop for native
   symbol/string/finding overflow) unless the user reorders.
+- P0c DONE 2026-11-16 (commit 131fd69, 288 tests green): native symbol/string/
+  finding overflow now streams to shards/<prefix>-part-NNN.jsonl +
+  shards-index.json (index only when something overflowed); metrics split
+  emitted/sharded/dropped and dropped is 0 when a shard sink exists; coverage
+  gains the value "sharded". One DOMAIN_RE in surface/patterns.py with the
+  possessive quantifiers, shared by sweep and androguard_dex; the two
+  unhardened copies in apk_surface are deleted. analyze_apk_surface's
+  ledger_dir parameter is now output_dir (it receives files.jsonl + shards/).
+  NEXT scanner step: P1 identity/trust (APK signing certificate facts) unless
+  the user reorders.
 - VERIFIED SNAPSHOT 2026-11-16 (git + pytest, not memory): working branch
   feat/native-elf-reader; tests 271 green; native N1-N13 all committed
   (N13 asset/container-embedded .so = f1b921d). Before this snapshot those
