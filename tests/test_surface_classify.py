@@ -69,6 +69,38 @@ def test_analyzer_inventory_includes_classification(tmp_path):
     assert apk_surface.TEXT_SUFFIXES == classify.TEXT_SUFFIXES
 
 
+def test_classify_names_common_binary_formats_instead_of_unknown(tmp_path):
+    # The ledger can only say *why* a file was skipped if the magic table can
+    # name what it is. These are the formats an Android decode tree is full of.
+    root = tmp_path / "decode"
+    root.mkdir()
+    payloads = {
+        "a.png": b"\x89PNG\r\n\x1a\n" + b"\x00" * 8,
+        "b.jpg": b"\xff\xd8\xff\xe0" + b"\x00" * 8,
+        "c.gif": b"GIF89a" + b"\x00" * 8,
+        "d.webp": b"RIFF\x00\x00\x00\x00WEBP",
+        "e.pdf": b"%PDF-1.7\n",
+        "f.ttf": b"\x00\x01\x00\x00" + b"\x00" * 8,
+        "g.otf": b"OTTO" + b"\x00" * 8,
+        "resources.arsc": b"\x02\x00\x0c\x00" + b"\x00" * 8,
+    }
+    for name, data in payloads.items():
+        (root / name).write_bytes(data)
+
+    tree = classify.classify_decoded_tree(root)
+    kinds = {entry.relative: entry.content_kind for entry in tree.entries}
+
+    assert kinds["a.png"] == "png"
+    assert kinds["b.jpg"] == "jpeg"
+    assert kinds["c.gif"] == "gif"
+    assert kinds["d.webp"] == "riff"
+    assert kinds["e.pdf"] == "pdf"
+    assert kinds["f.ttf"] == "font"
+    assert kinds["g.otf"] == "font"
+    assert kinds["resources.arsc"] == "arsc"
+    assert "unknown_binary" not in tree.class_counts
+
+
 def test_apk_zip_inventory_maps_every_member(tmp_path):
     apk_path = tmp_path / "base.apk"
     buffer = io.BytesIO()

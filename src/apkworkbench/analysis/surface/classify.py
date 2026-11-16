@@ -25,6 +25,9 @@ TEXT_SUFFIXES = {
 }
 
 # Magic-byte table: prefix bytes -> content kind (observed data, not names).
+# Only formats that change a routing decision or a skip reason belong here:
+# a file the ledger calls "binary_content" should be able to say *which*
+# binary it is. Anything absent stays "unknown_binary", which is honest.
 MAGIC_TABLE: tuple[tuple[bytes, str], ...] = (
     (b"PK\x03\x04", "zip"),
     (b"PK\x05\x06", "zip_empty"),
@@ -33,6 +36,17 @@ MAGIC_TABLE: tuple[tuple[bytes, str], ...] = (
     (b"dex\n", "dex"),
     (b"SQLite format 3\x00", "sqlite"),
     (b"\xca\xfe\xba\xbe", "java_class"),
+    (b"\x89PNG\r\n\x1a\n", "png"),
+    (b"\xff\xd8\xff", "jpeg"),
+    (b"GIF87a", "gif"),
+    (b"GIF89a", "gif"),
+    (b"RIFF", "riff"),              # wav/webp/avi share the RIFF container
+    (b"%PDF", "pdf"),
+    (b"OTTO", "font"),              # CFF-flavoured OpenType
+    (b"ttcf", "font"),              # font collection
+    (b"\x00\x01\x00\x00", "font"),  # TrueType
+    (b"true", "font"),
+    (b"\x02\x00\x0c\x00", "arsc"),  # compiled resources.arsc table chunk
 )
 
 ARCHIVE_KINDS = frozenset({"zip", "zip_empty", "gzip", "dex", "java_class"})
@@ -79,6 +93,10 @@ class DecodedTree:
     symlink_count: int = 0
     unreadable_count: int = 0
     class_counts: dict[str, int] = field(default_factory=dict)
+    # Named, not just counted: the per-file coverage ledger must be able to
+    # account for every entry, including the ones that are never opened.
+    symlinks: list[str] = field(default_factory=list)
+    unreadable: list[str] = field(default_factory=list)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -102,6 +120,7 @@ def classify_decoded_tree(root: Path) -> DecodedTree:
             candidate = base / name
             if candidate.is_symlink():
                 tree.symlink_count += 1
+                tree.symlinks.append(candidate.relative_to(root).as_posix())
             else:
                 kept_dirs.append(name)
         directories[:] = kept_dirs
@@ -109,9 +128,11 @@ def classify_decoded_tree(root: Path) -> DecodedTree:
             candidate = base / name
             if candidate.is_symlink():
                 tree.symlink_count += 1
+                tree.symlinks.append(candidate.relative_to(root).as_posix())
                 continue
             if not candidate.is_file():
                 tree.unreadable_count += 1
+                tree.unreadable.append(candidate.relative_to(root).as_posix())
                 continue
             suffix = candidate.suffix.lower()
             kind = sniff_file_magic(candidate)

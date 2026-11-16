@@ -25,6 +25,11 @@ from apkworkbench.analysis.surface.classify import (
 )
 from apkworkbench.analysis.surface.serialize import finalize_result
 from apkworkbench.analysis.surface.handoff import write_handoff
+from apkworkbench.analysis.surface.ledger import (
+    build_file_ledger,
+    summarize as summarize_file_ledger,
+    write_file_ledger,
+)
 from apkworkbench.analysis.surface.sweep import SweepState
 from apkworkbench.analysis.surface.deductions import (
     api_surface,
@@ -248,8 +253,15 @@ def analyze_apk_surface(
     *,
     progress: Callable[[str], None] | None = None,
     tree_root: str = "apktool/",
+    ledger_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Inspect decoded XML/Smali/resources and produce inventory plus static leads."""
+    """Inspect decoded XML/Smali/resources and produce inventory plus static leads.
+
+    ``ledger_dir`` (optional) receives ``files.jsonl``, the per-file coverage
+    ledger. The summary always lands in ``inventory.file_ledger``; the file is
+    written only when a directory is supplied, so direct callers (tests) do not
+    write into the evidence tree.
+    """
     root = Path(apktool_dir).expanduser().resolve(strict=True)
     root = Path(os.fspath(root))
     if not root.is_dir():
@@ -297,7 +309,12 @@ def analyze_apk_surface(
         if path.relative_to(root).parts[:1] in {("res",), ("assets",)}
     ]
     if resource_files:
-        coverage["resource_inventory"] = "success"
+        # Counted, not parsed. This scanner does not decode resources.arsc,
+        # layouts or drawables; reporting "success" here asserted work that
+        # never happened and told the AI a gap was closed.
+        coverage["resource_inventory"] = "counted_not_parsed"
+    else:
+        coverage["resource_inventory"] = "not_found"
     manifest = next((path for path in files if path.name == "AndroidManifest.xml"), None)
     manifest_facts: dict[str, Any] = {"status": "not_found"}
     if manifest:
@@ -372,6 +389,10 @@ def analyze_apk_surface(
     scanned_text_bytes = 0
     code_scanned = 0
     scannable_total = sum(1 for item in files if item.suffix.lower() in TEXT_SUFFIXES)
+    # Per-file coverage ledger inputs: what the sweep actually read, and what it
+    # tried and could not. A text candidate in neither list is undecodable.
+    scanned_relatives: set[str] = set()
+    read_failures: dict[str, str] = {}
     scan_started = last_heartbeat = time.monotonic()
     files_seen = 0
     _emit_progress(
@@ -407,8 +428,10 @@ def analyze_apk_surface(
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
+            read_failures[relative] = f"{type(exc).__name__}: {exc}"
             diagnostics.append({"code": "text_read_failed", "message": f"{relative}: {exc}"})
             continue
+        scanned_relatives.add(relative)
         scanned_text_bytes += path.stat().st_size
         code_scanned += 1
         coverage["endpoints_and_domains"] = "success"
@@ -479,10 +502,10 @@ def analyze_apk_surface(
         coverage["smali_security_indicators"] = "not_found"
     coverage["dependency_fingerprints"] = "success" if code_scanned else "not_scanned"
     partial_diagnostics = {
-        "symlink_entries_skipped", "text_file_limit", "text_read_failed",
+        "symlink_entries_skipped", "text_read_failed",
         "manifest_parse_failed", "network_config_parse_failed",
         "network_config_referenced_not_found",
-        "finding_limit",
+        "file_ledger_write_failed",
         "native_elf_parse_failed", "native_not_elf", "native_string_limit",
         "native_string_fact_limit", "native_finding_limit",
         "native_container_unreadable", "native_container_member_limit",
@@ -625,6 +648,27 @@ def analyze_apk_surface(
     deductions.sort(key=lambda item: item["id"])
     # Deduction facts now carry evidence from deductions.py directly. No post-hoc enrichment (re-adding would double-count).
     coverage.update(native_analysis.coverage)
+    # ---- P0: per-file coverage ledger ------------------------------------
+    # Every tree entry gets one record with a status and, when not checked, a
+    # reason. Counts alone could not prove what was skipped; this can.
+    file_ledger = build_file_ledger(
+        tree, scanned=scanned_relatives, read_failures=read_failures,
+    )
+    file_ledger_summary = summarize_file_ledger(file_ledger)
+    if ledger_dir is not None:
+        try:
+            write_file_ledger(ledger_dir, file_ledger)
+        except OSError as exc:
+            diagnostics.append({
+                "code": "file_ledger_write_failed",
+                "message": f"{type(exc).__name__}: {exc}",
+            })
+            file_ledger_summary["written"] = False
+        else:
+            file_ledger_summary["written"] = True
+    else:
+        file_ledger_summary["written"] = False
+
     result = {
         "schema_version": 1,
         "analyzer": {"id": ANALYZER_ID, "version": ANALYZER_VERSION},
@@ -645,6 +689,7 @@ def analyze_apk_surface(
             "text_bytes_scanned": scanned_text_bytes,
             "extension_counts": dict(sorted(extensions.items())),
             "classification": tree.summary(),
+            "file_ledger": file_ledger_summary,
             "smali_file_count": len(smali_files),
             "resource_and_asset_file_count": len(resource_files),
             "resource_and_asset_paths": [path.relative_to(root).as_posix() for path in resource_files],
@@ -920,7 +965,10 @@ def run_static_surface_analysis(
             progress(f"[surface {index}/{len(eligible)}] Inspecting {package_id} v{version_code}")
         try:
             result = analyze_apk_surface(
-                decoded, progress=progress, tree_root=citation_root
+                decoded,
+                progress=progress,
+                tree_root=citation_root,
+                ledger_dir=output_root,
             )
             source_value = row.get("local_path", "")
             source_candidate = Path(source_value).expanduser()

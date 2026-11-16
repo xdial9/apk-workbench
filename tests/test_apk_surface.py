@@ -104,3 +104,28 @@ def test_apk_surface_analyzer_skips_symlinked_files(tmp_path):
 
     assert result["inventory"]["file_count"] == 0
     assert result["diagnostics"][0]["code"] == "symlink_entries_skipped"
+
+
+def test_resource_inventory_reports_counted_not_parsed(tmp_path):
+    # The scanner counts res/assets entries but does not decode resources.arsc
+    # or layouts. Claiming "success" told the AI a coverage gap was closed.
+    root = tmp_path / "apktool"
+    (root / "res/values").mkdir(parents=True)
+    (root / "assets").mkdir()
+    (root / "res/values/strings.xml").write_text("<resources/>", encoding="utf-8")
+    (root / "assets/blob.dat").write_bytes(b"\x00\x01\x02")
+
+    result = analyze_apk_surface(root)
+
+    assert result["coverage"]["resource_inventory"] == "counted_not_parsed"
+    assert result["inventory"]["resource_and_asset_file_count"] == 2
+
+
+def test_resource_inventory_is_not_found_without_resource_dirs(tmp_path):
+    root = tmp_path / "apktool"
+    (root / "smali").mkdir(parents=True)
+    (root / "smali/A.smali").write_text(".class LA;", encoding="utf-8")
+
+    result = analyze_apk_surface(root)
+
+    assert result["coverage"]["resource_inventory"] == "not_found"
