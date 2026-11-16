@@ -140,7 +140,9 @@ def _deduction_leads(deductions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _coverage_leads(coverage: dict[str, Any]) -> list[dict[str, Any]]:
-    done = {"success", "complete", "not_applicable"}
+    # "mapped"/"analyzed" are the native-plane success states: a fully mapped
+    # JNI surface is not a gap and must not generate a lead.
+    done = {"success", "complete", "not_applicable", "mapped", "analyzed"}
     leads: list[dict[str, Any]] = []
     for area, status in sorted(coverage.items()):
         if status in done:

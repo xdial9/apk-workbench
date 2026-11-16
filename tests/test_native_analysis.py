@@ -423,3 +423,37 @@ def test_elf_build_helper_roundtrip_is_self_consistent():
     blob = build_elf(bits=64, symbols=(symbol("x"),), needed=("libc.so",))
     assert blob[:4] == b"\x7fELF"
     assert b"libc.so" in blob
+
+
+def test_library_without_load_site_gets_a_closed_reason(tmp_path):
+    root = make_tree(tmp_path)
+    (root / "smali/com/example/Loader.smali").write_text(
+        ".class public Lcom/example/Loader;\n"
+        ".method public static init()V\n"
+        '    const-string v0, "main"\n'
+        "    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n"
+        "    return-void\n"
+        ".end method\n",
+        encoding="utf-8",
+    )
+    write_elf(root / "lib/arm64-v8a/libmain.so", needed=("libdep.so",), symbols=(symbol("foo"),))
+    write_elf(root / "lib/arm64-v8a/libdep.so", symbols=(symbol("dep"),))
+    write_elf(root / "lib/arm64-v8a/liborphan.so", symbols=(symbol("orphan"),))
+
+    result = analyze_apk_surface(root)
+
+    reasons = {
+        fact["value"]: fact["reason"]
+        for fact in facts_of(result, "native_library_no_load_site")
+    }
+    assert reasons == {
+        "lib/arm64-v8a/libdep.so": "dependency_of_other_lib",
+        "lib/arm64-v8a/liborphan.so": "unreferenced",
+    }
+    assert all(reason in UNMAPPED_REASONS for reason in reasons.values())
+    metrics = result["metrics"]
+    assert metrics["native_libraries_with_load_site"] == 1
+    assert metrics["native_libraries_without_load_site"] == 2
+    inventory = {item["path"]: item for item in result["inventory"]["native_analysis"]}
+    assert inventory["lib/arm64-v8a/libmain.so"]["load_status"] == "loaded"
+    assert inventory["lib/arm64-v8a/libdep.so"]["load_reason"] == "dependency_of_other_lib"

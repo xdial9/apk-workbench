@@ -67,9 +67,16 @@ surface.txt/plan.txt checkboxes if applicable.
   lists verified only, counts unverified (trufflehog_unverified_count /
   unverified_trufflehog_findings_retained), never aborts.
 - NATIVE TRACK OPENED 2026-11-16: ai-memory/native-plan.md written after a
-  line-by-line review of the native path (strings-only today:
-  apk_surface.py:235-257, 432-465). No native code changed yet; plan is
-  N1..N12 (+N13 deferred). Crown jewel 5 is measured at ~15%.
+  line-by-line review of the native path (was strings-only:
+  apk_surface.py:235-257, 432-465). Crown jewel 5 was measured at ~15%.
+- NATIVE TRACK IMPLEMENTED 2026-11-16 on branch feat/native-elf-reader
+  (branched from main @ 9d4fea4; main untouched). New modules
+  analysis/surface/native_elf.py (stdlib ELF reader) and
+  analysis/surface/native.py (JNI demangle+join, load sites, streamed
+  strings incl. UTF-16LE, evidence-only findings). Native facts now cite
+  path@0xOFFSET (handoff + workbook). Metrics carry I1/I2 identities;
+  status goes partial for any unparseable .so. 262 tests green. N13
+  (asset-embedded .so) still deferred; NEEDED-graph reasons done.
 - Phase: Surface analyzer overhaul planning DONE (ai-memory/surface-plan-v2.md
   is canonical; supersedes surface.txt's S-order and folds in dump/checkpoint
   + terminal + AI-consumer shaping; P9 MODEL-AGNOSTRIC HANDOFF LAW + master

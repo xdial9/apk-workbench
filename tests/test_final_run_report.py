@@ -96,6 +96,12 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
             "api_headers": [{"name": "retry-after", "evidence": []}],
             "rate_limit_indicators": [{"path": "smali/Main.smali", "line": 14}],
         },
+        "metrics": {
+            "native_files_found": 2,
+            "native_jni_exports_total": 3,
+            "native_jni_exports_mapped": 2,
+            "native_jni_exports_unmapped": 1,
+        },
         "dex_analysis": {
             "status": "success",
             "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
@@ -181,6 +187,14 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
     assert result["static_findings"] == 1
     assert result["api_endpoint_count"] == 1
     assert result["api_route_count"] == 1
+    # Native plane: the run report proves the JNI surface was analysed and
+    # that the mapping identity closed (3 = 2 mapped + 1 unmapped-with-reason).
+    native_stage = payload["stages"]["static_apk_surface_analysis"]
+    assert native_stage["native_files_found"] == 2
+    assert native_stage["native_jni_exports_total"] == 3
+    assert native_stage["native_jni_exports_mapped"] == 2
+    assert native_stage["native_jni_exports_unmapped"] == 1
+    assert native_stage["native_jni_mapping_complete"] is True
     assert payload["stages"]["independent_download_verification"]["status"] == "verified"
     assert payload["stages"]["reconciliation"]["complete"] == 1
     assert payload["api_catalog"]["endpoint_candidates"][0]["value"] == "https://api.example.test/v1"

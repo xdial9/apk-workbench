@@ -373,3 +373,53 @@ def test_workbook_location_ledger_renders_native_offsets():
     assert ledger["facts"][0]["locations"] == ["lib/arm64-v8a/libfoo.so@0xff"]
     assert ledger["facts"][0]["address_space"] == "byte"
     assert ledger["findings"][0]["location"] == "lib/arm64-v8a/libfoo.so@0x10"
+
+
+def test_native_facts_reach_facts_jsonl_with_resolvable_locations(tmp_path):
+    """N11: every native fact is citable from the handoff plane."""
+    from tests.elf_fixtures import symbol, write_elf
+
+    root = tmp_path / "apktool"
+    (root / "smali/com/example").mkdir(parents=True)
+    (root / "lib/arm64-v8a").mkdir(parents=True)
+    (root / "AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android"'
+        ' package="com.example.app"><application /></manifest>',
+        encoding="utf-8",
+    )
+    (root / "smali/com/example/Main.smali").write_text(
+        ".class public Lcom/example/Main;\n"
+        ".method public native run()V\n.end method\n",
+        encoding="utf-8",
+    )
+    write_elf(
+        root / "lib/arm64-v8a/libgood.so",
+        symbols=(symbol("Java_com_example_Main_run"),),
+        soname="libgood.so",
+    )
+
+    result = apk_surface.analyze_apk_surface(root)
+    payload = write_handoff(tmp_path / "surface", result)
+
+    facts = [json.loads(line) for line in payload["facts"].read_text(encoding="utf-8").splitlines()]
+    kinds = {fact["kind"] for fact in facts}
+    assert {"native_elf", "native_export", "native_jni_entry"} <= kinds
+
+    location_map = json.loads(payload["location_map"].read_text(encoding="utf-8"))
+    native_entries = [
+        entry for entry in location_map["entries"]
+        if entry.get("kind") in {"native_elf", "native_export", "native_jni_entry"}
+    ]
+    assert native_entries
+    for entry in native_entries:
+        assert entry["has_location"] is True
+        assert entry["locations"]
+        assert entry["address_space"] in {"byte", "line", "mixed"}
+    jni_entry = next(entry for entry in native_entries if entry["kind"] == "native_jni_entry")
+    # Symbol record cite is byte-addressed; the smali declaration keeps file:line.
+    assert any("@0x" in location for location in jni_entry["locations"])
+    assert any(location.endswith("Main.smali:2") for location in jni_entry["locations"])
+
+    # A fully mapped JNI surface is success, not a gap: no false open lead.
+    leads = result["workbook"]["playbook"]["open_leads"]
+    assert not [lead for lead in leads if lead["id"] == "COV-native_jni_mapping"]

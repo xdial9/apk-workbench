@@ -340,6 +340,10 @@ def generate_final_run_report(
     api_route_count = 0
     static_failed = 0
     trufflehog_failed = 0
+    native_files_found = 0
+    native_jni_exports_total = 0
+    native_jni_exports_mapped = 0
+    native_jni_exports_unmapped = 0
 
     seen: set[tuple[str, str, str]] = set()
     for selected in manifest:
@@ -398,6 +402,14 @@ def generate_final_run_report(
             if not isinstance(static_list, list):
                 static_list = []
             static_findings += len(static_list)
+            # Native plane counters: a mapped JNI surface is a fact about the
+            # artifact, so the run report must be able to prove it happened.
+            native_metrics = static_analysis.get("metrics", {})
+            if isinstance(native_metrics, dict):
+                native_files_found += int(native_metrics.get("native_files_found") or 0)
+                native_jni_exports_total += int(native_metrics.get("native_jni_exports_total") or 0)
+                native_jni_exports_mapped += int(native_metrics.get("native_jni_exports_mapped") or 0)
+                native_jni_exports_unmapped += int(native_metrics.get("native_jni_exports_unmapped") or 0)
             api_inventory = static_analysis.get("inventory", {})
             if not isinstance(api_inventory, dict):
                 api_inventory = {}
@@ -594,6 +606,14 @@ def generate_final_run_report(
                 "androguard_internal_call_graph_edges": len(dex_internal_call_graph),
                 "androguard_dex_rate_limit_indicators": len(dex_rate_limit_indicators),
                 "client_rate_limit_retry_indicators": len(rate_limit_indicators),
+                "native_files_found": native_files_found,
+                "native_jni_exports_total": native_jni_exports_total,
+                "native_jni_exports_mapped": native_jni_exports_mapped,
+                "native_jni_exports_unmapped": native_jni_exports_unmapped,
+                "native_jni_mapping_complete": (
+                    native_jni_exports_total
+                    == native_jni_exports_mapped + native_jni_exports_unmapped
+                ),
                 "run_record": surface_run_record or {"status": "missing_or_legacy"},
             },
             "trufflehog_verified_secret_scan": {
