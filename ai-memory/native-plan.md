@@ -1,7 +1,9 @@
 # NATIVE (JNI) SCANNER — DISCOVERY + MAPPING TO 100% (plan v1)
 
-Status: N1-N12 IMPLEMENTED on branch feat/native-elf-reader (commits below).
-N13-lite (NEEDED graph reasons) done; N13 asset-embedded .so still deferred.
+Status: N1-N13 IMPLEMENTED on branch feat/native-elf-reader (271 tests green).
+N13-lite (NEEDED graph reasons) done; N13 container-embedded .so (plugin APKs,
+packed .so, jar/aar; cited as container!member) done in commit f1b921d.
+Not covered by N13: non-zip packers (custom encrypted blobs) - unverified/open.
 Canonical home for the native track (appdev.txt §4 keeps the domain knowledge;
 this file owns the plan and the step state).
 
@@ -182,8 +184,11 @@ N12 [x] Adversarial + performance gate
     symbol table with bad offsets; measure wall time + peak RSS on a real lib.
     Exit: suite green, timing/RSS recorded in this file (VERIFY numbers in).
 
-N13 [~] (DEFERRED) NEEDED dependency graph across sibling libs; asset-embedded
-    .so (Flutter/RN packers). Only after N1-N12 are green.
+N13 [x] NEEDED dependency graph across sibling libs (N13-lite) + zip-embedded
+    .so extraction (f1b921d): streams members to temp files, caps (64
+    containers / 16 members each / 128 MiB per lib / 256 MiB total / 32 libs)
+    each emit a diagnostic and set coverage native_embedded_libraries=partial.
+    Tests: tests/test_native_embedded.py (7).
 
 --------------------------------------------------------------------------------
 DECISIONS / CONSTRAINTS (append-only)

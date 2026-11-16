@@ -1,6 +1,6 @@
 # AGENTS.md — APK-Workbench
 
-Repo: /home/user/APK-Workbench. Branch: feature/goopdl-account-auth.
+Repo: /home/user/APK-Workbench. Branch: feat/native-elf-reader (main == origin/main carries the same work after the 2026-11-16 push; feature/goopdl-account-auth is stale).
 Venv: .venv/bin/python. Tests: .venv/bin/python -m pytest -q
 CORE IDENTITY
 

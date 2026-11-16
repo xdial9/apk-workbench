@@ -50,6 +50,15 @@ END: update STATE (phase item moved? decisions? VERIFYs resolved?) + tick
 surface.txt/plan.txt checkboxes if applicable.
 
 ## STATE (as of 2026-11-16, updated by agent)
+- VERIFIED SNAPSHOT 2026-11-16 (git + pytest, not memory): working branch
+  feat/native-elf-reader; tests 271 green; native N1-N13 all committed
+  (N13 asset/container-embedded .so = f1b921d). Before this snapshot those
+  commits were local-only; they are now pushed and main/origin/main are
+  fast-forwarded to them. feature/goopdl-account-auth and feat/handoff-folder
+  are stale copies of the old main (9d4fea4). NEXT UNIT is still per-bundle
+  workspace + freeze (todo.md Unit 1): no code for it exists yet. Lines below
+  that say "N13 deferred", "262 tests" or "Branch: feature/goopdl-account-auth"
+  are history, superseded by this bullet.
 - Branch: feature/goopdl-account-auth (S8 perf 062973b; handoff writers
   committed 2026-11-14 as 6e8dcaf; live account-mode validated; tests 211
   green). 2026-11-16: citation-root parameterized (D-1 step 2) — see

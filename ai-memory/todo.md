@@ -11,7 +11,12 @@ asked.
 --------------------------------------------------------------------------------
 ## CURRENT STATE
 --------------------------------------------------------------------------------
-- Branch: feature/goopdl-account-auth. Tests: 213 green. Analyzer 0.3.0.
+- VERIFIED 2026-11-16 (git + pytest): branch feat/native-elf-reader, tests 271
+  green, analyzer 0.3.0. Native track N1-N13 committed (N13 = f1b921d); main
+  and origin/main were fast-forwarded to it. The per-bundle workspace + freeze
+  unit below is STILL NOT STARTED in code (no verify-workspace command exists).
+  Older bullets below that say "213 green" / "feature/goopdl-account-auth"
+  were true when written and are kept as history.
 - Code: S8 perf 062973b. Handoff writers committed 2026-11-14 as 6e8dcaf
   (facts.jsonl + location_map.json + citation-root prefix + driver emission
   + workbook text + 6 tests). static-analysis.json untouched, S8 parity holds.
