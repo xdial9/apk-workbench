@@ -92,6 +92,9 @@ surface.txt/plan.txt checkboxes if applicable.
   coverage keys file_provider_paths + layout_inventory; metrics
   file_provider_root_count / layout_count / custom_view_count.
   STATE: 321 tests green, tree clean, pushed. P2 IS COMPLETE.
+  MAIN PROMOTED 2026-11-16: main was fast-forwarded to this branch's tip
+  (clean, no force) and pushed, so origin/main now carries the scanner work.
+  main and feat/native-elf-reader are the same commit.
   NEXT: P3 code model (class/method/field inventory, call graph v2 with
   caller_class/callee_class + dex file, external refs with AND without
   callers, string->class index, reflection sites, one-hop dynamic-load

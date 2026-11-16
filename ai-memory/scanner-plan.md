@@ -305,6 +305,9 @@ Scanner-related tests: 150 of the 321 collected. Hermetic fixture builders:
 | `133cb45` | P2b: smali resource-id resolution + definition files + FactStore guard |
 | `4adb6a5` | P2c: FileProvider roots + layout/view inventory (P2 complete) |
 
-Memory-only commits interleaved: `a7aa2af`, `eadf73d`, `45bec3e`, `cb52d53`.
-Push state: `origin/feat/native-elf-reader` tracks HEAD. `main` is still
-`ca2858c` (pre-scanner) — promoting it is the user's call.
+Memory-only commits interleaved: `a7aa2af`, `eadf73d`, `45bec3e`, `cb52d53`,
+`9a2f8f1`.
+Push state: `origin/feat/native-elf-reader` tracks HEAD, and on 2026-11-16
+`main` was fast-forwarded to the same tip and pushed (no force). `main`,
+`origin/main` and the feature branch are one commit. New work continues on
+`feat/native-elf-reader`; fast-forward `main` again when it is accepted.
