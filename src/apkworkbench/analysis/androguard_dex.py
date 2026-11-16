@@ -15,14 +15,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from apkworkbench.analysis.surface.patterns import DOMAIN_RE
+
 # CAP-FREE: No MAX_* caps. No truncation. Overflow is handled by writing
 # the full payload to disk (see _worker_entry) instead of shrinking it to fit a pipe.
 # Empty means empty. If count > 0, data must be present.
 URL_RE = re.compile(r"""(?:https?|wss?|ftp|grpc)://[^\s"'<>\\]+""", re.IGNORECASE)
-DOMAIN_RE = re.compile(
-    r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
-    r"[A-Za-z]{2,63}(?![A-Za-z0-9_])"
-)
 IPV4_RE = re.compile(
     r"(?<![0-9.])(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})"
     r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})){3}(?![0-9.])"

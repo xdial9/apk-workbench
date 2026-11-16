@@ -33,6 +33,7 @@ from apkworkbench.analysis.surface.native_elf import (
     ElfSymbol,
     parse_elf,
 )
+from apkworkbench.analysis.surface.shards import ShardWriter
 
 # ---- strings ---------------------------------------------------------------
 
@@ -101,6 +102,7 @@ class StringScan:
     unique: int = 0
     bytes_scanned: int = 0
     truncated: bool = False
+    overflowed: int = 0  # unique values past the limit, moved to a shard
     limit: int = MAX_STRINGS_PER_LIBRARY
 
     def text(self) -> str:
@@ -116,8 +118,14 @@ def _iter_strings(data: bytes, base: int) -> Iterator[tuple[str, int]]:
 
 
 def scan_strings(path: Path, *, limit: int = MAX_STRINGS_PER_LIBRARY,
-                 chunk_bytes: int = STRING_CHUNK_BYTES) -> StringScan:
-    """Stream printable ASCII + UTF-16LE strings, deduped by value (first offset)."""
+                 chunk_bytes: int = STRING_CHUNK_BYTES,
+                 overflow: Callable[[str, int], None] | None = None) -> StringScan:
+    """Stream printable ASCII + UTF-16LE strings, deduped by value (first offset).
+
+    ``overflow`` receives every unique value past ``limit`` so a caller with a
+    shard sink can keep it. Without a sink the values are counted only, and
+    ``truncated`` says so.
+    """
     scan = StringScan(limit=limit)
     seen: dict[str, int] = {}
     try:
@@ -142,6 +150,9 @@ def scan_strings(path: Path, *, limit: int = MAX_STRINGS_PER_LIBRARY,
                     continue
                 if len(seen) >= limit:
                     scan.truncated = True
+                    if overflow is not None:
+                        scan.overflowed += 1
+                        overflow(value, absolute)
                     continue
                 seen[value] = absolute
             carry = window[-STRING_OVERLAP_BYTES:]
@@ -508,6 +519,32 @@ class NativeAnalysis:
     string_line_offsets: dict[str, list[int]] = field(default_factory=dict)
     embedded_citations: list[str] = field(default_factory=list)
     container_counters: dict[str, int] = field(default_factory=dict)
+    # P0c: overflow is moved to shards, never dropped silently.
+    sharded_counts: dict[str, int] = field(default_factory=dict)
+    shard_index: dict[str, Any] = field(default_factory=dict)
+    finding_candidates: int = 0
+
+
+def _shard(
+    shards: ShardWriter | None,
+    analysis: NativeAnalysis,
+    kind: str,
+    key: Any,
+    record: dict[str, Any],
+) -> bool:
+    """Move one overflow record to disk. False when there is no shard sink."""
+    if shards is None:
+        return False
+    shards.write(kind, key, record)
+    analysis.sharded_counts[kind] = analysis.sharded_counts.get(kind, 0) + 1
+    return True
+
+
+def _once(analysis: NativeAnalysis, code: str, message: str) -> None:
+    """Record a cap diagnostic once per artifact, not once per overflowed item."""
+    if any(item["code"] == code for item in analysis.diagnostics):
+        return
+    analysis.diagnostics.append({"code": code, "message": message})
 
 
 def analyze_native(
@@ -518,6 +555,7 @@ def analyze_native(
     library_loads: list[dict[str, Any]],
     containers: list[str] = (),
     progress: Callable[[str], None] | None = None,
+    shard_dir: str | Path | None = None,
 ) -> NativeAnalysis:
     """Parse, map and cite every native library. Never raises for a bad .so.
 
@@ -525,6 +563,10 @@ def analyze_native(
     code (packed .so, plugin APKs in assets). Their ``*.so`` members are
     streamed to temp files, analysed like loose libraries, cited as
     ``container!member``, and deleted when the analysis finishes.
+
+    ``shard_dir`` receives ``shards/*.jsonl`` + ``shards-index.json`` for every
+    record past a cap. Without it the caps count-and-drop as before, and the
+    metrics say so; with it nothing is lost.
     """
     analysis = NativeAnalysis()
     counters: dict[str, int] = {
@@ -536,13 +578,17 @@ def analyze_native(
     embedded = extract_embedded_libraries(root, list(containers), analysis.diagnostics, counters)
     analysis.embedded_citations = [item.citation for item in embedded]
     analysis.container_counters = counters
+    shards = ShardWriter(shard_dir, prefix="native-overflow") if shard_dir is not None else None
     try:
         _analyze_targets(
-            analysis, root, libraries, embedded, native_method_index, library_loads, progress
+            analysis, root, libraries, embedded, native_method_index,
+            library_loads, progress, shards,
         )
     finally:
         for item in embedded:
             item.path.unlink(missing_ok=True)
+        if shards is not None:
+            analysis.shard_index = shards.close() or {}
     return analysis
 
 
@@ -554,6 +600,7 @@ def _analyze_targets(
     native_method_index: NativeMethodIndex,
     library_loads: list[dict[str, Any]],
     progress: Callable[[str], None] | None,
+    shards: ShardWriter | None = None,
 ) -> None:
     targets: list[tuple[str, Path]] = [(relative, root / relative) for relative in libraries]
     targets.extend((item.citation, item.path) for item in embedded)
@@ -583,7 +630,9 @@ def _analyze_targets(
 
     reports: list[NativeLibraryReport] = []
     string_fact_count = 0
+    string_processed = 0
     symbol_fact_count = 0
+    symbol_processed = 0
     finding_count = 0
 
     for index, (relative, lib_path) in enumerate(targets, start=1):
@@ -661,13 +710,9 @@ def _analyze_targets(
             },
         })
 
-        # --- exports / imports -> facts (bounded, counted)
+        # --- exports / imports -> facts (capped, overflow sharded, never lost)
         for symbol in parsed.exports:
-            symbol_fact_count += 1
-            if symbol_fact_count > MAX_SYMBOL_FACTS_ARTIFACT:
-                break
-            report.exports_emitted += 1
-            analysis.facts.append({
+            record = {
                 "kind": "native_export",
                 "value": f"{relative}::{symbol.name}",
                 "evidence": {"path": relative, "offset": symbol.file_offset},
@@ -679,13 +724,16 @@ def _analyze_targets(
                     "address": symbol.value,
                     "size": symbol.size,
                 },
-            })
-        for symbol in parsed.imports:
+            }
+            symbol_processed += 1
+            if symbol_fact_count >= MAX_SYMBOL_FACTS_ARTIFACT:
+                _shard(shards, analysis, "native_symbol", record["value"], record)
+                continue
             symbol_fact_count += 1
-            if symbol_fact_count > MAX_SYMBOL_FACTS_ARTIFACT:
-                break
-            report.imports_emitted += 1
-            analysis.facts.append({
+            report.exports_emitted += 1
+            analysis.facts.append(record)
+        for symbol in parsed.imports:
+            record = {
                 "kind": "native_import",
                 "value": f"{relative}::{symbol.name}",
                 "evidence": {"path": relative, "offset": symbol.file_offset},
@@ -696,7 +744,14 @@ def _analyze_targets(
                     "symbol_type": symbol.type_name,
                     "address": symbol.value,
                 },
-            })
+            }
+            symbol_processed += 1
+            if symbol_fact_count >= MAX_SYMBOL_FACTS_ARTIFACT:
+                _shard(shards, analysis, "native_symbol", record["value"], record)
+                continue
+            symbol_fact_count += 1
+            report.imports_emitted += 1
+            analysis.facts.append(record)
 
         # --- JNI mapping: exported Java_* -> declared native smali method
         for symbol in parsed.exports:
@@ -759,8 +814,28 @@ def _analyze_targets(
             for item in (*parsed.exports, *parsed.imports)
         )
 
-        # --- strings v2: streamed, deduped, capped-but-counted
-        strings = scan_strings(lib_path)
+        # --- strings v2: streamed, deduped, capped-but-sharded
+        strings = scan_strings(
+            lib_path,
+            overflow=(
+                (
+                    lambda value, offset, _relative=relative: _shard(
+                        shards, analysis, "native_string", value,
+                        {
+                            "kind": "native_string",
+                            "value": value,
+                            "evidence": {"path": _relative, "offset": offset},
+                            "extra": {
+                                "library": _relative,
+                                "overflow": "per_library_limit",
+                            },
+                        },
+                    )
+                )
+                if shards is not None
+                else None
+            ),
+        )
         report.strings = strings
         analysis.strings_by_lib[relative] = strings.text()
         analysis.string_line_offsets[relative] = [
@@ -771,28 +846,33 @@ def _analyze_targets(
                 "code": "native_string_limit",
                 "message": (
                     f"{relative}: kept {strings.unique} unique strings "
-                    f"(limit {strings.limit}); remaining values counted, not stored"
+                    f"(limit {strings.limit}); {strings.overflowed} overflow "
+                    "value(s) moved to shards, the rest counted"
                 ),
             })
         for value, offset in strings.values:
-            if string_fact_count >= MAX_STRING_FACTS_ARTIFACT:
-                strings.truncated = True
-                break
-            string_fact_count += 1
-            analysis.facts.append({
+            record = {
                 "kind": "native_string",
                 "value": value,
                 "evidence": {"path": relative, "offset": offset},
                 "extra": {"library": relative},
-            })
+            }
+            string_processed += 1
+            if string_fact_count >= MAX_STRING_FACTS_ARTIFACT:
+                strings.truncated = True
+                _shard(shards, analysis, "native_string", value, record)
+                continue
+            string_fact_count += 1
+            analysis.facts.append(record)
         if string_fact_count >= MAX_STRING_FACTS_ARTIFACT:
-            analysis.diagnostics.append({
-                "code": "native_string_fact_limit",
-                "message": (
+            _once(
+                analysis, "native_string_fact_limit",
+                (
                     f"artifact string-fact cap {MAX_STRING_FACTS_ARTIFACT} reached; "
+                    "overflow is sharded when a shard sink exists, and the "
                     "per-library totals remain exact in metrics"
                 ),
-            })
+            )
         for value, offset in strings.values:
             low = value.lower()
             if any(keyword in low for keyword in SECRET_KEYWORDS):
@@ -810,7 +890,7 @@ def _analyze_targets(
         # --- findings from parsed evidence only
         finding_count = _emit_native_findings(
             analysis, report, parsed, strings, register_natives,
-            finding_count, relative,
+            finding_count, relative, shards,
         )
         reports.append(report)
 
@@ -866,7 +946,9 @@ def _analyze_targets(
 
     analysis.libraries = [report.as_inventory() for report in reports]
     analysis.metrics = _build_metrics(
-        reports, analysis, unresolved_loads, string_fact_count, symbol_fact_count
+        reports, analysis, unresolved_loads,
+        string_fact_count, symbol_fact_count,
+        string_processed, symbol_processed,
     )
     analysis.coverage = _build_coverage(reports, analysis)
 
@@ -932,6 +1014,7 @@ def _emit_native_findings(
     register_natives: bool,
     finding_count: int,
     relative: str,
+    shards: ShardWriter | None = None,
 ) -> int:
     def add(
         rule_id: str,
@@ -943,16 +1026,7 @@ def _emit_native_findings(
         snippet: str,
         confidence: float,
     ) -> int:
-        if finding_count >= MAX_NATIVE_FINDINGS_ARTIFACT:
-            analysis.diagnostics.append({
-                "code": "native_finding_limit",
-                "message": (
-                    f"native finding cap {MAX_NATIVE_FINDINGS_ARTIFACT} reached; "
-                    "remaining evidence stays in native_* facts"
-                ),
-            })
-            return finding_count
-        analysis.findings.append({
+        record = {
             "analyzer": "apk-surface",
             "rule_id": rule_id,
             "category": category,
@@ -962,7 +1036,20 @@ def _emit_native_findings(
             "title": title,
             "message": message,
             "evidence": {"path": relative, "line": None, "offset": offset, "snippet": snippet},
-        })
+        }
+        analysis.finding_candidates += 1
+        if finding_count >= MAX_NATIVE_FINDINGS_ARTIFACT:
+            if _shard(shards, analysis, "native_finding", title, record):
+                return finding_count
+            _once(
+                analysis, "native_finding_limit",
+                (
+                    f"native finding cap {MAX_NATIVE_FINDINGS_ARTIFACT} reached; "
+                    "remaining evidence stays in native_* facts"
+                ),
+            )
+            return finding_count
+        analysis.findings.append(record)
         return finding_count + 1
 
     for item in report.unmapped:
@@ -1145,6 +1232,8 @@ def _build_metrics(
     unresolved_loads: list[dict[str, Any]],
     string_fact_count: int,
     symbol_fact_count: int,
+    string_processed: int,
+    symbol_processed: int,
 ) -> dict[str, Any]:
     parsed_reports = [report for report in reports if report.parsed is not None and report.parsed.ok]
     exports_total = sum(len(report.parsed.exports) for report in parsed_reports if report.parsed)
@@ -1155,11 +1244,19 @@ def _build_metrics(
     )
     mapped = sum(len(report.jni_entries) for report in reports)
     unmapped = sum(len(report.unmapped) for report in reports)
-    strings_total = sum(report.strings.unique for report in reports if report.strings)
+    strings_total = sum(
+        report.strings.unique + report.strings.overflowed
+        for report in reports if report.strings
+    )
     strings_matches = sum(report.strings.matches for report in reports if report.strings)
     bytes_scanned = sum(report.strings.bytes_scanned for report in reports if report.strings)
     with_load = sum(1 for report in reports if report.load_sites)
     without_load = len(reports) - with_load
+    sharded = analysis.sharded_counts
+    sharded_symbols = sharded.get("native_symbol", 0)
+    sharded_strings = sharded.get("native_string", 0)
+    sharded_findings = sharded.get("native_finding", 0)
+    native_findings_emitted = len(analysis.findings)
     metrics = {
         "native_library_count": len(reports),
         "native_files_found": len(reports),
@@ -1180,10 +1277,19 @@ def _build_metrics(
         "native_jni_mapping_complete": jni_total == mapped + unmapped,
         "native_strings_total": strings_total,
         "native_strings_emitted": string_fact_count,
-        "native_strings_dropped": max(strings_total - string_fact_count, 0),
+        "native_strings_sharded": sharded_strings,
+        "native_strings_dropped": max(
+            strings_total - string_fact_count - sharded_strings, 0
+        ),
+        "native_strings_processed": string_processed,
         "native_strings_scanned": sum(1 for report in reports if report.strings and report.strings.bytes_scanned),
         "native_strings_bytes": bytes_scanned,
         "native_strings_matches": strings_matches,
+        "native_findings_emitted": native_findings_emitted,
+        "native_findings_sharded": sharded_findings,
+        "native_findings_dropped": max(
+            analysis.finding_candidates - native_findings_emitted - sharded_findings, 0
+        ),
         "native_embedded_containers_scanned": (analysis.container_counters or {}).get(
             "containers_scanned", 0
         ),
@@ -1201,9 +1307,12 @@ def _build_metrics(
         "native_libraries_with_load_site": with_load,
         "native_libraries_without_load_site": without_load,
         "native_load_sites_unresolved": len(unresolved_loads),
+        "native_symbol_facts_emitted": symbol_fact_count,
+        "native_symbol_facts_sharded": sharded_symbols,
         "native_symbol_facts_dropped": max(
-            exports_total + imports_total - symbol_fact_count, 0
+            symbol_processed - symbol_fact_count - sharded_symbols, 0
         ),
+        "native_shards_index": bool(analysis.sharded_counts),
     }
     return metrics
 
@@ -1215,19 +1324,28 @@ def _build_coverage(
         libraries_status = "partial"
     else:
         libraries_status = "analyzed"
-    strings_status = (
-        "partial"
-        if any(report.strings and report.strings.truncated for report in reports)
-        else "success"
+    strings_truncated = any(
+        report.strings and report.strings.truncated for report in reports
     )
+    if analysis.metrics.get("native_strings_dropped"):
+        strings_status = "partial"
+    elif analysis.sharded_counts.get("native_string"):
+        strings_status = "sharded"
+    elif strings_truncated:
+        strings_status = "partial"
+    else:
+        strings_status = "success"
     if any(report.state in {"parse_failed", "not_elf"} for report in reports):
         symbols_status = "partial"
     elif any(report.state == "stripped_symbols" for report in reports):
         symbols_status = "stripped_symbols"
-    elif any(
-        report.parsed is not None and report.parsed.warnings for report in reports
+    elif (
+        any(report.parsed is not None and report.parsed.warnings for report in reports)
+        or analysis.metrics.get("native_symbol_facts_dropped")
     ):
         symbols_status = "partial"
+    elif analysis.sharded_counts.get("native_symbol"):
+        symbols_status = "sharded"
     else:
         symbols_status = "success"
     jni_total = analysis.metrics.get("native_jni_exports_total", 0)

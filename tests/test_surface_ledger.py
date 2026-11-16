@@ -33,7 +33,7 @@ def test_ledger_accounts_for_every_entry(tmp_path):
     (root / "smali" / "link.smali").symlink_to(root / "smali" / "com" / "x" / "A.smali")
 
     out = tmp_path / "artifact"
-    result = apk_surface.analyze_apk_surface(root, ledger_dir=out)
+    result = apk_surface.analyze_apk_surface(root, output_dir=out)
 
     records = [
         json.loads(line)

@@ -24,6 +24,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from apkworkbench.analysis.surface.findings import build_finding
+from apkworkbench.analysis.surface.patterns import DOMAIN_RE
 
 # ---- compiled patterns (module scope; PERFORMANCE LAW) --------------------
 GENERIC_URL_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.\-]{0,20}://[^\s\"'<>\\]+")
@@ -31,14 +32,7 @@ URI_SPECIAL_RE = re.compile(
     r"(?i)\b(mailto|tel|sms|smsto|geo|intent|javascript|market|content|file|package):[^\s\"'<>]+"
 )
 SCHEME_NAME_RE = re.compile(r"(?i)^([a-z][a-z0-9+.\-]{0,20})://")
-DOMAIN_RE = re.compile(
-    # ReDoS-hardened (S7 finding): the unbounded (label dot)+ structure is
-    # possessive so a hostile multi-kilobyte label run cannot backtrack;
-    # inner label quantifiers stay plain (bounded <=63, no blowup).
-    r"(?<![A-Za-z0-9_])"
-    r"(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?+)\.++)+"
-    r"[A-Za-z]{2,63}(?![A-Za-z0-9_])"
-)
+# DOMAIN_RE lives in surface/patterns.py: the DEX pass uses the same definition.
 IPV4_RE = re.compile(
     r"(?<![0-9.])(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})"
     r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})){3}(?![0-9.])"

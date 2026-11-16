@@ -161,14 +161,6 @@ CODE_RULES = (
 COMPILED_CODE_RULES = [
     (rule, re.compile(rule[4], re.IGNORECASE)) for rule in CODE_RULES
 ]
-DOMAIN_RE = re.compile(
-    r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
-    r"[A-Za-z]{2,63}(?![A-Za-z0-9_])"
-)
-IPV4_RE = re.compile(
-    r"(?<![0-9.])(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})"
-    r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})){3}(?![0-9.])"
-)
 RATE_LIMIT_RE = re.compile(
     r"rate.?limit|retry-after|x-ratelimit|ratelimit-|backoff|exponential.?backoff|too many requests|http.?429|token.?bucket|quota.?exceeded",
     re.IGNORECASE,
@@ -253,14 +245,15 @@ def analyze_apk_surface(
     *,
     progress: Callable[[str], None] | None = None,
     tree_root: str = "apktool/",
-    ledger_dir: str | Path | None = None,
+    output_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Inspect decoded XML/Smali/resources and produce inventory plus static leads.
 
-    ``ledger_dir`` (optional) receives ``files.jsonl``, the per-file coverage
-    ledger. The summary always lands in ``inventory.file_ledger``; the file is
-    written only when a directory is supplied, so direct callers (tests) do not
-    write into the evidence tree.
+    ``output_dir`` (optional) is the artifact folder. It receives the
+    ``files.jsonl`` coverage ledger and, when a cap overflows, ``shards/`` +
+    ``shards-index.json``. Both summaries always land in the result; the files
+    are written only when a directory is supplied, so direct callers (tests) do
+    not write into the evidence tree.
     """
     root = Path(apktool_dir).expanduser().resolve(strict=True)
     root = Path(os.fspath(root))
@@ -465,6 +458,7 @@ def analyze_apk_surface(
         library_loads=native_loads,
         containers=native_containers,
         progress=progress,
+        shard_dir=output_dir,
     )
     findings.extend(native_analysis.findings)
     diagnostics.extend(native_analysis.diagnostics)
@@ -655,9 +649,9 @@ def analyze_apk_surface(
         tree, scanned=scanned_relatives, read_failures=read_failures,
     )
     file_ledger_summary = summarize_file_ledger(file_ledger)
-    if ledger_dir is not None:
+    if output_dir is not None:
         try:
-            write_file_ledger(ledger_dir, file_ledger)
+            write_file_ledger(output_dir, file_ledger)
         except OSError as exc:
             diagnostics.append({
                 "code": "file_ledger_write_failed",
@@ -699,6 +693,7 @@ def analyze_apk_surface(
             "jni_unmapped": native_analysis.unmapped_entries,
             "native_library_loads": native_analysis.load_sites,
             "native_embedded_libraries": native_analysis.embedded_citations,
+            "shards_index": "shards-index.json" if native_analysis.shard_index else None,
             "dependencies": dependencies,
             "endpoints": [metadata for _value, metadata in sorted(api_endpoints.items())],
             "api_routes": [metadata for _route, metadata in sorted(api_routes.items())],
@@ -968,7 +963,7 @@ def run_static_surface_analysis(
                 decoded,
                 progress=progress,
                 tree_root=citation_root,
-                ledger_dir=output_root,
+                output_dir=output_root,
             )
             source_value = row.get("local_path", "")
             source_candidate = Path(source_value).expanduser()
