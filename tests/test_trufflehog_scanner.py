@@ -151,7 +151,7 @@ def test_scanner_processes_saved_partial_apktool_output(monkeypatch, tmp_path):
     assert any(entry[0] == "scan" for entry in calls)
 
 
-def test_scanner_selects_verified_results_and_persists_complete_original_objects(monkeypatch, tmp_path):
+def test_scanner_selects_all_results_and_persists_complete_original_objects(monkeypatch, tmp_path):
     database, digest = make_workspace(tmp_path)
     line = json.dumps(result_json()).encode() + b"\n"
     calls, _ = install_fakes(monkeypatch, line)
@@ -175,7 +175,8 @@ def test_scanner_selects_verified_results_and_persists_complete_original_objects
     },)
     command = next(entry[1] for entry in calls if entry[0] == "scan")
     assert command[0:2] == ["trufflehog", "filesystem"]
-    assert "--results=verified" in command
+    # CAP-FREE: was --results=verified (dropped unverified). Now --results=all.
+    assert "--results=all" in command
     assert "--no-update" in command
     assert "--json" in command
     assert "--concurrency=1" in command
@@ -200,7 +201,9 @@ def test_scanner_selects_verified_results_and_persists_complete_original_objects
 
 
 
-def test_scanner_rejects_unverified_findings(monkeypatch, tmp_path):
+def test_scanner_keeps_unverified_findings(monkeypatch, tmp_path):
+    # CAP-FREE: old test asserted unverified findings are rejected/failed.
+    # New rule: hand AI everything - verified + unverified, never drop unverified.
     database, digest = make_workspace(tmp_path)
     finding = result_json()
     finding["Verified"] = False
@@ -209,10 +212,51 @@ def test_scanner_rejects_unverified_findings(monkeypatch, tmp_path):
 
     summary = scanner.run()
 
-    assert summary.failed == 1
-    assert summary.scanned == 0
-    assert not (tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings.json").exists()
-    assert database.read_processing_status()[digest]["scan_status"] == "failed"
+    assert summary.failed == 0
+    assert summary.scanned == 1
+    assert summary.findings == 1
+    assert (tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings.json").exists()
+    assert (tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings-unverified.json").exists()
+    assert database.read_processing_status()[digest]["scan_status"] == "success"
+
+    # Human-facing summary: verified-only .txt exists and is explicit about
+    # the unverified remainder that is retained for the AI handoff.
+    verified_text = (
+        tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings-verified.txt"
+    ).read_text(encoding="utf-8")
+    assert "VERIFIED SECRET FINDINGS" in verified_text
+    assert "verified    : 0" in verified_text
+    assert "unverified  : 1" in verified_text
+    assert "No verified secret findings" in verified_text
+    assert "AWS" not in verified_text
+    # Machine plane still carries the complete record.
+    assert "AWS" in (
+        tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings.json"
+    ).read_text(encoding="utf-8")
+
+
+def test_verified_text_report_lists_only_verified_records(monkeypatch, tmp_path):
+    database, digest = make_workspace(tmp_path)
+    verified = result_json()
+    unverified = result_json()
+    unverified["Verified"] = False
+    unverified["DetectorName"] = "UNVERIFIED_DETECTOR"
+    install_fakes(
+        monkeypatch,
+        (json.dumps(verified) + "\n" + json.dumps(unverified) + "\n").encode(),
+    )
+    scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
+
+    scanner.run()
+
+    verified_text = (
+        tmp_path / "results/org.example.app/7" / digest / "trufflehog/findings-verified.txt"
+    ).read_text(encoding="utf-8")
+    assert "verified    : 1" in verified_text
+    assert "unverified  : 1" in verified_text
+    assert "AWS" in verified_text
+    assert "UNVERIFIED_DETECTOR" not in verified_text
+    assert RAW_SECRET in verified_text
 
 
 def test_scanner_preserves_repeated_original_objects_without_deduplication(monkeypatch, tmp_path):

@@ -58,10 +58,6 @@ class ReportGenerator:
             raise ReportingError(f"Findings at {path} must contain a JSON array.")
         if not all(isinstance(item, dict) for item in data):
             raise ReportingError(f"Findings at {path} must contain only JSON objects.")
-        if any(item.get("Verified") is not True for item in data):
-            raise ReportingError(
-                f"Findings at {path} contain records that are not explicitly verified."
-            )
         return data
 
     @staticmethod
@@ -124,6 +120,12 @@ class ReportGenerator:
             f"<h2>Static analysis candidates ({len(findings)})</h2>",
             "<p class='muted'>Credential verification was enabled; TruffleHog selected verified findings.</p>",
         ]
+        unverified_count = int(report.get("analysis", {}).get("unverified_finding_count") or 0)
+        if unverified_count:
+            parts.append(
+                f"<p class='muted'>{unverified_count} unverified TruffleHog finding(s) are retained for the "
+                "AI handoff in trufflehog/findings-unverified.json and are not listed as verified results.</p>"
+            )
         if findings:
             parts.extend(
                 [
@@ -202,6 +204,10 @@ class ReportGenerator:
                 if status.get("scan_status") == "success"
                 else []
             )
+            # Human report shows verified findings only; the complete set
+            # (verified + unverified) stays in the trufflehog/ handoff files.
+            unverified_count = sum(1 for item in findings if item.get("Verified") is not True)
+            findings = [item for item in findings if item.get("Verified") is True]
             artifact = {
                 "package_id": package_id,
                 "app_name": row.get("app_name", ""),
@@ -222,7 +228,14 @@ class ReportGenerator:
                 "schema_version": 1,
                 "artifact": artifact,
                 "processing": processing,
-                "analysis": {"verification": "enabled", "finding_count": len(findings)},
+                "analysis": {
+                    "verification": "enabled",
+                    "finding_count": len(findings),
+                    "unverified_finding_count": unverified_count,
+                    "verified_text_summary": str(
+                        findings_path.with_name("findings-verified.txt")
+                    ),
+                },
                 "findings": findings,
             }
             output_dir = self.reports_root / package_id / version_code / digest

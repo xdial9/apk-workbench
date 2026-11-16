@@ -1,4 +1,8 @@
-"""Sequential local TruffleHog scanning with verified-result selection."""
+"""Sequential local TruffleHog scanning - hand AI EVERYTHING.
+
+One pass, --results=all, split verified + unverified. Never drop unverified.
+AI is the final tool, it decides what matters.
+"""
 from __future__ import annotations
 
 import csv
@@ -34,7 +38,10 @@ class AnalysisSummary:
 
 
 class TruffleHogScanner:
-    """Scan completed decompilations and retain only verified findings."""
+    """Scan completed decompilations and retain EVERYTHING: verified + unverified.
+
+No dropping. Unverified is signal for AI, not noise.
+"""
 
     REQUIRED_HELP_FLAGS = (
         "--results",
@@ -128,6 +135,50 @@ class TruffleHogScanner:
     def _finding_fingerprint(item: dict[str, Any]) -> str:
         canonical = json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(canonical).hexdigest()
+
+    @classmethod
+    def _verified_text_report(
+        cls,
+        package_id: str,
+        version_code: str,
+        digest: str,
+        verified: list[dict[str, Any]],
+        unverified_count: int,
+    ) -> str:
+        """Human-facing, verified-only plain-text summary.
+
+        The machine plane (findings.json + the two split files) keeps everything
+        for the AI handoff; this file is the short read a person opens first.
+        """
+        lines = [
+            "APK WORKBENCH — VERIFIED SECRET FINDINGS",
+            "========================================",
+            f"package_id  : {package_id}",
+            f"version_code: {version_code}",
+            f"apk_sha256  : {digest}",
+            f"verified    : {len(verified)}",
+            f"unverified  : {unverified_count} (retained for the AI handoff; not listed here)",
+            "",
+        ]
+        if not verified:
+            lines.append("No verified secret findings for this artifact.")
+            lines.append("")
+            return "\n".join(lines)
+        for index, item in enumerate(verified, start=1):
+            file_path, line_number = cls._filesystem_metadata(item)
+            lines.extend([
+                (
+                    f"[{index}] {item.get('DetectorName') or 'TruffleHog finding'}"
+                    f" (detector type {item.get('DetectorType', 'unknown')})"
+                ),
+                f"    decoder     : {item.get('DecoderName') or 'unknown'}",
+                f"    file        : {file_path or 'unknown'}",
+                f"    line        : {line_number if line_number is not None else 'unknown'}",
+                "    verification: VERIFIED",
+                f"    raw         : {item.get('Raw') or item.get('RawV2') or ''}",
+                "",
+            ])
+        return "\n".join(lines)
 
     def _atomic_json(self, path: Path, value: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -248,7 +299,7 @@ class TruffleHogScanner:
             "filesystem",
             "--concurrency=1",
             "--no-update",
-            "--results=verified",
+            "--results=all",
             "--json",
             "--fail-on-scan-errors",
             *(str(path) for path in directories),
@@ -280,6 +331,7 @@ class TruffleHogScanner:
             last_progress = started
             progress_line = bytearray()
             live_verified_count = 0
+            live_total_count = 0
             previous_sigterm = None
 
             def handle_sigterm(signum, _frame):
@@ -307,7 +359,7 @@ class TruffleHogScanner:
                                 self._emit_progress(
                                     f"[TruffleHog] scanning {package_id} — "
                                     f"{int(now - started)}s elapsed, {output_size:,} JSON bytes, "
-                                    f"{live_verified_count} verified finding(s)"
+                                    f"{live_total_count} total, {live_verified_count} verified"
                                 )
                                 last_progress = now
                             continue
@@ -335,8 +387,10 @@ class TruffleHogScanner:
                                         live_item = json.loads(raw_line.decode("utf-8"))
                                     except (UnicodeDecodeError, json.JSONDecodeError):
                                         live_item = None
-                                    if isinstance(live_item, dict) and live_item.get("Verified") is True:
-                                        live_verified_count += 1
+                                    if isinstance(live_item, dict):
+                                        live_total_count += 1
+                                        if live_item.get("Verified") is True:
+                                            live_verified_count += 1
                                         detector = live_item.get("DetectorName") or "verified finding"
                                         self._emit_progress(
                                             f"[TruffleHog] VERIFIED finding #{live_verified_count}: {detector}"
@@ -346,7 +400,7 @@ class TruffleHogScanner:
                                     self._emit_progress(
                                         f"[TruffleHog] scanning {package_id} — "
                                         f"{int(now - started)}s elapsed, {output_size:,} JSON bytes, "
-                                        f"{live_verified_count} verified finding(s)"
+                                        f"{live_total_count} total, {live_verified_count} verified"
                                     )
                                     last_progress = now
                         else:
@@ -400,11 +454,11 @@ class TruffleHogScanner:
                 f"TruffleHog exited with status {return_code}; results were not published."
                 f"{detail}"
             )
-        if any(item.get("Verified") is not True for item in findings):
-            raise AnalysisError(
-                "TruffleHog emitted findings that are not explicitly verified; "
-                "results were not published."
-            )
+        # CAP-FREE / VERIFIED-ONLY REVERSAL: Never drop unverified. Split, don't filter.
+        # total_seen must equal verified + unverified. Empty means empty.
+        verified_findings = [item for item in findings if item.get("Verified") is True]
+        unverified_findings = [item for item in findings if item.get("Verified") is not True]
+        assert len(verified_findings) + len(unverified_findings) == len(findings), "split must preserve total"
 
         output_dir = self.results_root / package_id / version_code / digest / "trufflehog"
         output_components = (
@@ -422,22 +476,46 @@ class TruffleHogScanner:
             raise AnalysisError(
                 f"TruffleHog output path escapes or aliases the results workspace: {output_dir}"
             ) from exc
+        # findings.json = ALL findings (backwards compat: callers that read findings.json now get everything)
+        # findings-verified.json = verified only, findings-unverified.json = unverified only
+        # scan.json = counts, invariant total_seen == verified + unverified
         self._atomic_json(output_dir / "findings.json", findings)
-        self._atomic_json(output_dir / "findings-verified.json", findings)
+        self._atomic_json(output_dir / "findings-verified.json", verified_findings)
+        self._atomic_json(output_dir / "findings-unverified.json", unverified_findings)
+        self._atomic_json(output_dir / "scan.json", {
+            "total_seen": len(findings),
+            "verified": len(verified_findings),
+            "unverified": len(unverified_findings),
+            "results_flag": "all",
+            "package_id": package_id,
+            "version_code": version_code,
+            "sha256": digest,
+        })
         self._atomic_bytes(output_dir / "stdout.jsonl", raw_stdout)
         self._atomic_bytes(output_dir / "stderr.log", raw_stderr)
+        # Human-facing verified-only summary. The machine files above keep
+        # verified + unverified for the AI handoff; this .txt is the short read.
+        self._atomic_bytes(
+            output_dir / "findings-verified.txt",
+            self._verified_text_report(
+                package_id, version_code, digest, verified_findings, len(unverified_findings)
+            ).encode("utf-8"),
+        )
         if self.progress is not None:
             self._emit_progress(
-                f"[TruffleHog] COMPLETE: {package_id}; {len(findings)} verified finding(s); "
+                f"[TruffleHog] COMPLETE: {package_id}; {len(findings)} total "
+                f"({len(verified_findings)} verified, {len(unverified_findings)} unverified); "
                 f"{output_size:,} JSON bytes; exit code {return_code}"
             )
         log_text = (
             f"COMMAND: {json.dumps(command)}\n"
             f"RETURN CODE: {return_code}\n"
             f"FINDINGS EMITTED: {len(findings)}\n"
-            f"VERIFIED FINDINGS: {len(findings)}\n"
-            "CREDENTIAL VERIFICATION: ENABLED\n"
-            "RESULT SELECTION: --results=verified\n"
+            f"VERIFIED FINDINGS: {len(verified_findings)}\n"
+            f"UNVERIFIED FINDINGS: {len(unverified_findings)}\n"
+            f"TOTAL_SEEN: {len(findings)}\n"
+            "CREDENTIAL VERIFICATION: ENABLED, RESULTS NOT FILTERED\n"
+            "RESULT SELECTION: --results=all (verified + unverified)\n"
             "STDOUT EVIDENCE: stdout.jsonl\n"
             "STDERR EVIDENCE: stderr.log\n"
         )
@@ -447,11 +525,14 @@ class TruffleHogScanner:
     def _has_usable_scan_output(
         self, package_id: str, version_code: str, digest: str
     ) -> bool:
-        """Reuse a successful scan only while its complete JSON result file remains valid."""
+        """Reuse a successful scan only while its complete JSON result files remain valid."""
         output_dir = (
             self.results_root / package_id / version_code / digest / "trufflehog"
         )
         findings_path = output_dir / "findings.json"
+        scan_path = output_dir / "scan.json"
+        verified_path = output_dir / "findings-verified.json"
+        unverified_path = output_dir / "findings-unverified.json"
         components = (
             self.results_root / package_id,
             self.results_root / package_id / version_code,
@@ -466,11 +547,34 @@ class TruffleHogScanner:
             if not findings_path.is_file():
                 return False
             findings = json.loads(findings_path.read_text(encoding="utf-8"))
+            if not isinstance(findings, list):
+                return False
+            # New format: scan.json must exist and invariant must hold
+            if scan_path.is_file():
+                scan = json.loads(scan_path.read_text(encoding="utf-8"))
+                if not isinstance(scan, dict):
+                    return False
+                total = scan.get("total_seen")
+                verified_n = scan.get("verified")
+                unverified_n = scan.get("unverified")
+                if total != len(findings):
+                    return False
+                if verified_n is not None and unverified_n is not None:
+                    if verified_n + unverified_n != total:
+                        return False
+                # If split files exist, they must also match counts
+                if verified_path.is_file() and unverified_path.is_file():
+                    v = json.loads(verified_path.read_text(encoding="utf-8"))
+                    u = json.loads(unverified_path.read_text(encoding="utf-8"))
+                    if not isinstance(v, list) or not isinstance(u, list):
+                        return False
+                    if len(v) + len(u) != len(findings):
+                        return False
+            # Old format (verified-only, pre-split) is still usable if all verified,
+            # but new scans must have scan.json. Accept old files as usable to avoid rescanning.
+            return all(isinstance(item, dict) for item in findings)
         except (OSError, ValueError, json.JSONDecodeError):
             return False
-        return isinstance(findings, list) and all(
-            isinstance(item, dict) and item.get("Verified") is True for item in findings
-        )
 
     def _update_status(self, row: dict[str, str], status: str, error: str = "") -> None:
         self.database.update_processing_status(
@@ -514,7 +618,9 @@ class TruffleHogScanner:
             if not isinstance(loaded, list):
                 continue
             for finding in loaded:
-                if isinstance(finding, dict) and finding.get("Verified") is True:
+                if isinstance(finding, dict):
+                    # Hand AI everything: verified + unverified in aggregate CSV
+                    is_verified = finding.get("Verified") is True
                     rows.append(
                         {
                             "package_id": package_id,
@@ -525,7 +631,7 @@ class TruffleHogScanner:
                             "decoder_name": finding.get("DecoderName", ""),
                             "file_path": self._filesystem_metadata(finding)[0],
                             "line": self._filesystem_metadata(finding)[1],
-                            "verification": "verified",
+                            "verification": "verified" if is_verified else "unverified",
                             "finding_json": json.dumps(finding, ensure_ascii=False, separators=(",", ":")),
                         }
                     )
@@ -640,7 +746,7 @@ class TruffleHogScanner:
             directories = [base_dir / "apktool"]
             self._update_status(row, "running")
             if self.progress is not None:
-                self._emit_progress(f"[TruffleHog] starting {package_id} v{version_code} — verified-only selection")
+                self._emit_progress(f"[TruffleHog] starting {package_id} v{version_code} — all results (verified + unverified)")
             try:
                 findings = self._run_one(package_id, version_code, digest, directories)
             except AnalysisError as exc:

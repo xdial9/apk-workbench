@@ -177,3 +177,31 @@ def test_report_generator_rejects_symlinked_package_output_parent(tmp_path):
 
     with pytest.raises(ReportingError, match="Report output path escapes or aliases"):
         ReportGenerator(database, workspace=tmp_path).run()
+
+
+def test_report_plane_lists_verified_only_and_counts_unverified(tmp_path):
+    """An unverified TruffleHog record must not abort the human report.
+
+    The complete set stays in the trufflehog/ handoff files, so the report
+    plane shows verified findings and reports the retained unverified count.
+    """
+    database = setup_workspace(tmp_path)
+    findings_path = (
+        tmp_path / "results/org.example.app/12" / ("a" * 64) / "trufflehog/findings.json"
+    )
+    verified = json.loads(findings_path.read_text(encoding="utf-8"))[0]
+    unverified = {**verified, "Verified": False, "DetectorName": "UNVERIFIED_DETECTOR"}
+    findings_path.write_text(json.dumps([verified, unverified]), encoding="utf-8")
+
+    summary = ReportGenerator(database, workspace=tmp_path).run()
+
+    assert summary.total_findings == 1
+    report_dir = tmp_path / "reports/org.example.app/12" / ("a" * 64)
+    parsed = json.loads((report_dir / "report.json").read_text(encoding="utf-8"))
+    assert [item["DetectorName"] for item in parsed["findings"]] == ["<script>alert(1)</script>"]
+    assert parsed["analysis"]["unverified_finding_count"] == 1
+    assert parsed["analysis"]["verified_text_summary"].endswith("findings-verified.txt")
+    report_html = (report_dir / "report.html").read_text(encoding="utf-8")
+    assert "1 unverified TruffleHog finding(s) are retained" in report_html
+    # Not dropped from the machine plane.
+    assert "UNVERIFIED_DETECTOR" in findings_path.read_text(encoding="utf-8")

@@ -65,8 +65,13 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
         "Raw": "ORIGINAL_VALUE_PRESERVED",
         "ExtraData": {"complete": "object"},
     }
+    unverified_finding = {
+        "DetectorName": "UNVERIFIED_DETECTOR",
+        "Verified": False,
+        "Raw": "UNVERIFIED_RETAINED_FOR_AI",
+    }
     (artifact_root / "trufflehog" / "findings.json").write_text(
-        json.dumps([original_finding]), encoding="utf-8"
+        json.dumps([original_finding, unverified_finding]), encoding="utf-8"
     )
     static_result = {
         "schema_version": 1,
@@ -200,4 +205,13 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
     assert "/catalog/products" in html_text
     assert "Lokhttp3/Call; execute ()Lokhttp3/Response;" in html_text
     assert payload["artifacts"][0]["findings"]["trufflehog_verified_original_objects"][0] == original_finding
+    # Unverified records are counted and retained, not reported as verified and
+    # not allowed to abort the run.
+    assert payload["artifacts"][0]["findings"]["trufflehog_unverified_count"] == 1
+    assert payload["summary"]["unverified_trufflehog_findings_retained"] == 1
+    assert payload["stages"]["trufflehog_verified_secret_scan"]["unverified_findings_retained"] == 1
+    assert "results=all" in payload["stages"]["trufflehog_verified_secret_scan"]["selection"]
+    assert "UNVERIFIED_DETECTOR" not in json.dumps(
+        payload["artifacts"][0]["findings"]["trufflehog_verified_original_objects"]
+    )
     assert Path(result["html_path"]).is_file()

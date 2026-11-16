@@ -334,6 +334,7 @@ def generate_final_run_report(
     dex_permission_api_usage: list[dict[str, Any]] = []
     dex_rate_limit_indicators: list[dict[str, Any]] = []
     verified_findings = 0
+    unverified_findings_retained = 0
     static_findings = 0
     api_endpoint_count = 0
     api_route_count = 0
@@ -369,22 +370,28 @@ def generate_final_run_report(
         static_analysis = _read_json(static_path, results_root)
         trufflehog_dir = artifact_root / "trufflehog"
         trufflehog_path = trufflehog_dir / "findings.json"
+        trufflehog_unverified_count = 0
         if status.get("scan_status") == "success":
-            trufflehog_findings = _read_json(trufflehog_path, results_root)
-            if trufflehog_findings is None:
+            all_trufflehog_findings = _read_json(trufflehog_path, results_root)
+            if all_trufflehog_findings is None:
                 raise FinalRunReportError(
                     f"TruffleHog status says success but findings.json is missing for {package_id}."
                 )
+            if not isinstance(all_trufflehog_findings, list) or any(
+                not isinstance(item, dict) for item in all_trufflehog_findings
+            ):
+                raise FinalRunReportError(
+                    f"TruffleHog evidence for {package_id} is malformed."
+                )
+            # Report plane stays verified-only; unverified records are retained
+            # in the trufflehog/ handoff files and counted, never dropped.
+            trufflehog_findings = [
+                item for item in all_trufflehog_findings if item.get("Verified") is True
+            ]
+            trufflehog_unverified_count = len(all_trufflehog_findings) - len(trufflehog_findings)
         else:
             # Never present an older findings file as the result of a failed or unrun scan.
             trufflehog_findings = []
-        if not isinstance(trufflehog_findings, list) or any(
-            not isinstance(item, dict) or item.get("Verified") is not True
-            for item in trufflehog_findings
-        ):
-            raise FinalRunReportError(
-                f"TruffleHog evidence for {package_id} contains non-verified or malformed records."
-            )
 
         if isinstance(static_analysis, dict):
             static_list = static_analysis.get("findings", [])
@@ -470,6 +477,7 @@ def generate_final_run_report(
         if status.get("scan_status") == "failed":
             trufflehog_failed += 1
         verified_findings += len(trufflehog_findings)
+        unverified_findings_retained += trufflehog_unverified_count
 
         verification_bundle = None
         if isinstance(verification, dict):
@@ -510,6 +518,14 @@ def generate_final_run_report(
                 "apktool_log": str(artifact_root / "apktool.log"),
                 "static_analysis_path": str(static_path) if static_analysis is not None else None,
                 "trufflehog_findings_path": str(trufflehog_path) if trufflehog_path.is_file() else None,
+                "trufflehog_verified_text": (
+                    str(trufflehog_dir / "findings-verified.txt")
+                    if (trufflehog_dir / "findings-verified.txt").is_file() else None
+                ),
+                "trufflehog_unverified_findings_path": (
+                    str(trufflehog_dir / "findings-unverified.json")
+                    if (trufflehog_dir / "findings-unverified.json").is_file() else None
+                ),
                 "trufflehog_log": str(trufflehog_dir / "trufflehog.log"),
                 "trufflehog_stdout": str(trufflehog_dir / "stdout.jsonl"),
                 "trufflehog_stderr": str(trufflehog_dir / "stderr.log"),
@@ -523,6 +539,11 @@ def generate_final_run_report(
             "findings": {
                 "static_indicators": static_list,
                 "trufflehog_verified_original_objects": trufflehog_findings,
+                "trufflehog_unverified_count": trufflehog_unverified_count,
+                "trufflehog_verified_text": (
+                    str(trufflehog_dir / "findings-verified.txt")
+                    if (trufflehog_dir / "findings-verified.txt").is_file() else None
+                ),
             },
         })
 
@@ -579,7 +600,13 @@ def generate_final_run_report(
                 "scanned": sum(item["processing"]["trufflehog_status"] == "success" for item in artifacts),
                 "failed": trufflehog_failed,
                 "verified_findings": verified_findings,
-                "selection": "--results=verified",
+                "unverified_findings_retained": unverified_findings_retained,
+                "selection": "--results=all (verified reported; unverified preserved in trufflehog/ for the AI handoff)",
+                "verified_text_reports": [
+                    item["findings"]["trufflehog_verified_text"]
+                    for item in artifacts
+                    if item["findings"].get("trufflehog_verified_text")
+                ],
             },
             "report_generation": {"status": "complete"},
             "reconciliation": reconciliation,
@@ -609,6 +636,7 @@ def generate_final_run_report(
         "summary": {
             "artifacts": len(artifacts),
             "verified_trufflehog_findings": verified_findings,
+            "unverified_trufflehog_findings_retained": unverified_findings_retained,
             "static_analysis_indicators": static_findings,
             "api_endpoint_candidates": api_endpoint_count,
             "api_route_candidates": api_route_count,
@@ -630,7 +658,7 @@ def generate_final_run_report(
         },
         "artifacts": artifacts,
         "interpretation": {
-            "trufflehog": "Complete original TruffleHog finding objects are retained in findings.trufflehog_verified_original_objects; only explicitly Verified=true records are accepted.",
+            "trufflehog": "Complete original TruffleHog finding objects are retained in findings.trufflehog_verified_original_objects; only explicitly Verified=true records are reported. Unverified findings are counted and kept in trufflehog/findings-unverified.json for the AI handoff. findings-verified.txt is the human-facing verified-only summary.",
             "static_analysis": "APK surface indicators are static leads with source evidence and are not equivalent to runtime-verified vulnerabilities.",
             "api_catalog": "All discovered endpoint and route candidates are included with occurrence locations. Domain strings can include non-API hostnames and require review.",
             "rate_limits": "A missing client-side rate-limit indicator does not mean the server API is unthrottled. Server-side quotas require provider documentation or authorized runtime observation.",
