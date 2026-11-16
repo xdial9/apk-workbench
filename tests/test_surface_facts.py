@@ -5,6 +5,8 @@ from pathlib import Path
 
 from apkworkbench.analysis import apk_surface
 from apkworkbench.analysis.surface import deductions as ded
+import pytest
+
 from apkworkbench.analysis.surface.facts import FactStore, fingerprint, package_root_histogram
 
 
@@ -149,3 +151,13 @@ def test_analyzer_emits_facts_deductions_and_histogram(tmp_path):
             assert fp in fingerprints, (item["id"], fp)
     histogram = result["sdk_histogram"]
     assert histogram["com/vendor/sdk"]["owner"] == "third_party_candidate"
+
+def test_fact_store_refuses_to_overwrite_its_own_keys():
+    # `extra` is additive. Passing "value"/"kind"/"fingerprint"/"count"/
+    # "evidence" used to silently replace the fact's own field.
+    store = FactStore()
+    for key in ("kind", "value", "fingerprint", "count", "evidence"):
+        with pytest.raises(ValueError):
+            store.add("endpoint", "https://example.test", extra={key: "clobber"})
+    store.add("endpoint", "https://example.test", extra={"host": "example.test"})
+    assert store.records()[0]["host"] == "example.test"

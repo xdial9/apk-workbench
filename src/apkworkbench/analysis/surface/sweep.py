@@ -67,6 +67,11 @@ RETROFIT_ANNOTATION_RE = re.compile(
 )
 RETROFIT_WINDOW_LINES = 12
 
+# Resource ids in smali: `const v0, 0x7f0b0012`. The top byte is the package
+# id, which is filtered against the packages actually present in
+# resources.arsc, so an arbitrary 32-bit constant is not mistaken for an id.
+RESOURCE_ID_RE = re.compile(r"\b0x([0-9a-fA-F]{2})([0-9a-fA-F]{6})\b")
+
 PRIVATE_V4_PREFIXES = ("10.", "127.", "169.254.", "192.168.")
 PRIVATE_V4_RANGES = tuple(
     f"172.{octet}." for octet in range(16, 32)
@@ -237,6 +242,10 @@ class SweepState:
         self.rate_limit_indicators: list[dict] = []
         self.decoded_strings: list[dict] = []
         self.decoded_seen: set[str] = set()
+        # P2b: resource-id literals used by the bytecode, resolved later
+        # against the parsed resources.arsc table.
+        self.resource_package_ids: set[int] = {0x7F, 0x7E}
+        self.resource_id_literals: list[dict] = []
         self.findings: list[dict] = []
         # Manifest package (set by apk_surface before sweeping) so DOMAIN_RE
         # can filter the app's own package name (com.example.smoke is not a domain).
@@ -515,6 +524,15 @@ class SweepState:
                         f"Encoded literal decoded; reveals: {', '.join(h.group(0) for h in hits)}",
                         relative, line_number, raw, 0.7,
                     ))
+            if is_smali and "0x" in line:
+                for id_match in RESOURCE_ID_RE.finditer(line):
+                    if int(id_match.group(1), 16) not in self.resource_package_ids:
+                        continue
+                    self.resource_id_literals.append({
+                        "id": int(id_match.group(0), 16),
+                        "path": relative,
+                        "line": line_number,
+                    })
             if is_smali and "invoke-" in line:
                 invoke = smali_invoke_re.search(line)
                 if invoke and api_invoke_owner_re.match(invoke.group(1)):

@@ -53,7 +53,10 @@ from apkworkbench.analysis.surface.identity import (
     identity_findings,
     parse_apk_identity,
 )
-from apkworkbench.analysis.surface.resources import parse_resource_table
+from apkworkbench.analysis.surface.resources import (
+    index_value_files,
+    parse_resource_table,
+)
 
 ANALYZER_ID = "apk-surface"
 ANALYZER_VERSION = "0.3.0"
@@ -283,6 +286,7 @@ def analyze_apk_surface(
         "native_libraries": "not_found",
         "resource_inventory": "not_scanned",
         "resource_model": "not_found",
+        "resource_links": "not_applicable",
         "apk_identity": "not_found",
         "runtime_behavior": "not_performed",
         "dynamic_network_testing": "not_performed",
@@ -408,8 +412,12 @@ def analyze_apk_surface(
 
     # ---- P2a: resource table (resources.arsc -> id/type/name/value) -------
     resource_model: dict[str, Any] = {"status": "not_found", "entry_count": 0}
+    resource_index: dict[int, dict[str, Any]] = {}
     if apk_path is not None:
-        resource_model = _parse_resources_to_disk(apk_path, output_dir)
+        value_files = index_value_files(root, files)
+        resource_model, resource_index = _parse_resources_to_disk(
+            apk_path, output_dir, value_files
+        )
         coverage["resource_model"] = {
             "success": "success",
             "partial": "partial",
@@ -455,6 +463,14 @@ def analyze_apk_surface(
         pkg = manifest_facts.get("package")
         if isinstance(pkg, str) and pkg:
             sweep.manifest_package = pkg
+    # Resource ids are only collected for packages the APK actually declares.
+    if resource_model.get("packages"):
+        parsed_ids = {
+            int(str(item.get("id")), 16) for item in resource_model["packages"]
+            if item.get("id")
+        }
+        if parsed_ids:
+            sweep.resource_package_ids = parsed_ids
     for path in files:
         relative = path.relative_to(root).as_posix()
         if path.suffix.lower() not in TEXT_SUFFIXES:
@@ -631,6 +647,35 @@ def analyze_apk_surface(
                 "uses_native_library", entry["name"], evidence={"path": manifest_relative},
                 extra={"required": entry.get("required")},
             )
+    # ---- P2b: resolve the resource ids the bytecode actually uses ---------
+    resource_ids_resolved = 0
+    resource_ids_unresolved = 0
+    for literal in sweep.resource_id_literals:
+        value = f"{literal['id']:#010x}"
+        evidence = {"path": literal["path"], "line": literal["line"]}
+        entry = resource_index.get(literal["id"])
+        if entry is None:
+            resource_ids_unresolved += 1
+            fact_store.add(
+                "resource_id_unresolved", value, evidence=evidence,
+                extra={"reason": "not_in_resource_table"},
+            )
+            continue
+        resource_ids_resolved += 1
+        fact_store.add(
+            "resource_id_used", value, evidence=evidence,
+            extra={
+                "type": entry.get("type"),
+                "name": entry.get("name"),
+                "resource_value": entry.get("value"),
+                "config": entry.get("config"),
+                "file": entry.get("file"),
+            },
+        )
+    if sweep.resource_id_literals:
+        coverage["resource_links"] = (
+            "success" if resource_ids_unresolved == 0 else "partial"
+        )
     for record in api_endpoints.values():
         # CAP-FREE + EVIDENCE-COMPLETE: was evidence[0] only (count=1 even when
         # occurrences=9). Add once per evidence so count == occurrences and
@@ -818,6 +863,9 @@ def analyze_apk_surface(
             "api_client_library_evidence_count": sum(len(items) for items in api_clients.values()),
             "rate_limit_indicator_count": len(rate_limit_indicators),
             "dependency_fingerprint_count": len(dependencies),
+            "resource_id_references": len(sweep.resource_id_literals),
+            "resource_ids_resolved": resource_ids_resolved,
+            "resource_ids_unresolved": resource_ids_unresolved,
             **native_analysis.metrics,
         },
     }
@@ -869,8 +917,10 @@ def _retarget_native_evidence(
 
 
 def _parse_resources_to_disk(
-    apk_path: str | Path, output_dir: str | Path | None
-) -> dict[str, Any]:
+    apk_path: str | Path,
+    output_dir: str | Path | None,
+    value_files: dict[tuple[str, str], str] | None = None,
+) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
     """Stream the resource table to resources.jsonl, or count it if no sink.
 
     The table can be hundreds of thousands of records, so it is written while
@@ -896,7 +946,10 @@ def _parse_resources_to_disk(
                 # No output dir: the table is still parsed for its counts.
                 return None
 
-        summary = parse_resource_table(apk_path, sink=sink)
+        id_index: dict[int, dict[str, Any]] = {}
+        summary = parse_resource_table(
+            apk_path, sink=sink, value_files=value_files, id_index=id_index
+        )
         if handle is not None:
             handle.flush()
             os.fsync(handle.fileno())
@@ -905,7 +958,7 @@ def _parse_resources_to_disk(
             os.chmod(temporary, 0o600)
             os.replace(temporary, target)
             summary["resources_jsonl"] = "resources.jsonl"
-        return summary
+        return summary, id_index
     except OSError as exc:
         return {
             "status": "failed",
@@ -914,7 +967,7 @@ def _parse_resources_to_disk(
                 "code": "resource_table_write_failed",
                 "message": f"{type(exc).__name__}: {exc}",
             }],
-        }
+        }, {}
     finally:
         if handle is not None:
             handle.close()

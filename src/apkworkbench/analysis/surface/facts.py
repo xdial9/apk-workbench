@@ -15,6 +15,12 @@ from typing import Any
 REPRESENTATIVE_EVIDENCE_CAP = None  # deprecated, do not use to truncate
 
 
+# Keys owned by the fact record itself. `extra` may add fields, never replace
+# these: a caller that passes `extra={"value": ...}` used to overwrite the
+# fact's own value and silently corrupt the plane (it happened twice).
+RESERVED_FACT_KEYS = frozenset({"kind", "value", "fingerprint", "count", "evidence"})
+
+
 def fingerprint(value: Any) -> str:
     normalized = str(value).strip().lower()
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
@@ -33,6 +39,12 @@ class FactStore:
         evidence: dict[str, Any] | None = None,
         extra: dict[str, Any] | None = None,
     ) -> str:
+        if extra:
+            collisions = RESERVED_FACT_KEYS.intersection(extra)
+            if collisions:
+                raise ValueError(
+                    f"extra may not overwrite fact keys: {sorted(collisions)}"
+                )
         fp = fingerprint(value)
         key = (kind, fp)
         record = self._by_key.get(key)

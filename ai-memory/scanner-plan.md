@@ -1,7 +1,7 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
-Status: **P0 DONE, P1 DONE, P2a DONE, P2b NEXT.** Verified 2026-11-16,
-308 tests green, tree clean, branch pushed.
+Status: **P0 DONE, P1 DONE, P2a DONE, P2b DONE, P2c NEXT.** Verified
+2026-11-16, 314 tests green, tree clean, branch pushed.
 This file is the resume point for the scanner track. Read it after
 `ai-memory/INDEX.md` §STATE and before touching `analysis/`.
 
@@ -37,7 +37,8 @@ Everything below is the fix ladder. P0-P1 are done and verified.
 | P0 | Truth in the data plane: per-file ledger, honest coverage, shard not drop | **DONE** | `a88eac2`, `131fd69` |
 | P1 | Identity/trust: signing schemes, certificates, ABIs, uses-library | **DONE** | `50bb2d0`, `ec9419d` |
 | P2a | Resource table: `resources.arsc` -> id/type/name/value -> `resources.jsonl` | **DONE** | (this commit) |
-| P2b | Resource links: smali id cross-ref, `file_paths.xml`, layouts, decoded-XML file attribution | **NEXT** | — |
+| P2b | Resource links: smali id cross-ref + decoded-XML file attribution | **DONE** | (this commit) |
+| P2c | FileProvider `file_paths.xml` roots + layout/view inventory | **NEXT** | — |
 | P3 | Code model: class/method/field inventory, call graph v2, reflection sites | queued | — |
 | P4 | Link graph: typed edges with two cites each + entry_points | queued | — |
 | P5 | Detection breadth: 11 deduction templates, rule catalog 19 -> ~60 | queued | — |
@@ -111,17 +112,35 @@ Everything below is the fix ladder. P0-P1 are done and verified.
   `counted_not_parsed` is no longer a lie.
 - No records are emitted without an APK: `resource_model = not_found`.
 
-### P2b — NEXT (resource links)
-- collect `const`/`sget` resource-id literals during the smali sweep
-  (`0x7f......`) and resolve them against `resources.jsonl`; unresolved ids
-  become facts with reason `resource_id_unresolved`;
+### P2b — DONE (resource links)
+- `sweep.py` collects resource-id literals from smali
+  (`0x<package><entry>`, package byte filtered against the packages actually
+  present in the table, so an arbitrary 32-bit constant is not mistaken for
+  an id).
+- resolution against the parsed table produces:
+  * `resource_id_used` — value `0x7f010000`, extra `type`, `name`,
+    `resource_value`, `config`, `file`, evidence = every `path:line` that
+    references it (count == occurrences);
+  * `resource_id_unresolved` — reason `not_in_resource_table`.
+- new coverage key `resource_links`: `success` (all resolved) /
+  `partial` (some unresolved) / `not_applicable` (no id literals).
+- new metrics: `resource_id_references`, `resource_ids_resolved`,
+  `resource_ids_unresolved`.
+- `resources.py` gained `index_value_files()`: scans decoded
+  `res/values*/**/*.xml` and maps `(type, name) -> file`, plain `res/values/`
+  winning over qualified config dirs. Every `resources.jsonl` record now
+  carries `file` (null when the decoded tree does not declare it).
+- **FactStore guard**: `extra` may no longer overwrite `kind`, `value`,
+  `fingerprint`, `count` or `evidence`. Passing `extra={"value": ...}`
+  silently replaced the fact's own value (it happened twice); it now raises.
+
+### P2c — NEXT (provider + layout surface)
 - parse `res/xml/file_paths.xml` -> FileProvider roots as facts
-  (`file_provider_path`) with the provider component;
-- layout inventory: `res/layout*/*.xml` -> view ids / custom views;
-- attach a source file to each resource record by cross-checking apktool's
-  decoded `res/values*/*.xml` (ARSC has no file attribution).
-Exit: every resource id referenced from smali resolves to a name and a file,
-or is recorded unresolved with a reason.
+  (`file_provider_path`) joined to the provider component from the manifest;
+- layout inventory: `res/layout*/*.xml` -> view ids / custom views, so a
+  layout reference resolves to the views it inflates.
+Exit: every `<provider>` with a `file_paths` meta-data resolves to its roots,
+and every layout reference resolves to a file and its view set.
 
 ### P3 — Code model
 Class/method/field inventory with DEX index + smali path (name, access,

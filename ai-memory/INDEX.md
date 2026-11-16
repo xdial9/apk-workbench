@@ -77,9 +77,15 @@ surface.txt/plan.txt checkboxes if applicable.
   resources.jsonl (id/package/type/name/config/value/value_type/reference);
   summary in inventory.resource_model; new coverage key resource_model;
   resource_inventory now says "parsed" when the table parsed.
-  STATE: 308 tests green, tree clean, pushed. NEXT: P2b (resolve 0x7f...... id
-  literals from smali against resources.jsonl, file_paths.xml, layouts,
-  decoded-XML file attribution).
+  P2b DONE: smali resource-id literals (0x7f......) resolve against the
+  parsed table into resource_id_used facts (type/name/resource_value/file +
+  every path:line cite) or resource_id_unresolved (reason
+  not_in_resource_table); new coverage key resource_links; resources.jsonl
+  records now carry their decoded definition file via index_value_files().
+  FactStore now raises if `extra` tries to overwrite kind/value/fingerprint/
+  count/evidence (that silent overwrite corrupted facts twice).
+  STATE: 314 tests green, tree clean, pushed. NEXT: P2c (file_paths.xml
+  FileProvider roots + layout/view inventory).
 - VERIFIED SNAPSHOT 2026-11-16 (git + pytest, not memory): working branch
   feat/native-elf-reader; tests 271 green; native N1-N13 all committed
   (N13 asset/container-embedded .so = f1b921d). Before this snapshot those

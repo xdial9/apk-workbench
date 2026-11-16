@@ -20,6 +20,7 @@ Laws obeyed:
 """
 from __future__ import annotations
 
+import re
 import struct
 import zipfile
 from collections.abc import Callable
@@ -68,9 +69,50 @@ FRACTION_UNITS = ("%", "%p")
 
 NO_ENTRY = 0xFFFFFFFF
 
+# `res/values*/*.xml` element tag -> ARSC type name (only where they differ).
+VALUE_TAG_ALIASES = {"string-array": "array", "integer-array": "array"}
+VALUE_ENTRY_RE = re.compile(r'<([a-zA-Z][a-zA-Z0-9_-]*)\b[^>]*?\bname="([^"]+)"')
+VALUE_TYPE_ATTR_RE = re.compile(r'\btype="([^"]+)"')
+
 
 class ResourceTableError(ValueError):
     """Raised when the table structure is unreadable."""
+
+
+def index_value_files(root: Path, files: list[Path]) -> dict[tuple[str, str], str]:
+    """Map (type, name) -> decoded `res/values*/...xml` that declares it.
+
+    ARSC carries no file attribution, so the definition file is recovered from
+    the decoded tree. Plain `res/values/` wins over a qualified config dir, and
+    the first file in sorted order wins within a class.
+    """
+    plain: dict[tuple[str, str], str] = {}
+    other: dict[tuple[str, str], str] = {}
+    for path in files:
+        try:
+            relative = path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if not relative.startswith("res/values") or not relative.endswith(".xml"):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        target = plain if relative.startswith("res/values/") else other
+        for match in VALUE_ENTRY_RE.finditer(text):
+            tag = match.group(1)
+            name = match.group(2)
+            if tag == "item":
+                type_match = VALUE_TYPE_ATTR_RE.search(match.group(0))
+                if type_match is None:
+                    continue
+                tag = type_match.group(1)
+            tag = VALUE_TAG_ALIASES.get(tag, tag)
+            target.setdefault((tag, name), relative)
+    merged = dict(other)
+    merged.update(plain)
+    return merged
 
 
 def _u8(buf: bytes, offset: int) -> int:
@@ -205,6 +247,22 @@ def _decode_value(
     return f"{data:#010x}", name
 
 
+def _remember(
+    index: dict[int, dict[str, Any]],
+    record: dict[str, Any],
+    package_id: int,
+    type_id: int,
+    entry_index: int,
+) -> None:
+    """Keep one record per id, preferring the default config."""
+    numeric = (package_id << 24) | (type_id << 16) | entry_index
+    existing = index.get(numeric)
+    if existing is None or (
+        existing.get("config") != "default" and record.get("config") == "default"
+    ):
+        index[numeric] = record
+
+
 def _package_entries(
     buf: bytes,
     start: int,
@@ -214,6 +272,8 @@ def _package_entries(
     type_counts: dict[str, int],
     package_names: dict[int, str],
     global_strings: list[str],
+    value_files: dict[tuple[str, str], str] | None = None,
+    id_index: dict[int, dict[str, Any]] | None = None,
 ) -> int:
     """Walk one package chunk; return the number of value records emitted."""
     header_size = _u16(buf, start + 2)
@@ -236,7 +296,7 @@ def _package_entries(
             emitted += _type_entries(
                 buf, cursor, chunk_header_size, chunk_size, package_id,
                 package_name, type_strings, key_strings, global_strings,
-                sink, diagnostics, type_counts,
+                sink, diagnostics, type_counts, value_files, id_index,
             )
         elif chunk_type not in (
             RES_TABLE_TYPE_SPEC_TYPE, RES_TABLE_LIBRARY_TYPE, RES_STRING_POOL_TYPE,
@@ -262,6 +322,8 @@ def _type_entries(
     sink: Callable[[dict[str, Any]], None] | None,
     diagnostics: list[dict[str, str]],
     type_counts: dict[str, int],
+    value_files: dict[tuple[str, str], str] | None = None,
+    id_index: dict[int, dict[str, Any]] | None = None,
 ) -> int:
     type_id = _u8(buf, start + 8)
     flags = _u8(buf, start + 9)
@@ -329,9 +391,12 @@ def _type_entries(
                 "value": None,
                 "value_type": "complex",
                 "reference": None,
+                "file": (value_files or {}).get((type_name, key_name)),
             }
             if sink is not None:
                 sink(record)
+            if id_index is not None:
+                _remember(id_index, record, package_id, type_id, entry_index)
             continue
         value_size = _u16(buf, value_offset)
         if value_size < 8:
@@ -354,11 +419,14 @@ def _type_entries(
             "reference": f"@{data:#010x}" if value_type in (
                 TYPE_REFERENCE, TYPE_DYNAMIC_REFERENCE
             ) else None,
+            "file": (value_files or {}).get((type_name, key_name)),
         }
         type_counts[type_name] = type_counts.get(type_name, 0) + 1
         emitted += 1
         if sink is not None:
             sink(record)
+        if id_index is not None:
+            _remember(id_index, record, package_id, type_id, entry_index)
     return emitted
 
 
@@ -366,6 +434,8 @@ def parse_resource_table(
     apk_path: str | Path,
     *,
     sink: Callable[[dict[str, Any]], None] | None = None,
+    value_files: dict[tuple[str, str], str] | None = None,
+    id_index: dict[int, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Parse ``resources.arsc`` inside an APK and stream one record per value."""
     summary: dict[str, Any] = {
@@ -419,6 +489,7 @@ def parse_resource_table(
                 total += _package_entries(
                     buf, cursor, chunk_size, sink, summary["diagnostics"],
                     type_counts, package_names, global_strings,
+                    value_files, id_index,
                 )
             cursor += chunk_size
         summary["entry_count"] = total
