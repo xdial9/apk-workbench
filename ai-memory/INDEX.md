@@ -73,6 +73,20 @@ surface.txt/plan.txt checkboxes if applicable.
   ledger_dir parameter is now output_dir (it receives files.jsonl + shards/).
   NEXT scanner step: P1 identity/trust (APK signing certificate facts) unless
   the user reorders.
+- P1 DONE 2026-11-16 (commit 50bb2d0, 301 tests green incl. ec9419d):
+  surface/identity.py parses the APK Signing Block v2/v3/v3.1, the v1 PKCS#7
+  certificate in META-INF/*.RSA|DSA|EC, ABIs and zip totals, with a stdlib
+  DER/X.509 reader (no cryptography, no apksigner). Certificates are cited by
+  the SHA-256 of their DER bytes. New facts: apk_signing_scheme,
+  apk_signing_certificate, apk_abi, uses_library, uses_native_library. New
+  findings: apk_unsigned, apk_signed_v1_only, apk_debug_certificate. New
+  coverage key apk_identity (success/partial/failed/not_found). New citation
+  scheme "apk:<file>" so an APK fact is never rewritten as apktool/....
+  analyze_apk_surface gained apk_path=; the driver now verifies the APK
+  SHA-256 BEFORE the scan instead of after. Also fixed: insecure_http no
+  longer fires on the Android XML namespace (it fired on every manifest).
+  NEXT scanner step: P2 resource model (resources.arsc -> id/name/value/file)
+  unless the user reorders.
 - VERIFIED SNAPSHOT 2026-11-16 (git + pytest, not memory): working branch
   feat/native-elf-reader; tests 271 green; native N1-N13 all committed
   (N13 asset/container-embedded .so = f1b921d). Before this snapshot those
