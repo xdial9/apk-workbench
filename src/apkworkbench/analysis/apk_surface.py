@@ -284,6 +284,13 @@ def analyze_apk_surface(
         path.relative_to(root).as_posix() for path in files
         if path.suffix.lower() in {".so", ".a"}
     )
+    # Containers that can carry native code: packed .so files and plugin
+    # APK/JAR/ZIP archives in assets or res/raw. content_kind is observed.
+    native_containers = sorted(
+        entry.relative for entry in tree.entries
+        if entry.content_kind == "zip"
+        and entry.suffix.lower() in {".zip", ".apk", ".jar", ".aar", ".so", ".a"}
+    )
     smali_files = [path for path in files if path.suffix.lower() == ".smali"]
     resource_files = [
         path for path in files
@@ -433,6 +440,7 @@ def analyze_apk_surface(
         native_libraries,
         native_method_index=native_method_index,
         library_loads=native_loads,
+        containers=native_containers,
         progress=progress,
     )
     findings.extend(native_analysis.findings)
@@ -477,6 +485,9 @@ def analyze_apk_surface(
         "finding_limit",
         "native_elf_parse_failed", "native_not_elf", "native_string_limit",
         "native_string_fact_limit", "native_finding_limit",
+        "native_container_unreadable", "native_container_member_limit",
+        "native_embedded_byte_limit", "native_embedded_library_limit",
+        "native_container_member_unreadable",
     }
     if symlink_count or any(item["code"] in partial_diagnostics for item in diagnostics):
         for area in ("endpoints_and_domains", "smali_security_indicators", "dependency_fingerprints"):
@@ -642,6 +653,7 @@ def analyze_apk_surface(
             "jni_entries": native_analysis.jni_entries,
             "jni_unmapped": native_analysis.unmapped_entries,
             "native_library_loads": native_analysis.load_sites,
+            "native_embedded_libraries": native_analysis.embedded_citations,
             "dependencies": dependencies,
             "endpoints": [metadata for _value, metadata in sorted(api_endpoints.items())],
             "api_routes": [metadata for _route, metadata in sorted(api_routes.items())],

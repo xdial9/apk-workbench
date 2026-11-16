@@ -18,6 +18,10 @@ Laws obeyed here:
 from __future__ import annotations
 
 import re
+import os
+import shutil
+import tempfile
+import zipfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +51,15 @@ MAX_STRINGS_PER_LIBRARY = 50_000
 MAX_STRING_FACTS_ARTIFACT = 60_000
 MAX_SYMBOL_FACTS_ARTIFACT = 20_000
 MAX_NATIVE_FINDINGS_ARTIFACT = 200
+
+# Container (packed / embedded) native code limits. Every limit is a diagnostic,
+# never a silent skip; extraction streams to disk so a big member cannot OOM.
+EMBEDDED_MEMBER_SUFFIX = ".so"
+MAX_CONTAINERS = 64
+MAX_MEMBERS_PER_CONTAINER = 16
+MAX_EMBEDDED_LIBRARY_BYTES = 128 * 1024 * 1024
+MAX_EMBEDDED_BYTES_TOTAL = 256 * 1024 * 1024
+MAX_EMBEDDED_LIBRARIES = 32
 
 SECRET_KEYWORDS = (
     "secret", "passwd", "password", "api_key", "apikey", "api-key",
@@ -326,6 +339,110 @@ def library_from_load_value(value: str | None) -> str | None:
 # ---- per-library analysis --------------------------------------------------
 
 @dataclass
+class EmbeddedLibrary:
+    """A .so that lives inside a container file, cited through the container."""
+
+    citation: str  # "<container>!<member>" - both parts openable by the analyst
+    container: str
+    member: str
+    size: int
+    path: Path
+
+
+def extract_embedded_libraries(
+    root: Path,
+    containers: list[str],
+    diagnostics: list[dict[str, str]],
+    counters: dict[str, int],
+) -> list[EmbeddedLibrary]:
+    """Stream `*.so` members out of zip/APK containers into ``workdir``.
+
+    The member is copied in 1 MiB chunks to a temp file so parsing never loads
+    the archive or the member into memory. The citation keeps the container path
+    and the member name, so a byte offset inside the member stays resolvable
+    (``assets/plugins.apk!lib/arm64-v8a/libx.so@0x10``).
+    """
+    embedded: list[EmbeddedLibrary] = []
+    total_bytes = 0
+    for container_rel in containers[:MAX_CONTAINERS]:
+        container_path = root / container_rel
+        try:
+            archive = zipfile.ZipFile(container_path)
+        except (zipfile.BadZipFile, OSError) as exc:
+            diagnostics.append({
+                "code": "native_container_unreadable",
+                "message": f"{container_rel}: {exc}",
+            })
+            continue
+        counters["containers_scanned"] += 1
+        with archive:
+            members = [
+                info for info in archive.infolist()
+                if not info.is_dir()
+                and info.filename.lower().endswith(EMBEDDED_MEMBER_SUFFIX)
+            ]
+            counters["members_found"] += len(members)
+            if len(members) > MAX_MEMBERS_PER_CONTAINER:
+                diagnostics.append({
+                    "code": "native_container_member_limit",
+                    "message": (
+                        f"{container_rel}: {len(members)} .so members, scanning "
+                        f"first {MAX_MEMBERS_PER_CONTAINER}"
+                    ),
+                })
+                members = members[:MAX_MEMBERS_PER_CONTAINER]
+            for info in members:
+                if len(embedded) >= MAX_EMBEDDED_LIBRARIES:
+                    diagnostics.append({
+                        "code": "native_embedded_library_limit",
+                        "message": (
+                            f"embedded library cap {MAX_EMBEDDED_LIBRARIES} reached; "
+                            f"{container_rel} and later containers not fully scanned"
+                        ),
+                    })
+                    return embedded
+                if (
+                    info.file_size > MAX_EMBEDDED_LIBRARY_BYTES
+                    or total_bytes + info.file_size > MAX_EMBEDDED_BYTES_TOTAL
+                ):
+                    diagnostics.append({
+                        "code": "native_embedded_byte_limit",
+                        "message": (
+                            f"{container_rel}!{info.filename}: {info.file_size} bytes "
+                            "exceeds the embedded extraction budget"
+                        ),
+                    })
+                    counters["members_skipped"] += 1
+                    continue
+                fd, temporary_name = tempfile.mkstemp(
+                    prefix="apk-surface-native-", suffix=".so"
+                )
+                target = Path(temporary_name)
+                try:
+                    with archive.open(info) as source, os.fdopen(fd, "wb") as sink:
+                        shutil.copyfileobj(source, sink, length=1 << 20)
+                except (zipfile.BadZipFile, OSError, RuntimeError) as exc:
+                    target.unlink(missing_ok=True)
+                    diagnostics.append({
+                        "code": "native_container_member_unreadable",
+                        "message": f"{container_rel}!{info.filename}: {exc}",
+                    })
+                    counters["members_skipped"] += 1
+                    continue
+                size = target.stat().st_size
+                total_bytes += size
+                embedded.append(EmbeddedLibrary(
+                    citation=f"{container_rel}!{info.filename}",
+                    container=container_rel,
+                    member=info.filename,
+                    size=size,
+                    path=target,
+                ))
+                counters["libraries_extracted"] += 1
+    return embedded
+
+
+@dataclass
 class NativeLibraryReport:
     relative: str
     state: str  # parsed | stripped_symbols | parse_failed | not_elf
@@ -389,6 +506,8 @@ class NativeAnalysis:
     strings_by_lib: dict[str, str] = field(default_factory=dict)
     # line N of strings_by_lib[lib] is string_line_offsets[lib][N-1] in the file
     string_line_offsets: dict[str, list[int]] = field(default_factory=dict)
+    embedded_citations: list[str] = field(default_factory=list)
+    container_counters: dict[str, int] = field(default_factory=dict)
 
 
 def analyze_native(
@@ -397,21 +516,59 @@ def analyze_native(
     *,
     native_method_index: NativeMethodIndex,
     library_loads: list[dict[str, Any]],
+    containers: list[str] = (),
     progress: Callable[[str], None] | None = None,
 ) -> NativeAnalysis:
-    """Parse, map and cite every native library. Never raises for a bad .so."""
+    """Parse, map and cite every native library. Never raises for a bad .so.
+
+    ``containers`` are relative paths of zip/APK files that may carry native
+    code (packed .so, plugin APKs in assets). Their ``*.so`` members are
+    streamed to temp files, analysed like loose libraries, cited as
+    ``container!member``, and deleted when the analysis finishes.
+    """
     analysis = NativeAnalysis()
-    if not libraries:
+    counters: dict[str, int] = {
+        "containers_scanned": 0,
+        "members_found": 0,
+        "members_skipped": 0,
+        "libraries_extracted": 0,
+    }
+    embedded = extract_embedded_libraries(root, list(containers), analysis.diagnostics, counters)
+    analysis.embedded_citations = [item.citation for item in embedded]
+    analysis.container_counters = counters
+    try:
+        _analyze_targets(
+            analysis, root, libraries, embedded, native_method_index, library_loads, progress
+        )
+    finally:
+        for item in embedded:
+            item.path.unlink(missing_ok=True)
+    return analysis
+
+
+def _analyze_targets(
+    analysis: NativeAnalysis,
+    root: Path,
+    libraries: list[str],
+    embedded: list[EmbeddedLibrary],
+    native_method_index: NativeMethodIndex,
+    library_loads: list[dict[str, Any]],
+    progress: Callable[[str], None] | None,
+) -> None:
+    targets: list[tuple[str, Path]] = [(relative, root / relative) for relative in libraries]
+    targets.extend((item.citation, item.path) for item in embedded)
+    if not targets:
         analysis.coverage = {
             "native_libraries": "not_found",
             "native_symbols": "not_applicable",
             "native_jni_mapping": "not_applicable",
             "native_strings": "not_applicable",
+            "native_embedded_libraries": _embedded_coverage(analysis),
         }
         analysis.metrics = _empty_metrics()
-        return analysis
+        return
 
-    known_names = {relative.rsplit("/", 1)[-1]: relative for relative in libraries}
+    known_names = {citation.rsplit("/", 1)[-1]: citation for citation, _path in targets}
     loads_by_library: dict[str, list[dict[str, Any]]] = {}
     unresolved_loads: list[dict[str, Any]] = []
     for load in library_loads:
@@ -429,10 +586,9 @@ def analyze_native(
     symbol_fact_count = 0
     finding_count = 0
 
-    for index, relative in enumerate(libraries, start=1):
-        lib_path = root / relative
+    for index, (relative, lib_path) in enumerate(targets, start=1):
         if progress is not None:
-            progress(f"[Surface] native {index}/{len(libraries)}: {relative}")
+            progress(f"[Surface] native {index}/{len(targets)}: {relative}")
         report = NativeLibraryReport(relative=relative, state="parsed")
         parsed = parse_elf(lib_path)
         report.parsed = parsed
@@ -713,7 +869,6 @@ def analyze_native(
         reports, analysis, unresolved_loads, string_fact_count, symbol_fact_count
     )
     analysis.coverage = _build_coverage(reports, analysis)
-    return analysis
 
 
 def _map_jni_symbol(
@@ -939,6 +1094,22 @@ def _emit_native_findings(
     return finding_count
 
 
+def _embedded_coverage(analysis: NativeAnalysis) -> str:
+    """Container-embedded native coverage: success, partial (a gap), or N/A."""
+    gap_codes = {
+        "native_container_unreadable",
+        "native_container_member_limit",
+        "native_embedded_byte_limit",
+        "native_embedded_library_limit",
+        "native_container_member_unreadable",
+    }
+    if any(item["code"] in gap_codes for item in analysis.diagnostics):
+        return "partial"
+    if analysis.embedded_citations:
+        return "success"
+    return "not_applicable"
+
+
 def _empty_metrics() -> dict[str, Any]:
     return {
         "native_library_count": 0,
@@ -960,6 +1131,11 @@ def _empty_metrics() -> dict[str, Any]:
         "native_strings_bytes": 0,
         "native_libraries_with_load_site": 0,
         "native_libraries_without_load_site": 0,
+        "native_embedded_containers_scanned": 0,
+        "native_embedded_members_found": 0,
+        "native_embedded_libraries_found": 0,
+        "native_embedded_libraries_parsed": 0,
+        "native_embedded_libraries_skipped": 0,
     }
 
 
@@ -1008,6 +1184,20 @@ def _build_metrics(
         "native_strings_scanned": sum(1 for report in reports if report.strings and report.strings.bytes_scanned),
         "native_strings_bytes": bytes_scanned,
         "native_strings_matches": strings_matches,
+        "native_embedded_containers_scanned": (analysis.container_counters or {}).get(
+            "containers_scanned", 0
+        ),
+        "native_embedded_members_found": (analysis.container_counters or {}).get(
+            "members_found", 0
+        ),
+        "native_embedded_libraries_found": len(analysis.embedded_citations),
+        "native_embedded_libraries_parsed": sum(
+            1 for report in reports
+            if "!" in report.relative and report.state in {"parsed", "stripped_symbols"}
+        ),
+        "native_embedded_libraries_skipped": (analysis.container_counters or {}).get(
+            "members_skipped", 0
+        ),
         "native_libraries_with_load_site": with_load,
         "native_libraries_without_load_site": without_load,
         "native_load_sites_unresolved": len(unresolved_loads),
@@ -1052,4 +1242,5 @@ def _build_coverage(
         "native_symbols": symbols_status,
         "native_jni_mapping": jni_status,
         "native_strings": strings_status,
+        "native_embedded_libraries": _embedded_coverage(analysis),
     }
