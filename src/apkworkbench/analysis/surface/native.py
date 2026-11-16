@@ -66,6 +66,8 @@ UNMAPPED_REASONS = frozenset({
     "not_elf_archive",
     "obfuscated_path",
     "no_load_site",
+    "no_library_literal",
+    "no_matching_library",
 })
 
 EXEC_SYMBOLS = frozenset({
@@ -252,7 +254,7 @@ class NativeMethodIndex:
         class_match = SMALI_CLASS_RE.search(text)
         if class_match is None:
             return 0
-        java_class = "L" + class_match.group(1)[1:] if not class_match.group(1).startswith("L") else class_match.group(1)
+        java_class = class_match.group(1)  # regex captures the full L...; descriptor
         added = 0
         for match in SMALI_METHOD_RE.finditer(text):
             declaration = match.group(1)
@@ -606,8 +608,7 @@ def analyze_native(
                     "per-library totals remain exact in metrics"
                 ),
             })
-        lowered = [(value, offset) for value, offset in strings.values]
-        for value, offset in lowered:
+        for value, offset in strings.values:
             low = value.lower()
             if any(keyword in low for keyword in SECRET_KEYWORDS):
                 analysis.facts.append({
@@ -985,8 +986,6 @@ def _build_metrics(
             exports_total + imports_total - symbol_fact_count, 0
         ),
     }
-    if jni_total and mapped + unmapped == jni_total:
-        pass
     return metrics
 
 
@@ -1002,11 +1001,16 @@ def _build_coverage(
         if any(report.strings and report.strings.truncated for report in reports)
         else "success"
     )
-    symbols_status = "success"
-    if any(report.state == "stripped_symbols" for report in reports):
-        symbols_status = "stripped_symbols"
-    if any(report.reason for report in reports if report.state not in {"stripped_symbols"}):
+    if any(report.state in {"parse_failed", "not_elf"} for report in reports):
         symbols_status = "partial"
+    elif any(report.state == "stripped_symbols" for report in reports):
+        symbols_status = "stripped_symbols"
+    elif any(
+        report.parsed is not None and report.parsed.warnings for report in reports
+    ):
+        symbols_status = "partial"
+    else:
+        symbols_status = "success"
     jni_total = analysis.metrics.get("native_jni_exports_total", 0)
     if not jni_total:
         jni_status = "not_applicable"
