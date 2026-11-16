@@ -50,43 +50,29 @@ END: update STATE (phase item moved? decisions? VERIFYs resolved?) + tick
 surface.txt/plan.txt checkboxes if applicable.
 
 ## STATE (as of 2026-11-16, updated by agent)
-- SCANNER AUDIT + P0 STARTED 2026-11-16 (commit a88eac2, 282 tests green).
-  A line-by-line audit of the scanner (driver + all of analysis/surface/* +
-  androguard_dex) found it is NOT 360-ready: only 20 text suffixes are read,
-  there is no per-file ledger, no class/method/resource model, no link graph,
-  no certificate facts, and caps drop data instead of sharding. The full
-  audit + 8-phase plan (P0..P8) is in the operator handoff folder as
-  "98-scanner-audit.md"; it is NOT in this repo yet.
-  DONE in a88eac2 (P0a+P0b): files.jsonl per-file coverage ledger
-  (status+reason per entry, symlinks/unreadable named), magic table extended
-  (png/jpeg/gif/riff/pdf/font/arsc), resource_inventory now reports
-  counted_not_parsed instead of a false "success", two dead diagnostic codes
-  removed. NEXT scanner step is P0c (shard instead of drop for native
-  symbol/string/finding overflow) unless the user reorders.
-- P0c DONE 2026-11-16 (commit 131fd69, 288 tests green): native symbol/string/
-  finding overflow now streams to shards/<prefix>-part-NNN.jsonl +
-  shards-index.json (index only when something overflowed); metrics split
-  emitted/sharded/dropped and dropped is 0 when a shard sink exists; coverage
-  gains the value "sharded". One DOMAIN_RE in surface/patterns.py with the
-  possessive quantifiers, shared by sweep and androguard_dex; the two
-  unhardened copies in apk_surface are deleted. analyze_apk_surface's
-  ledger_dir parameter is now output_dir (it receives files.jsonl + shards/).
-  NEXT scanner step: P1 identity/trust (APK signing certificate facts) unless
-  the user reorders.
-- P1 DONE 2026-11-16 (commit 50bb2d0, 301 tests green incl. ec9419d):
-  surface/identity.py parses the APK Signing Block v2/v3/v3.1, the v1 PKCS#7
-  certificate in META-INF/*.RSA|DSA|EC, ABIs and zip totals, with a stdlib
-  DER/X.509 reader (no cryptography, no apksigner). Certificates are cited by
-  the SHA-256 of their DER bytes. New facts: apk_signing_scheme,
-  apk_signing_certificate, apk_abi, uses_library, uses_native_library. New
-  findings: apk_unsigned, apk_signed_v1_only, apk_debug_certificate. New
-  coverage key apk_identity (success/partial/failed/not_found). New citation
-  scheme "apk:<file>" so an APK fact is never rewritten as apktool/....
-  analyze_apk_surface gained apk_path=; the driver now verifies the APK
-  SHA-256 BEFORE the scan instead of after. Also fixed: insecure_http no
-  longer fires on the Android XML namespace (it fired on every manifest).
-  NEXT scanner step: P2 resource model (resources.arsc -> id/name/value/file)
-  unless the user reorders.
+- SCANNER TRACK 2026-11-16 (canonical file: ai-memory/scanner-plan.md).
+  A line-by-line audit found the scanner is NOT 360-ready: only 20 text
+  suffixes were read, no per-file ledger, no class/method/resource model, no
+  link graph, no certificate facts, caps that deleted data, and coverage
+  values that asserted work never done. The 8-phase fix ladder (P0..P8), the
+  audit defect ledger (D1-D18) and the decisions taken live in
+  scanner-plan.md — read it before touching analysis/.
+  P0 DONE (a88eac2, 131fd69): files.jsonl per-file ledger with closed
+  status/reason sets; symlinks and unreadable entries named; magic table
+  extended (png/jpeg/gif/riff/pdf/font/arsc); resource_inventory no longer
+  fakes "success"; native symbol/string/finding overflow sharded to
+  shards/*.jsonl + shards-index.json instead of dropped (metrics split
+  emitted/sharded/dropped); one hardened DOMAIN_RE in surface/patterns.py.
+  P1 DONE (50bb2d0, ec9419d): surface/identity.py reads APK Signing Block
+  v2/v3/v3.1, v1 PKCS#7 certs, ABIs and zip totals with a stdlib DER/X.509
+  parser; certificates cited by DER SHA-256; new facts apk_signing_scheme /
+  apk_signing_certificate / apk_abi / uses_library / uses_native_library;
+  new findings apk_unsigned / apk_signed_v1_only / apk_debug_certificate;
+  new coverage key apk_identity; new citation scheme apk:<file>. The driver
+  now verifies the APK hash BEFORE scanning. insecure_http no longer fires on
+  the Android XML namespace.
+  STATE: 301 tests green, tree clean. NEXT: P2 resource model
+  (resources.arsc -> id/name/value/file + file_paths + layouts).
 - VERIFIED SNAPSHOT 2026-11-16 (git + pytest, not memory): working branch
   feat/native-elf-reader; tests 271 green; native N1-N13 all committed
   (N13 asset/container-embedded .so = f1b921d). Before this snapshot those

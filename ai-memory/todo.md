@@ -1,5 +1,12 @@
 # RESUME FILE — APK-Workbench (pause point 2026-11-16)
 
+ACTIVE TRACK IS NOT THIS FILE (2026-11-16): the scanner is being rebuilt to
+360° under `ai-memory/scanner-plan.md` (P0 and P1 done, P2 next). This file is
+UNIT 1 — the per-bundle workspace + freeze — which is still NOT started and is
+now the dependency of scanner phase P8. Read scanner-plan.md first if the
+task is about the analyzer; read this file if the task is about the bundle
+layout, freeze, or verify-workspace.
+
 Read this first, then INDEX.md "CANONICAL DESIGN DECISIONS" (D-1..D-9),
 then appdev.txt §1 + §14 + §15. This file is the hands-on handoff; INDEX is
 the contract.
