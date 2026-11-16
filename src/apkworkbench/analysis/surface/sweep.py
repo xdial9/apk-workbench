@@ -88,6 +88,16 @@ SNIPPET_CONTEXT_CHARS = None  # deprecated, do not use to truncate
 # recorder level so the endpoint inventory stays app-focused.
 TOOLING_URL_HOSTS = frozenset({"schemas.android.com", "www.w3.org"})
 
+
+def _tooling_url_only(value: str) -> bool:
+    """True when every host in the matched text is a build-tool namespace."""
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower().rstrip(".")
+    return host in TOOLING_URL_HOSTS
+
 # ---- DOMAIN_RE false-positive filter (smoke v2: 4/7 endpoints were fake) ----
 # DOMAIN_RE matches ANY dotted string with a 2+ letter last label, so it
 # matches Java package names, permission names, and intent actions:
@@ -538,6 +548,13 @@ class SweepState:
                 for (rule_id, category, severity, title, _pattern,
                      confidence, rationale), compiled in self._code_rules:
                     if compiled.search(line):
+                        if rule_id == "insecure_http" and _tooling_url_only(
+                            compiled.search(line).group(0)
+                        ):
+                            # The Android XML namespace is not a cleartext
+                            # endpoint; flagging it put a false positive in
+                            # every manifest ever scanned.
+                            continue
                         context_start = max(0, line_number - 3)
                         context = "\n".join(lines[context_start:line_number + 2])
                         self.findings.append(build_finding(

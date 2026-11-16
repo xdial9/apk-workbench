@@ -1,10 +1,12 @@
 """S4 contracts: sweep v2 intelligence (schemes, dedup, classes, decoding)."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from apkworkbench.analysis import apk_surface
 from apkworkbench.analysis.surface import sweep
+from apkworkbench.analysis.surface.sweep import SweepState
 
 
 RULES = [(rule, __import__("re").compile(rule[4], __import__("re").IGNORECASE))
@@ -196,3 +198,51 @@ def test_rate_limit_proximity_uses_all_evidence(tmp_path):
         if signal["path"] == ev["path"] and abs(signal["line"] - ev["line"]) <= 30
     ]
     assert record["nearby_rate_limit_indicators"]
+
+def test_insecure_http_ignores_the_android_namespace():
+    # Every manifest declares xmlns:android="http://schemas.android.com/...".
+    # Flagging it put a cleartext finding in every artifact ever scanned.
+    pattern = r"""http://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+"""
+    rules = (
+        (("insecure_http", "network", "medium", "t", pattern, 0.96, "why"),
+         re.compile(pattern, re.IGNORECASE)),
+    )
+    state = SweepState({})
+    state.sweep_text(
+        relative="AndroidManifest.xml",
+        path=Path("AndroidManifest.xml"),
+        text='<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+        code_rules=rules,
+        api_client_markers={},
+        api_invoke_owner_re=re.compile("x^"),
+        smali_invoke_re=re.compile("x^"),
+        header_re=re.compile("x^"),
+        rate_limit_re=re.compile("x^"),
+        dependency_markers={},
+        emit=lambda message: None,
+    )
+    assert not [item for item in state.findings if item["rule_id"] == "insecure_http"]
+
+
+def test_insecure_http_still_flags_a_real_cleartext_endpoint():
+    pattern = r"""http://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+"""
+    rules = (
+        (("insecure_http", "network", "medium", "t", pattern, 0.96, "why"),
+         re.compile(pattern, re.IGNORECASE)),
+    )
+    state = SweepState({})
+    state.sweep_text(
+        relative="smali/A.smali",
+        path=Path("A.smali"),
+        text='const-string v0, "http://api.example.com/v1"',
+        code_rules=rules,
+        api_client_markers={},
+        api_invoke_owner_re=re.compile("x^"),
+        smali_invoke_re=re.compile("x^"),
+        header_re=re.compile("x^"),
+        rate_limit_re=re.compile("x^"),
+        dependency_markers={},
+        emit=lambda message: None,
+    )
+    hits = [item for item in state.findings if item["rule_id"] == "insecure_http"]
+    assert len(hits) == 1
