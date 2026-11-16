@@ -8,6 +8,10 @@ ends without updating STATE.
 - surface-plan-v2.md    : CANONICAL surface-analyzer overhaul plan (v2;
                           supersedes surface.txt's S-order; adds checkpoint
                           dumping + progress + AI-handoff shaping).
+- native-plan.md        : CANONICAL native (JNI) plan N1..N13 — discovery +
+                          mapping to 100% (measurable identities I1..I5).
+                          Owns the native track; appdev.txt §4 stays the
+                          domain knowledge, this file owns steps/state.
 - appdev.txt            : Android domain knowledge + consumer contract +
                           drift tripwires + operational ritual (v2). Read at
                           every session start; §1 STATE MIRRORS this file.
@@ -50,6 +54,22 @@ surface.txt/plan.txt checkboxes if applicable.
   committed 2026-11-14 as 6e8dcaf; live account-mode validated; tests 211
   green). 2026-11-16: citation-root parameterized (D-1 step 2) — see
   "CITATION-ROOT PARAMETERIZATION" below; tests 213 green.
+- GIT ORGANIZATION 2026-11-16: working tree split into 4 topical commits
+  (docs / cap-free analysis plane / secrets split / regression fixes) on
+  feature/goopdl-account-auth, fast-forwarded into main (main was an
+  ancestor: 0 commits on main not already on the branch), then main and
+  the new working branch feat/handoff-folder were pushed. HEAD 9d4fea4.
+  feature/goopdl-account-auth is now redundant (identical to main) but was
+  left in place. Tests 217 green.
+- SECRETS SPLIT 2026-11-16 (user decision): verified TruffleHog results go
+  to a human .txt (trufflehog/findings-verified.txt), the complete set
+  (verified + unverified JSON files) stays for the AI handoff. Report plane
+  lists verified only, counts unverified (trufflehog_unverified_count /
+  unverified_trufflehog_findings_retained), never aborts.
+- NATIVE TRACK OPENED 2026-11-16: ai-memory/native-plan.md written after a
+  line-by-line review of the native path (strings-only today:
+  apk_surface.py:235-257, 432-465). No native code changed yet; plan is
+  N1..N12 (+N13 deferred). Crown jewel 5 is measured at ~15%.
 - Phase: Surface analyzer overhaul planning DONE (ai-memory/surface-plan-v2.md
   is canonical; supersedes surface.txt's S-order and folds in dump/checkpoint
   + terminal + AI-consumer shaping; P9 MODEL-AGNOSTRIC HANDOFF LAW + master
@@ -371,7 +391,8 @@ still SAVED ONLY / not implemented.
 1. Read in this order: INDEX.md (this file, especially CANONICAL DESIGN
    DECISIONS) -> appdev.txt §1 STATE + §14 decisions + §15 consumers ->
    todo.md (phase order) -> plan.txt phase ladder -> prompts/README_BUILD.md
-   if touching the handoff.
+   if touching the handoff. Working the NATIVE track instead: read
+   native-plan.md first, then appdev.txt §4 (native knowledge).
 2. Agreed operating rule: ONE PHASE AT A TIME. Finish it, stop, report the
    result; the user reviews before the next begins.
 3. Phase order (details + exit criteria in todo.md):
