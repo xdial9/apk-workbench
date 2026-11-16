@@ -57,6 +57,10 @@ from apkworkbench.analysis.surface.resources import (
     index_value_files,
     parse_resource_table,
 )
+from apkworkbench.analysis.surface.xml_assets import (
+    collect_file_providers,
+    collect_layouts,
+)
 
 ANALYZER_ID = "apk-surface"
 ANALYZER_VERSION = "0.3.0"
@@ -287,6 +291,8 @@ def analyze_apk_surface(
         "resource_inventory": "not_scanned",
         "resource_model": "not_found",
         "resource_links": "not_applicable",
+        "file_provider_paths": "not_found",
+        "layout_inventory": "not_found",
         "apk_identity": "not_found",
         "runtime_behavior": "not_performed",
         "dynamic_network_testing": "not_performed",
@@ -429,6 +435,30 @@ def analyze_apk_surface(
             # "counted but not parsed".
             coverage["resource_inventory"] = "parsed"
         diagnostics.extend(resource_model.get("diagnostics") or [])
+
+    # ---- P2c: FileProvider roots + layout inventory -----------------------
+    provider_facts: list[dict[str, Any]] = []
+    layout_facts: list[dict[str, Any]] = []
+    if manifest_facts.get("status") == "success":
+        provider_facts, provider_findings, provider_diagnostics = collect_file_providers(
+            manifest_facts.get("components") or [], root, files
+        )
+        findings.extend(provider_findings)
+        diagnostics.extend(provider_diagnostics)
+        if provider_diagnostics and provider_facts:
+            coverage["file_provider_paths"] = "partial"
+        elif provider_diagnostics:
+            coverage["file_provider_paths"] = "failed"
+        elif provider_facts:
+            coverage["file_provider_paths"] = "success"
+    layout_facts, layout_diagnostics = collect_layouts(root, files)
+    diagnostics.extend(layout_diagnostics)
+    if layout_diagnostics and layout_facts:
+        coverage["layout_inventory"] = "partial"
+    elif layout_diagnostics:
+        coverage["layout_inventory"] = "failed"
+    elif layout_facts:
+        coverage["layout_inventory"] = "success"
 
     dependency_evidence: dict[str, list[str]] = {name: [] for name in DEPENDENCY_MARKERS}
     api_clients: dict[str, list[dict[str, Any]]] = {name: [] for name in API_CLIENT_MARKERS}
@@ -647,6 +677,11 @@ def analyze_apk_surface(
                 "uses_native_library", entry["name"], evidence={"path": manifest_relative},
                 extra={"required": entry.get("required")},
             )
+    for fact in provider_facts + layout_facts:
+        fact_store.add(
+            fact["kind"], fact["value"],
+            evidence=fact.get("evidence"), extra=fact.get("extra"),
+        )
     # ---- P2b: resolve the resource ids the bytecode actually uses ---------
     resource_ids_resolved = 0
     resource_ids_unresolved = 0
@@ -866,6 +901,11 @@ def analyze_apk_surface(
             "resource_id_references": len(sweep.resource_id_literals),
             "resource_ids_resolved": resource_ids_resolved,
             "resource_ids_unresolved": resource_ids_unresolved,
+            "file_provider_root_count": len(provider_facts),
+            "layout_count": sum(1 for item in layout_facts if item["kind"] == "layout"),
+            "custom_view_count": sum(
+                1 for item in layout_facts if item["kind"] == "custom_view"
+            ),
             **native_analysis.metrics,
         },
     }

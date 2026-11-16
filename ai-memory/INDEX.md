@@ -84,8 +84,18 @@ surface.txt/plan.txt checkboxes if applicable.
   records now carry their decoded definition file via index_value_files().
   FactStore now raises if `extra` tries to overwrite kind/value/fingerprint/
   count/evidence (that silent overwrite corrupted facts twice).
-  STATE: 314 tests green, tree clean, pushed. NEXT: P2c (file_paths.xml
-  FileProvider roots + layout/view inventory).
+  P2c DONE: surface/xml_assets.py joins every FileProvider meta-data to its
+  decoded res/xml/*.xml and emits file_provider_root facts (authority,
+  provider, root_type, path, exported); new finding file_provider_exported
+  (high) for an exported provider that serves roots; layouts become `layout`
+  facts (view_count/views/ids/custom_views) and `custom_view` facts. New
+  coverage keys file_provider_paths + layout_inventory; metrics
+  file_provider_root_count / layout_count / custom_view_count.
+  STATE: 321 tests green, tree clean, pushed. P2 IS COMPLETE.
+  NEXT: P3 code model (class/method/field inventory, call graph v2 with
+  caller_class/callee_class + dex file, external refs with AND without
+  callers, string->class index, reflection sites, one-hop dynamic-load
+  target).
 - VERIFIED SNAPSHOT 2026-11-16 (git + pytest, not memory): working branch
   feat/native-elf-reader; tests 271 green; native N1-N13 all committed
   (N13 asset/container-embedded .so = f1b921d). Before this snapshot those

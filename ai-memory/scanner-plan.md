@@ -1,7 +1,7 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
-Status: **P0 DONE, P1 DONE, P2a DONE, P2b DONE, P2c NEXT.** Verified
-2026-11-16, 314 tests green, tree clean, branch pushed.
+Status: **P0 DONE, P1 DONE, P2 DONE (a/b/c), P3 NEXT.** Verified
+2026-11-16, 321 tests green, tree clean, branch pushed.
 This file is the resume point for the scanner track. Read it after
 `ai-memory/INDEX.md` §STATE and before touching `analysis/`.
 
@@ -38,7 +38,7 @@ Everything below is the fix ladder. P0-P1 are done and verified.
 | P1 | Identity/trust: signing schemes, certificates, ABIs, uses-library | **DONE** | `50bb2d0`, `ec9419d` |
 | P2a | Resource table: `resources.arsc` -> id/type/name/value -> `resources.jsonl` | **DONE** | (this commit) |
 | P2b | Resource links: smali id cross-ref + decoded-XML file attribution | **DONE** | (this commit) |
-| P2c | FileProvider `file_paths.xml` roots + layout/view inventory | **NEXT** | — |
+| P2c | FileProvider `file_paths.xml` roots + layout/view inventory | **DONE** | (this commit) |
 | P3 | Code model: class/method/field inventory, call graph v2, reflection sites | queued | — |
 | P4 | Link graph: typed edges with two cites each + entry_points | queued | — |
 | P5 | Detection breadth: 11 deduction templates, rule catalog 19 -> ~60 | queued | — |
@@ -134,13 +134,22 @@ Everything below is the fix ladder. P0-P1 are done and verified.
   `fingerprint`, `count` or `evidence`. Passing `extra={"value": ...}`
   silently replaced the fact's own value (it happened twice); it now raises.
 
-### P2c — NEXT (provider + layout surface)
-- parse `res/xml/file_paths.xml` -> FileProvider roots as facts
-  (`file_provider_path`) joined to the provider component from the manifest;
-- layout inventory: `res/layout*/*.xml` -> view ids / custom views, so a
-  layout reference resolves to the views it inflates.
-Exit: every `<provider>` with a `file_paths` meta-data resolves to its roots,
-and every layout reference resolves to a file and its view set.
+### P2c — DONE (provider + layout surface)
+- `surface/xml_assets.py`:
+  * `collect_file_providers()` joins every `<provider>` carrying a
+    `FILE_PROVIDER_PATHS` meta-data to its decoded `res/xml/*.xml` and emits
+    `file_provider_root` facts (authority, provider, root_type, name, path,
+    exported, meta_data). A reference with no decoded file is a diagnostic
+    (`file_provider_paths_missing`), never a guess.
+  * new finding `file_provider_exported` (high) when an exported provider
+    actually serves roots.
+  * `collect_layouts()` emits one `layout` fact per `res/layout*/*.xml`
+    (view_count, views, ids, custom_views) and one `custom_view` fact per
+    qualified/unknown view class, with every layout that uses it as evidence.
+- new coverage keys `file_provider_paths` and `layout_inventory`
+  (success/partial/failed/not_found); metrics `file_provider_root_count`,
+  `layout_count`, `custom_view_count`.
+- **P2 is complete.** Next: P3 code model.
 
 ### P3 — Code model
 Class/method/field inventory with DEX index + smali path (name, access,
