@@ -236,6 +236,7 @@ def analyze_apk_surface(
     apktool_dir: str | Path,
     *,
     progress: Callable[[str], None] | None = None,
+    tree_root: str = "apktool/",
 ) -> dict[str, Any]:
     """Inspect decoded XML/Smali/resources and produce inventory plus static leads."""
     root = Path(apktool_dir).expanduser().resolve(strict=True)
@@ -590,7 +591,7 @@ def analyze_apk_surface(
             "native_library_count": len(native_libraries),
         },
     }
-    return finalize_result(result)
+    return finalize_result(result, tree_root=tree_root)
 
 
 def _emit_progress(progress: Callable[[str], None] | None, message: str) -> None:
@@ -729,6 +730,10 @@ def run_static_surface_analysis(
             continue
         output_root = results_root / package_id / version_code / digest
         decoded = output_root / "apktool"
+        # Citation root for the handoff: the decoded subtree relative to the
+        # artifact folder. A single-APK artifact resolves to "apktool/"; a
+        # per-bundle component resolves to "apktool/<component>/".
+        citation_root = f"{decoded.relative_to(output_root).as_posix()}/"
         target = output_root / "static-analysis.json"
         package_root = results_root / package_id
         version_root = package_root / version_code
@@ -769,7 +774,9 @@ def run_static_surface_analysis(
         if progress:
             progress(f"[surface {index}/{len(eligible)}] Inspecting {package_id} v{version_code}")
         try:
-            result = analyze_apk_surface(decoded, progress=progress)
+            result = analyze_apk_surface(
+                decoded, progress=progress, tree_root=citation_root
+            )
             source_value = row.get("local_path", "")
             source_candidate = Path(source_value).expanduser()
             downloads_root = root / "downloads"
@@ -852,7 +859,7 @@ def run_static_surface_analysis(
                 "package_id": package_id, "version_code": version_code,
                 "sha256": digest, "source_apk": str(source_apk),
             }
-            finalize_result(result)
+            finalize_result(result, tree_root=citation_root)
             _atomic_write_json(target, result)
             # S8 handoff contract: the prompt chain reads surface/facts.jsonl
             # and surface/location_map.json. Emit both next to
@@ -860,7 +867,9 @@ def run_static_surface_analysis(
             # A write failure is recorded, never hidden: the artifact becomes
             # partial and the reason lands in diagnostics.
             try:
-                handoff_paths = write_handoff(output_root, result)
+                handoff_paths = write_handoff(
+                    output_root, result, tree_root=citation_root
+                )
             except OSError as exc:
                 result["status"] = "partial"
                 result.setdefault("diagnostics", []).append({

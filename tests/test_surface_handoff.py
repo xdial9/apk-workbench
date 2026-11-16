@@ -169,6 +169,36 @@ def test_location_requires_a_real_line_number():
     assert "apktool/x.smali:" not in entry["locations"][0]
 
 
+def test_tree_root_parameter_prefixes_component_citations(tmp_path):
+    result = {
+        "analyzer": {"id": "apk-surface", "version": "0.3.0"},
+        "status": "success",
+        "facts": [{
+            "kind": "route", "value": "/v1/items", "fingerprint": "a" * 64,
+            "count": 1,
+            "evidence": [{"path": "smali/com/example/A.smali", "line": 9}],
+        }],
+        "findings": [{
+            "rule_id": "weak_cipher",
+            "evidence": {"path": "smali/com/example/C.smali", "line": 5},
+        }],
+        "deductions": [{
+            "id": "api_surface",
+            "template": "api_surface",
+            "cites": ["smali/com/example/A.smali:9"],
+            "facts": ["a" * 64],
+        }],
+    }
+    paths = write_handoff(tmp_path, result, tree_root="apktool/base/")
+    location_map = json.loads(paths["location_map"].read_text(encoding="utf-8"))
+    locations = [entry["locations"][0] for entry in location_map["entries"]]
+    assert locations == [
+        "apktool/base/smali/com/example/A.smali:9",
+        "apktool/base/smali/com/example/C.smali:5",
+        "apktool/base/smali/com/example/A.smali:9",
+    ]
+
+
 def _write_tree(root):
     (root / "smali/com/example").mkdir(parents=True)
     (root / "AndroidManifest.xml").write_text(

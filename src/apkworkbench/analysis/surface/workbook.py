@@ -179,7 +179,9 @@ def _flagged_fact_leads(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return leads
 
 
-def build_workbook(result: dict[str, Any]) -> dict[str, Any]:
+def build_workbook(
+    result: dict[str, Any], *, tree_root: str = "apktool/"
+) -> dict[str, Any]:
     facts = result.get("facts") or []
     deductions = result.get("deductions") or []
     findings = result.get("findings") or []
@@ -200,7 +202,7 @@ def build_workbook(result: dict[str, Any]) -> dict[str, Any]:
             "deliverables": DELIVERABLES,
         },
         "location_ledger": {
-            "tree_root": "apktool/",
+            "tree_root": tree_root,
             "note": (
                 "locations are relative to tree_root unless they begin with a "
                 "known scheme prefix (endpoint:, permission:, sdk_root:, "

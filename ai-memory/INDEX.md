@@ -45,10 +45,11 @@ DURING: register risks/hallucination doubts as VERIFY notes immediately.
 END: update STATE (phase item moved? decisions? VERIFYs resolved?) + tick
 surface.txt/plan.txt checkboxes if applicable.
 
-## STATE (as of 2026-11-14, updated by agent)
+## STATE (as of 2026-11-16, updated by agent)
 - Branch: feature/goopdl-account-auth (S8 perf 062973b; handoff writers
-  committed 2026-11-14 as 6e8dcaf; tests 211 green; live account-mode
-  validated).
+  committed 2026-11-14 as 6e8dcaf; live account-mode validated; tests 211
+  green). 2026-11-16: citation-root parameterized (D-1 step 2) — see
+  "CITATION-ROOT PARAMETERIZATION" below; tests 213 green.
 - Phase: Surface analyzer overhaul planning DONE (ai-memory/surface-plan-v2.md
   is canonical; supersedes surface.txt's S-order and folds in dump/checkpoint
   + terminal + AI-consumer shaping; P9 MODEL-AGNOSTRIC HANDOFF LAW + master
@@ -156,6 +157,9 @@ D-1 PER-BUNDLE WORKSPACE (user directive; replaces per-APK).
   "apktool/<component>/", so that prefix must become a parameter and
   citations must read e.g. apktool/base/smali/com/x/A.smali:118. Both
   location_map.json and workbook.location_ledger are affected.
+  STATUS 2026-11-16: DONE — parameter threaded end to end (see
+  "CITATION-ROOT PARAMETERIZATION"). The driver already derives the value
+  from the layout, so D-1 only needs the component subtrees to exist.
 - OPEN (decide during implementation, do not assume): how the per-APK
   static-analysis.json files aggregate at bundle level. Proposal: keep
   surface/artifacts/<sha256>/static-analysis.json per APK + a bundle-level
@@ -308,7 +312,8 @@ Implemented, tested and committed (see git log for the commit hash):
   leaves scheme cites (endpoint:, permission:, sdk_root:, coverage:,
   route:, fact:) and absolute paths untouched. NOTE: this hardcoded prefix
   becomes WRONG under the per-bundle layout (D-1) and must become a
-  parameter ("apktool/<component>/").
+  parameter ("apktool/<component>/"). STATUS 2026-11-16: FIXED — the prefix
+  is now a `tree_root` argument (default "apktool/", behavior unchanged).
 - MOD src/apkworkbench/analysis/apk_surface.py: emits both files right
   after static-analysis.json; an OSError marks the artifact partial and
   records handoff_write_failed in diagnostics (never silent).
@@ -327,7 +332,42 @@ Implemented, tested and committed (see git log for the commit hash):
   schema gate, dry run. static-analysis.json was untouched by this commit so
   S8 parity still holds.
 
-## RESUME HERE (pause point 2026-11-14 after design review; read this first)
+## CITATION-ROOT PARAMETERIZATION — DONE 2026-11-16 (D-1 step 2)
+Behavior-neutral prerequisite for the per-bundle layout: the hardcoded
+"apktool/" citation prefix is now a parameter. Defaults preserve the current
+single-APK output byte for byte (all pre-existing tests pass unchanged).
+
+Threaded as `tree_root` (keyword-only where the signature had `*`):
+- surface/handoff.py: `_folder_relative`, `_locations`, `_fact_entry`,
+  `_finding_entry`, `_deduction_entry`, `build_location_map`, `write_handoff`.
+  `TREE_ROOT_PREFIX = "apktool/"` is now only the default value. The
+  `how_to_verify` prose interpolates the root instead of hardcoding apktool/.
+- surface/workbook.py: `build_workbook(result, *, tree_root="apktool/")`
+  feeds `location_ledger.tree_root`.
+- surface/serialize.py: `finalize_result(result, *, tree_root="apktool/")`
+  passes through to build_workbook.
+- analysis/apk_surface.py: `analyze_apk_surface(..., tree_root="apktool/")`;
+  `finalize_result(result, tree_root=...)`.
+- analysis/apk_surface.py driver (run_static_surface_analysis): derives the
+  root from the layout instead of guessing —
+  `citation_root = f"{decoded.relative_to(output_root).as_posix()}/"`.
+  Today decoded = output_root/"apktool" so this is "apktool/"; under D-1 a
+  component decodes to output_root/"apktool/<component>" and the same line
+  yields "apktool/<component>/" with no further edit. Used at the
+  analyze_apk_surface call, the finalize_result call and write_handoff.
+- Tests: tests/test_surface_handoff.py::test_tree_root_parameter_prefixes_component_citations
+  (asserts apktool/base/ prefixes for fact, finding and deduction cites) +
+  tests/test_surface_serialize.py::test_workbook_tree_root_is_parameterized.
+
+Verification: `.venv/bin/python -m pytest -q` -> 213 passed (~37s),
+ruff clean on all six changed files.
+
+Deliberately NOT done in this step: files were not moved into surface/;
+final_run.py:368 and workspace.py:327 have no new-path fallback yet; nothing
+frozen; prompts not edited; ai-memory/claudefix.txt (trust_decision note)
+still SAVED ONLY / not implemented.
+
+## RESUME HERE (pause point 2026-11-16; read this first)
 1. Read in this order: INDEX.md (this file, especially CANONICAL DESIGN
    DECISIONS) -> appdev.txt §1 STATE + §14 decisions + §15 consumers ->
    todo.md (phase order) -> plan.txt phase ladder -> prompts/README_BUILD.md
@@ -336,12 +376,15 @@ Implemented, tested and committed (see git log for the commit hash):
    result; the user reviews before the next begins.
 3. Phase order (details + exit criteria in todo.md):
    0. DONE: handoff writers committed (6e8dcaf); tests 211 green.
+   0b. DONE 2026-11-16: citation-root parameterized (D-1 step 2); tests 213
+       green. Committed + pushed as recorded in the commit log.
    1. NEXT — per-bundle workspace + freeze rework (D-1/D-2/D-3/D-4):
       results/<pkg>/<version>/<index_sha256>/, apktool/<component>/,
       surface/ + trufflehog/ + manifest/ + prompts + handoff.json +
       ai_analysis/attempt-01/, read-only freeze + hashes.sha256 +
-      verify-workspace, consumer fallback for static-analysis.json, and the
-      citation-root parameter that replaces the hardcoded "apktool/".
+      verify-workspace, consumer fallback for static-analysis.json.
+      The citation-root parameter (last bullet of the old item 1) is DONE;
+      what remains is the layout move + freeze + the two consumer fallbacks.
    2. Dry run of prompts 0..6 on one real bundle (use a single-APK app first;
       bundle handling is new, so do not stack unknowns).
    3. Fix only what the dry run proved (likely volume hierarchy, evidence
@@ -352,6 +395,12 @@ Implemented, tested and committed (see git log for the commit hash):
    6. Phase D dossier, Phase E corpus correlation, Phase F per-run
       isolation — as needed. Phase C rewrite is CANCELLED (D-6).
 4. Open decisions the next session must resolve before coding item 1:
+   - LAYOUT (still open, one-line answer needed): put
+     static-analysis.json / facts.jsonl / location_map.json under a real
+     surface/ subdirectory (prompts 0/2 and workbook.py already promise it;
+     recommended YES), and keep google-play-bundle.json at the bundle root
+     (google_play.py:584, verification.py:202, final_run.py:364 expect it;
+     recommended YES, which contradicts D-3's manifest/ wording).
    - per-artifact static-analysis.json aggregation at bundle level (D-1
      OPEN bullet) — proposal surface/artifacts/<sha256>/ + surface/bundle.json.
    - whether to migrate existing results trees or finalize them in place and
@@ -361,7 +410,7 @@ Implemented, tested and committed (see git log for the commit hash):
    /tmp/opencode/antennapod-before.json and -after.json; benchmark harness
    /tmp/opencode/bench_sweep.py (300-file parity/speed check); Antennapod
    decoded tree under /tmp/opencode/ws/results/de.danoeh.antennapod/.
-6. Current code/test facts: tests 211 green, analyzer 0.3.0, S8 perf 062973b.
+6. Current code/test facts: tests 213 green, analyzer 0.3.0, S8 perf 062973b.
 7. Authorization context (user, 2026-11-14): the user has company
    authorization to implement this tool and scan Play APKs at will; the tool
    itself performs NO live validation — the terminal AI agent does all live

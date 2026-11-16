@@ -33,15 +33,15 @@ NON_PATH_CITE_PREFIXES = (
 )
 
 
-def _folder_relative(location: str) -> str:
-    """Prefix tree-relative evidence with apktool/ (never rewrite absolutes)."""
-    if not location or location.startswith(TREE_ROOT_PREFIX):
+def _folder_relative(location: str, tree_root: str = TREE_ROOT_PREFIX) -> str:
+    """Prefix tree-relative evidence with the tree root (never rewrite absolutes)."""
+    if not location or location.startswith(tree_root):
         return location
     if location.startswith(("/", "~")):
         return location
     if location.startswith(NON_PATH_CITE_PREFIXES):
         return location
-    return TREE_ROOT_PREFIX + location
+    return tree_root + location
 
 
 
@@ -67,7 +67,7 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _locations(evidence: Any) -> list[str]:
+def _locations(evidence: Any, tree_root: str = TREE_ROOT_PREFIX) -> list[str]:
     """Render evidence items as ``path:line`` strings; never invent a line."""
     locations: list[str] = []
     if isinstance(evidence, dict):
@@ -81,19 +81,21 @@ def _locations(evidence: Any) -> list[str]:
         if not path:
             continue
         line = item.get("line")
-        location = _folder_relative(str(path))
+        location = _folder_relative(str(path), tree_root)
         locations.append(f"{location}:{line}" if line else location)
     return locations
 
 
-def _fact_entry(fact: dict[str, Any], line_number: int) -> dict[str, Any]:
+def _fact_entry(
+    fact: dict[str, Any], line_number: int, tree_root: str = TREE_ROOT_PREFIX
+) -> dict[str, Any]:
     extra = {
         key: value
         for key, value in fact.items()
         if key not in {"kind", "value", "fingerprint", "count", "evidence",
                        "evidence_truncated"}
     }
-    locations = _locations(fact.get("evidence"))
+    locations = _locations(fact.get("evidence"), tree_root)
     return {
         "entry_id": f"FACT-{str(fact.get('fingerprint', ''))[:12]}",
         "source": "facts.jsonl",
@@ -107,15 +109,17 @@ def _fact_entry(fact: dict[str, Any], line_number: int) -> dict[str, Any]:
         "flags": extra.get("flags") or [],
         "host_class": extra.get("host_class"),
         "how_to_verify": (
-            "open the cited file(s) in apktool/ and confirm the value at the "
+            f"open the cited file(s) in {tree_root} and confirm the value at the "
             "cited line; a fact is evidence, not a conclusion"
         ),
     }
 
 
-def _finding_entry(finding: dict[str, Any], index: int) -> dict[str, Any]:
+def _finding_entry(
+    finding: dict[str, Any], index: int, tree_root: str = TREE_ROOT_PREFIX
+) -> dict[str, Any]:
     evidence = finding.get("evidence")
-    locations = _locations(evidence)
+    locations = _locations(evidence, tree_root)
     context = evidence.get("context") if isinstance(evidence, dict) else None
     return {
         "entry_id": f"FINDING-{index}",
@@ -134,8 +138,13 @@ def _finding_entry(finding: dict[str, Any], index: int) -> dict[str, Any]:
     }
 
 
-def _deduction_entry(deduction: dict[str, Any]) -> dict[str, Any]:
-    cites = [_folder_relative(str(item)) for item in (deduction.get("cites") or [])]
+def _deduction_entry(
+    deduction: dict[str, Any], tree_root: str = TREE_ROOT_PREFIX
+) -> dict[str, Any]:
+    cites = [
+        _folder_relative(str(item), tree_root)
+        for item in (deduction.get("cites") or [])
+    ]
     return {
         "entry_id": f"DEDUCTION-{deduction.get('id')}",
         "source": "static-analysis.json deductions",
@@ -153,7 +162,9 @@ def _deduction_entry(deduction: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_location_map(result: dict[str, Any]) -> dict[str, Any]:
+def build_location_map(
+    result: dict[str, Any], *, tree_root: str = TREE_ROOT_PREFIX
+) -> dict[str, Any]:
     """Index every fact, finding and deduction with its exact citation."""
     facts = result.get("facts") or []
     findings = result.get("findings") or []
@@ -161,13 +172,13 @@ def build_location_map(result: dict[str, Any]) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
     for line_number, fact in enumerate(facts, start=1):
         if isinstance(fact, dict):
-            entries.append(_fact_entry(fact, line_number))
+            entries.append(_fact_entry(fact, line_number, tree_root))
     for index, finding in enumerate(findings):
         if isinstance(finding, dict):
-            entries.append(_finding_entry(finding, index))
+            entries.append(_finding_entry(finding, index, tree_root))
     for deduction in deductions:
         if isinstance(deduction, dict):
-            entries.append(_deduction_entry(deduction))
+            entries.append(_deduction_entry(deduction, tree_root))
     return {
         "schema_version": LOCATION_MAP_SCHEMA,
         "artifact": result.get("artifact") or {},
@@ -194,11 +205,19 @@ def build_location_map(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def write_handoff(directory: str | Path, result: dict[str, Any]) -> dict[str, Path]:
+def write_handoff(
+    directory: str | Path,
+    result: dict[str, Any],
+    *,
+    tree_root: str = TREE_ROOT_PREFIX,
+) -> dict[str, Path]:
     """Write facts.jsonl + location_map.json into ``directory`` atomically.
 
-    Returns the two paths. Both files are rewritten wholesale so a rerun can
-    never append duplicate facts.
+    ``tree_root`` is the folder-relative root of the decoded tree that evidence
+    paths are resolved against (``apktool/`` for a single-APK artifact,
+    ``apktool/<component>/`` for a bundle component). Returns the two paths.
+    Both files are rewritten wholesale so a rerun can never append duplicate
+    facts.
     """
     target_dir = Path(directory)
     facts_path = target_dir / FACTS_FILENAME
@@ -211,7 +230,7 @@ def write_handoff(directory: str | Path, result: dict[str, Any]) -> dict[str, Pa
     )
     _atomic_write_bytes(facts_path, stream.encode("utf-8"))
 
-    payload = build_location_map(result)
+    payload = build_location_map(result, tree_root=tree_root)
     _atomic_write_bytes(
         location_map_path,
         (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"),

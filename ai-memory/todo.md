@@ -1,4 +1,4 @@
-# RESUME FILE — APK-Workbench (pause point 2026-11-14)
+# RESUME FILE — APK-Workbench (pause point 2026-11-16)
 
 Read this first, then INDEX.md "CANONICAL DESIGN DECISIONS" (D-1..D-9),
 then appdev.txt §1 + §14 + §15. This file is the hands-on handoff; INDEX is
@@ -11,23 +11,37 @@ asked.
 --------------------------------------------------------------------------------
 ## CURRENT STATE
 --------------------------------------------------------------------------------
-- Branch: feature/goopdl-account-auth. Tests: 211 green. Analyzer 0.3.0.
+- Branch: feature/goopdl-account-auth. Tests: 213 green. Analyzer 0.3.0.
 - Code: S8 perf 062973b. Handoff writers committed 2026-11-14 as 6e8dcaf
   (facts.jsonl + location_map.json + citation-root prefix + driver emission
   + workbook text + 6 tests). static-analysis.json untouched, S8 parity holds.
+- 2026-11-16 (DONE, committed+pushed): CITATION-ROOT PARAMETERIZATION, the
+  "apktool/" prefix is now a `tree_root` argument. Files: surface/handoff.py
+  (_folder_relative/_locations/*_entry/build_location_map/write_handoff),
+  surface/workbook.py (build_workbook), surface/serialize.py
+  (finalize_result), analysis/apk_surface.py (analyze_apk_surface +
+  driver). Driver derives
+  `citation_root = f"{decoded.relative_to(output_root).as_posix()}/"` so
+  "apktool/" today and "apktool/<component>/" automatically once component
+  subtrees land. 2 new tests; 213 green; ruff clean. Defaults keep output
+  byte-identical. Detail: INDEX.md "CITATION-ROOT PARAMETERIZATION".
 - Phase S is DONE through S8 except the heavy-case completed-run evidence:
   the Spotify scan was STOPPED by the user at 57,944/112,254 files (1,481s,
   ~39 files/s, 6,227 endpoints, 4,890 findings in memory only). Nothing was
   persisted; the run marker still says "running" and is STALE. The
   throughput figure is valid; a completed heavy-case artifact does not exist.
-- NEXT UNIT: per-bundle workspace + freeze rework (spec below). Nothing else
-  starts until the user reviews it.
+- NEXT UNIT: per-bundle workspace + freeze rework (spec below), minus the
+  citation parameter (already done). Nothing else starts until the user
+  reviews it.
 
 --------------------------------------------------------------------------------
 ## PHASE ORDER (agreed; do not reorder without the user)
 --------------------------------------------------------------------------------
 0. DONE  — commit the handoff writers (6e8dcaf).
+0b. DONE 2026-11-16 — citation-root parameter (D-1 step 2). Committed+pushed.
 1. NEXT  — PER-BUNDLE WORKSPACE + FREEZE (D-1/D-2/D-3/D-4). Spec below.
+           Remaining: layout move into surface/, freeze, verify-workspace,
+           static-analysis.json consumer fallbacks, prompts/README copy.
 2.       — DRY RUN prompts 0..6 on one real bundle. Single-APK app first.
 3.       — Fix ONLY what the dry run proved: expect volume hierarchy, evidence
            precedence, output schema gate.
@@ -82,6 +96,7 @@ results/<package_id>/<version_code>/<bundle_id>/
    parameter carrying the component tree root ("apktool/base/",
    "apktool/split_config.arm64_v8a/", ...). location_map.json AND
    workbook.location_ledger must cite the real component path.
+   DONE 2026-11-16: `tree_root` parameter, driver derives it from the layout.
 3. static-analysis.json moves under surface/. Update the only two readers
    (reporting/final_run.py:368, database/workspace.py:327) to try the new path
    first and fall back to the legacy root path; add tests.
@@ -91,6 +106,11 @@ results/<package_id>/<version_code>/<bundle_id>/
 6. `apkwb verify-workspace` command + tests.
 
 ### Open decisions — resolve with the user before coding
+- LAYOUT (asked 2026-11-16, awaiting one-line answer): static-analysis.json /
+  facts.jsonl / location_map.json under a real surface/ dir (prompts 0/2 and
+  workbook.py already promise it; recommended YES); google-play-bundle.json
+  stays at the bundle root (three consumers expect it; recommended YES,
+  contradicts D-3's manifest/ wording).
 - Bundle-level aggregation of per-APK static-analysis.json. Proposal:
   surface/artifacts/<sha256>/static-analysis.json per APK plus a bundle-level
   surface/bundle.json index. A silently merged JSON is NOT approved.
@@ -106,7 +126,7 @@ results/<package_id>/<version_code>/<bundle_id>/
   edit inside apktool/.
 - Reconcile + final report still read artifacts correctly (legacy fallback
   covered by a test).
-- 211+ tests green; no changes to result semantics.
+- 213+ tests green; no changes to result semantics.
 
 --------------------------------------------------------------------------------
 ## UNIT 2 — DRY RUN (after Unit 1 is accepted)
@@ -157,8 +177,12 @@ results/<package_id>/<version_code>/<bundle_id>/
    (per-bundle workspace, in-place freeze, no rewrite, trufflehog scope,
    size policy, tmpfs warning, process rules).
 6. Implemented + committed the handoff writers (6e8dcaf) with 6 tests.
-7. Remaining unknowns: bundle-level aggregation, and whether the prompt chain
-   survives first contact with a real model. Both resolved in Units 1-2.
+7. 2026-11-16: parameterized the citation root (tree_root) in
+   handoff/workbook/serialize/apk_surface + 2 tests; 213 green; committed and
+   pushed. No layout move yet, so behavior is unchanged.
+8. Remaining unknowns: bundle-level aggregation, layout answer (surface/ vs
+   root), and whether the prompt chain survives first contact with a real
+   model. Resolved in Units 1-2.
 
 --------------------------------------------------------------------------------
 ## TRIPWIRES

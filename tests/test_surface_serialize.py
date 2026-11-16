@@ -47,6 +47,14 @@ def test_finalize_result_adds_workbook_and_distinct_metrics():
     assert book["finish_line"]["checklist"]
 
 
+def test_workbook_tree_root_is_parameterized():
+    book = wb.build_workbook(
+        {"facts": [], "findings": [], "deductions": []},
+        tree_root="apktool/base/",
+    )
+    assert book["location_ledger"]["tree_root"] == "apktool/base/"
+
+
 def test_analyzer_version_bumped_and_consumers_intact(tmp_path):
     root = tmp_path / "decode"
     (root / "smali").mkdir(parents=True)

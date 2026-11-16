@@ -10,7 +10,9 @@ from typing import Any
 from apkworkbench.analysis.surface.workbook import build_workbook
 
 
-def finalize_result(result: dict[str, Any]) -> dict[str, Any]:
+def finalize_result(
+    result: dict[str, Any], *, tree_root: str = "apktool/"
+) -> dict[str, Any]:
     findings = result.get("findings") or []
     distinct = {
         (
@@ -24,5 +26,5 @@ def finalize_result(result: dict[str, Any]) -> dict[str, Any]:
     metrics["distinct_finding_count"] = len(distinct)
     metrics["fact_count"] = len(result.get("facts") or [])
     metrics["deduction_count"] = len(result.get("deductions") or [])
-    result["workbook"] = build_workbook(result)
+    result["workbook"] = build_workbook(result, tree_root=tree_root)
     return result
