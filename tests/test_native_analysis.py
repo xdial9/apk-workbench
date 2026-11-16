@@ -457,3 +457,31 @@ def test_library_without_load_site_gets_a_closed_reason(tmp_path):
     inventory = {item["path"]: item for item in result["inventory"]["native_analysis"]}
     assert inventory["lib/arm64-v8a/libmain.so"]["load_status"] == "loaded"
     assert inventory["lib/arm64-v8a/libdep.so"]["load_reason"] == "dependency_of_other_lib"
+
+
+def test_native_string_evidence_is_retargeted_to_byte_offsets(tmp_path):
+    """A line number inside a .so is a fabrication; the cite must be a byte offset."""
+    root = make_tree(tmp_path)
+    path = write_elf(root / "lib/arm64-v8a/libgood.so", symbols=(symbol("foo"),))
+    payload = b"\x00https://native.example.test/v1\x00\x00api.native.example.test\x00"
+    with path.open("ab") as handle:
+        handle.write(payload)
+
+    result = analyze_apk_surface(root)
+
+    endpoint = next(
+        item for item in result["inventory"]["endpoints"]
+        if item.get("value") == "https://native.example.test/v1"
+    )
+    evidence = endpoint["evidence"][0]
+    assert evidence["path"] == "lib/arm64-v8a/libgood.so"
+    assert "line" not in evidence
+    assert evidence["offset"] == path.stat().st_size - len(payload) + 1
+    assert result["inventory"]["endpoints"][0]["evidence"][0].get("line") is None
+
+    # No finding may cite a native path with a fabricated line number.
+    for finding in result["findings"]:
+        evidence = finding.get("evidence") or {}
+        if str(evidence.get("path", "")).startswith("lib/"):
+            assert evidence.get("line") is None
+            assert isinstance(evidence.get("offset"), int)

@@ -214,7 +214,13 @@ def _finding(
     line: int | None,
     snippet: str,
     confidence: float,
+    offset: int | None = None,
 ) -> dict[str, Any]:
+    evidence: dict[str, Any] = {"path": path, "line": line, "snippet": snippet}
+    # Native evidence is byte-addressed; add the offset only when it exists so
+    # every existing (text) finding keeps its exact evidence shape.
+    if offset is not None:
+        evidence["offset"] = offset
     return {
         "analyzer": "apk-surface",
         "rule_id": rule_id,
@@ -224,7 +230,7 @@ def _finding(
         "verification_state": "static_unverified",
         "title": title,
         "message": message,
-        "evidence": {"path": path, "line": line, "snippet": snippet},
+        "evidence": evidence,
     }
 
 
@@ -447,6 +453,9 @@ def analyze_apk_surface(
             dependency_markers=DEPENDENCY_MARKERS,
             emit=lambda message: None,
         )
+    # Native strings were swept as text purely to reuse the endpoint rules;
+    # rewrite their evidence from text lines to real file byte offsets.
+    _retarget_native_evidence(sweep, findings, native_analysis.string_line_offsets)
     findings.extend(sweep.findings)
     dependency_evidence = sweep.dependency_evidence
     api_endpoints = sweep.api_endpoints
@@ -492,6 +501,7 @@ def analyze_apk_surface(
             f"API/network endpoint candidate: {endpoint}",
             f"String occurrence count: {metadata['occurrences']}. This endpoint was discovered statically; no request was sent.",
             str(first.get("path", "")), first.get("line"), endpoint, 0.99,
+            offset=first.get("offset"),
         ))
     for route, metadata in sorted(api_routes.items()):
         first = metadata["evidence"][0] if metadata["evidence"] else {}
@@ -500,6 +510,7 @@ def analyze_apk_surface(
             f"API route candidate: {metadata['http_method'] or 'METHOD UNKNOWN'} {route}",
             f"Route occurrence count: {metadata['occurrences']}. HTTP behavior was not exercised.",
             str(first.get("path", "")), first.get("line"), route, 0.88,
+            offset=first.get("offset"),
         ))
     dependencies = [
         {"name": name, "evidence_paths": sorted(set(paths))}
@@ -670,6 +681,50 @@ def analyze_apk_surface(
         },
     }
     return finalize_result(result, tree_root=tree_root)
+
+
+def _retarget_native_evidence(
+    sweep: SweepState,
+    findings: list[dict[str, Any]],
+    line_offsets: dict[str, list[int]],
+) -> None:
+    """Replace synthetic text line numbers with real byte offsets for .so evidence.
+
+    Native strings are swept as newline-joined text so the endpoint/domain rules
+    can run unchanged, but a line number inside a binary is a fabricated cite.
+    Line N of the joined text is the Nth scanned string, whose true file offset
+    is known, so the cite is retargeted to ``offset`` and the fake line removed.
+    """
+
+    def fix(item: Any) -> None:
+        if not isinstance(item, dict):
+            return
+        relative = item.get("path")
+        line = item.get("line")
+        offsets = line_offsets.get(relative) if isinstance(relative, str) else None
+        if not offsets or not isinstance(line, int) or line <= 0:
+            return
+        if line <= len(offsets):
+            item["offset"] = offsets[line - 1]
+        item.pop("line", None)
+
+    for record in sweep.api_endpoints.values():
+        for evidence in record.get("evidence", []):
+            fix(evidence)
+    for record in sweep.api_routes.values():
+        for evidence in record.get("evidence", []):
+            fix(evidence)
+    for locations in sweep.api_headers.values():
+        for evidence in locations:
+            fix(evidence)
+    for evidence in sweep.rate_limit_indicators:
+        fix(evidence)
+    for evidence in sweep.api_call_sites:
+        fix(evidence)
+    for evidence in sweep.decoded_strings:
+        fix(evidence)
+    for finding in findings:
+        fix(finding.get("evidence"))
 
 
 def _emit_progress(progress: Callable[[str], None] | None, message: str) -> None:

@@ -211,6 +211,11 @@ DECISIONS / CONSTRAINTS (append-only)
   register tracking (last const-string per register), evidence = invoke line.
 - 2026-11-16: strings translate non-printables to NUL once per window and run a
   trivial regex (measured ~20% faster than a char-class regex over binary).
+- 2026-11-16: native strings are swept as newline-joined text to reuse the
+  endpoint/domain rules, then evidence is retargeted from synthetic line
+  numbers to real byte offsets (_retarget_native_evidence). An endpoint found
+  inside a string cites the START of the containing string: a substring's own
+  offset would require a second search and adds no traceability.
 - 2026-11-16: a non-ELF file named `.so` flips status to partial (coverage law),
   recorded as native_not_elf; it is never reported as "no symbols".
 

@@ -381,6 +381,8 @@ class NativeAnalysis:
     unmapped_entries: list[dict[str, Any]] = field(default_factory=list)
     load_sites: list[dict[str, Any]] = field(default_factory=list)
     strings_by_lib: dict[str, str] = field(default_factory=dict)
+    # line N of strings_by_lib[lib] is string_line_offsets[lib][N-1] in the file
+    string_line_offsets: dict[str, list[int]] = field(default_factory=dict)
 
 
 def analyze_native(
@@ -574,6 +576,9 @@ def analyze_native(
         strings = scan_strings(lib_path)
         report.strings = strings
         analysis.strings_by_lib[relative] = strings.text()
+        analysis.string_line_offsets[relative] = [
+            offset for _value, offset in strings.values
+        ]
         if strings.truncated:
             analysis.diagnostics.append({
                 "code": "native_string_limit",
