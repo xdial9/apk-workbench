@@ -287,3 +287,37 @@ def test_download_aborts_when_fresh_delivery_diverges_from_frozen_plan(monkeypat
     with pytest.raises(gp.GooglePlayError, match="does not match the frozen plan"):
         source.download(plan, workspace=tmp_path, run_id="run-diverge")
 # new downloader built after refresh
+
+
+def test_discover_returns_apps_and_channels_even_at_the_total_limit(monkeypatch):
+    """Both early-return paths must keep the (apps, channels) contract.
+
+    The CLI unpacks two values (cli/main.py), so a bare list here would either
+    raise or silently mis-assign when total_limit is reached mid-crawl.
+    """
+    apps = [
+        gp.PlayApp(f"com.example.app{index}", f"App {index}", "Dev", "1.0", index)
+        for index in range(1, 6)
+    ]
+
+    by_category = gp.GooglePlaySource()
+    monkeypatch.setattr(by_category, "top", lambda category_id, limit=200: apps)
+    found, channels = by_category.discover(
+        category_ids=["APPLICATION"], per_category_limit=200, total_limit=2
+    )
+    assert [app.package_id for app in found] == ["com.example.app1", "com.example.app2"]
+    assert channels == {
+        "com.example.app1": "category:APPLICATION",
+        "com.example.app2": "category:APPLICATION",
+    }
+
+    by_query = gp.GooglePlaySource()
+    monkeypatch.setattr(by_query, "search", lambda query, limit=516: apps)
+    found, channels = by_query.discover(
+        queries=("banking",), category_ids=[], per_query_limit=516, total_limit=2
+    )
+    assert [app.package_id for app in found] == ["com.example.app1", "com.example.app2"]
+    assert channels == {
+        "com.example.app1": "query:banking",
+        "com.example.app2": "query:banking",
+    }

@@ -8,7 +8,7 @@ Upgrades over the 0.2.0 loop (surface.txt 1C list):
 - base64 candidate decoding with endpoint reconciliation;
 - windowed Retrofit annotation state machine (bounded, no unbounded carry);
 - per-line lowercasing only (no whole-file lowercase copies);
-- precompiled code rules; ±2-line evidence context with size caps;
+- precompiled code rules; ±2-line evidence context, full, no char cap (CAP-FREE);
 - header hits carry a code/doc context class.
 All established shapes are preserved (endpoints/api_routes/headers/rate
 limit structures keep their consumer keys; new keys are additive).
@@ -85,12 +85,83 @@ CODE_SUFFIXES = frozenset({
     ".yml", ".yaml", ".cfg", ".conf", ".ini", ".js", ".css", ".html", ".htm",
 })
 
-SNIPPET_CONTEXT_CHARS = 500
+# CAP-FREE: SNIPPET_CONTEXT_CHARS deleted. Context is already bounded by +/-2 lines (5 lines total).
+# Truncating to 500 chars hid evidence from AI. Keep full 5-line context.
+SNIPPET_CONTEXT_CHARS = None  # deprecated, do not use to truncate
 
 # Tooling namespace hosts are build-tool artifacts, not app endpoints
 # (evidence: the xmlns declaration they appear in). Skipped at the URL
 # recorder level so the endpoint inventory stays app-focused.
 TOOLING_URL_HOSTS = frozenset({"schemas.android.com", "www.w3.org"})
+
+# ---- DOMAIN_RE false-positive filter (smoke v2: 4/7 endpoints were fake) ----
+# DOMAIN_RE matches ANY dotted string with a 2+ letter last label, so it
+# matches Java package names, permission names, and intent actions:
+#   android.intent.action.view, android.permission.camera, com.example.smoke
+# These are not domains. Filter them, don't record them as endpoints.
+NON_DOMAIN_PREFIXES = (
+    "android.", "java.", "javax.", "kotlin.", "kotlinx.", "androidx.",
+    "com.google.android.", "com.android.", "org.apache.", "org.json.",
+    "org.w3c.", "org.xml.", "org.jetbrains.", "org.intellij.",
+    "dalvik.", "com.squareup.", "com.facebook.",
+)
+NON_DOMAIN_SUBSTRINGS = (
+    ".permission", ".permission.", "permission.",
+    ".intent.action", ".intent.category", ".intent.extra",
+    "intent.action", "intent.category",
+    ".content.", "content://",
+)
+# Known public + internal suffixes. A domain_candidate whose TLD is not in
+# this set is almost always a Java identifier (view, camera, smoke, permission).
+# URL kinds (kind == "url") are NOT filtered by this list — only bare
+# domain_candidate strings are. Internal hosts (.local/.internal/.lan) are kept.
+KNOWN_DOMAIN_TLDS = frozenset({
+    "com", "net", "org", "io", "co", "app", "dev", "ai", "me", "tv", "cc",
+    "xyz", "info", "biz", "us", "uk", "de", "fr", "jp", "cn", "in", "au",
+    "ca", "br", "ru", "kr", "it", "nl", "es", "se", "ch", "be", "at",
+    "nz", "sg", "hk", "tw", "gg", "ly", "to", "fm", "am", "eu", "pl",
+    "cz", "dk", "fi", "no", "pt", "gr", "hu", "tr", "za", "mx", "ar",
+    "cl", "pe", "ve", "id", "my", "ph", "vn", "th", "il", "sa", "ae",
+    "eg", "ng", "ke", "ua", "ro", "bg", "hr", "si", "sk", "lt", "lv",
+    "ee", "is", "ie", "lu", "mt", "cy", "gov", "edu", "mil", "int",
+    "local", "internal", "lan", "corp", "home", "intranet",
+    "test", "example", "invalid", "localhost", "onion",
+})
+
+def is_non_domain_candidate(value: str, manifest_package: str | None = None) -> bool:
+    """True if a DOMAIN_RE match is a Java/Android identifier, not a domain."""
+    lowered = value.lower().rstrip(".")
+    if not lowered or "." not in lowered:
+        return True
+    if lowered in TOOLING_URL_HOSTS:
+        return True
+    if any(lowered.startswith(p) for p in NON_DOMAIN_PREFIXES):
+        return True
+    if any(sub in lowered for sub in NON_DOMAIN_SUBSTRINGS):
+        return True
+    if manifest_package:
+        pkg = manifest_package.lower().rstrip(".")
+        if lowered == pkg or lowered.startswith(pkg + "."):
+            return True
+    # TLD check: last label must be a known public/internal suffix.
+    # com.example.smoke -> smoke not in set -> filtered.
+    # android.permission.camera -> camera not in set -> filtered.
+    # android.intent.action.view -> view not in set -> filtered.
+    # api.example.com -> com in set -> kept.
+    tld = lowered.rsplit(".", 1)[-1]
+    if tld not in KNOWN_DOMAIN_TLDS:
+        return True
+    return False
+
+
+def _is_ipv4_literal(value: str) -> bool:
+    """True for a dotted-quad host: the domain filters must never judge these.
+
+    `is_non_domain_candidate` rejects unknown last labels (view, camera, smoke,
+    and the numeric label of 10.0.0.9). A literal IPv4 host:port is not a Java
+    identifier, so that filter is applied to domain-shaped hosts only.
+    """
+    return bool(IPV4_RE.fullmatch(value))
 
 
 def classify_host(host: str | None) -> str | None:
@@ -163,6 +234,9 @@ class SweepState:
         self.decoded_strings: list[dict] = []
         self.decoded_seen: set[str] = set()
         self.findings: list[dict] = []
+        # Manifest package (set by apk_surface before sweeping) so DOMAIN_RE
+        # can filter the app's own package name (com.example.smoke is not a domain).
+        self.manifest_package: str | None = None
         # Prepared once per artifact, reused for every file (PERFORMANCE LAW:
         # no per-line marker lowercasing / regex lookup churn).
         self._dependency_matchers: tuple[
@@ -364,6 +438,12 @@ class SweepState:
                     port = int(port_text)
                     if not (0 < port <= 65535):
                         continue
+                    # Same Java-identifier filter, domain-shaped hosts only:
+                    # android.permission:8080 is not a host:port, but 10.0.0.9:9090 is.
+                    if not _is_ipv4_literal(host) and is_non_domain_candidate(
+                        host, self.manifest_package
+                    ):
+                        continue
                     self.record_endpoint(
                         f"{host}:{port_text}", "host_port", host=host, port=port,
                         evidence={"path": relative, "line": line_number},
@@ -382,8 +462,9 @@ class SweepState:
                     if (
                         value
                         and value not in TOOLING_URL_HOSTS
-                        and not value.endswith((".xml", ".json", ".png", ".jpg", ".smali"))
+                        and not value.endswith((".xml", ".json", ".png", ".jpg", ".smali", ".java", ".kt", ".class", ".dex", ".so", ".aar", ".gradle", ".properties", ".txt", ".md", ".html", ".css", ".js", ".yaml", ".yml"))
                         and value not in self.endpoint_hosts
+                        and not is_non_domain_candidate(value, self.manifest_package)
                     ):
                         self.record_endpoint(
                             value, "domain_candidate",
@@ -426,7 +507,8 @@ class SweepState:
                     self.findings.append(build_finding(
                         "encoded_string_decoded", "secrets_hint", "info",
                         "Base64-encoded string decodes to a network indicator",
-                        f"Encoded literal decoded; reveals: {', '.join(h.group(0) for h in hits[:3])}",
+                        # CAP-FREE: was capped at 3 hits - hid decoded indicators from AI. List ALL.
+                        f"Encoded literal decoded; reveals: {', '.join(h.group(0) for h in hits)}",
                         relative, line_number, raw, 0.7,
                     ))
             if is_smali and "invoke-" in line:
@@ -469,8 +551,6 @@ class SweepState:
                             relative, line_number, line, confidence,
                         ))
                         # context is additive evidence (never replaces the
-                        # compat snippet); capped to keep summaries lean
-                        self.findings[-1]["evidence"]["context"] = (
-                            context[:SNIPPET_CONTEXT_CHARS]
-                        )
+                        # compat snippet); CAP-FREE: was capped to 500 chars, now full 5-line context
+                        self.findings[-1]["evidence"]["context"] = context
         del lines

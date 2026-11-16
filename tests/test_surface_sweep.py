@@ -102,6 +102,14 @@ def test_ipv6_and_host_port_pairs(tmp_path):
     assert ("host_port", "gateway.internal:8443") in kinds
 
 
+def test_host_port_filter_still_rejects_java_identifiers(tmp_path):
+    # The Java-identifier filter must keep working for domain-shaped values;
+    # the IPv4 exemption above must not turn it off.
+    state = _sweep(tmp_path, '"android.permission.camera:8080"\n')
+    kinds = {(e["kind"], e["value"]) for e in state.api_endpoints.values()}
+    assert ("host_port", "android.permission.camera:8080") not in kinds
+
+
 def test_base64_candidate_decoded_to_endpoint(tmp_path):
     import base64
 
@@ -139,13 +147,16 @@ def test_headers_carry_context_class(tmp_path):
     assert entry["context_class"] == "doc_or_other"
 
 
-def test_rule_findings_carry_capped_context(tmp_path):
+def test_rule_findings_carry_full_context(tmp_path):
     text = "line-before-2\nline-before-1\n" + 'setJavaScriptEnabled(true)\n' + "line-after-1\nline-after-2\n"
     state = _sweep(tmp_path, text)
     hit = next(f for f in state.findings if f["rule_id"] == "webview_javascript")
     assert hit["evidence"]["line"] == 3
+    # CAP-FREE: was capped to SNIPPET_CONTEXT_CHARS (500). Now full 5-line context, no char cap.
+    assert "line-before-2" in hit["evidence"]["context"]
     assert "line-before-1" in hit["evidence"]["context"]
-    assert len(hit["evidence"]["context"]) <= sweep.SNIPPET_CONTEXT_CHARS
+    assert "line-after-1" in hit["evidence"]["context"]
+    assert "line-after-2" in hit["evidence"]["context"]
 
 
 def test_ipv6_bracket_shape_without_colon_preserved(tmp_path):

@@ -263,7 +263,7 @@ class GooglePlaySource:
         per_query_limit: int = 516,
         total_limit: int = 15000,
         on_batch: Callable[[list[PlayApp]], None] | None = None,
-    ) -> list[PlayApp]:
+    ) -> tuple[list[PlayApp], dict[str, str]]:
         """Collect and de-duplicate Play search and top-free chart results.
 
         ``on_batch`` is invoked after every query and category channel with
@@ -293,7 +293,7 @@ class GooglePlaySource:
                     channels[app.package_id] = channel
                 if len(found) >= total_limit:
                     flush()
-                    return list(found.values())
+                    return list(found.values()), dict(channels)
             flush()
         for category_index, category_id in enumerate(categories, start=1):
             self._emit_progress(f"[Google Play] Discovery category {category_index}/{len(categories)}: {category_id}")
@@ -304,7 +304,7 @@ class GooglePlaySource:
                     channels[app.package_id] = channel
                 if len(found) >= total_limit:
                     flush()
-                    return list(found.values())
+                    return list(found.values()), dict(channels)
             flush()
         flush()
         return list(found.values()), channels
