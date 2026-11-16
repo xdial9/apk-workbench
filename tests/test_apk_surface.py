@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 from apkworkbench.analysis.apk_surface import analyze_apk_surface
+from tests.elf_fixtures import symbol, write_elf
 
 
 def test_apk_surface_analyzer_inventories_manifest_code_endpoints_and_libraries(tmp_path):
@@ -46,7 +47,12 @@ def test_apk_surface_analyzer_inventories_manifest_code_endpoints_and_libraries(
     (root / "smali/com/example/Dependency.smali").write_text(
         ".class public Lokhttp3/OkHttpClient;\n", encoding="utf-8"
     )
-    (root / "lib/arm64-v8a/libnative.so").write_bytes(b"native")
+    # A real ELF (not a 6-byte placeholder): native analysis now parses the
+    # file and records which JNI exports map to which Java native methods.
+    write_elf(
+        root / "lib/arm64-v8a/libnative.so",
+        symbols=(symbol("Java_com_example_Main_run"), symbol("malloc", shndx=0)),
+    )
     result = analyze_apk_surface(root)
 
     assert result["status"] == "success"

@@ -49,7 +49,13 @@ class FactStore:
             self._by_key[key] = record
         record["count"] += 1
         if evidence:
-            record["evidence"].append(evidence)
+            # A call site may supply one evidence item or a whole list (a JNI
+            # entry cites both the symbol record and the smali declaration).
+            # Both land as individual evidence items, never as a nested list.
+            if isinstance(evidence, list):
+                record["evidence"].extend(item for item in evidence if item)
+            else:
+                record["evidence"].append(evidence)
         return fp
 
     def fingerprints(self, kind: str | None = None) -> list[str]:

@@ -33,6 +33,11 @@ from apkworkbench.analysis.surface.deductions import (
     sdk_stack,
 )
 from apkworkbench.analysis.surface.facts import FactStore, package_root_histogram
+from apkworkbench.analysis.surface.native import (
+    NativeMethodIndex,
+    analyze_native,
+    extract_library_loads,
+)
 from apkworkbench.analysis.surface.manifest_v2 import (
     looks_like_key,
     parse_backup_rules,
@@ -232,31 +237,6 @@ def _parse_manifest(path: Path, relative: str, findings: list[dict[str, Any]]) -
     return parse_manifest_v2(path, relative, findings)
 
 
-_NATIVE_STRING_RE = re.compile(rb"[ -~]{4,}")
-
-def _extract_native_strings(path: Path, *, max_bytes: int = 50_000_000) -> str | None:
-    """Extract printable ASCII strings from a .so/.a file (ELF strings, not a full parse).
-
-    Returns newline-joined strings, or None if the file cannot be read.
-    Caps at max_bytes read to avoid OOM on huge libs; the cap is recorded
-    by the caller as a diagnostic, never silently hidden.
-    """
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return None
-    try:
-        with path.open("rb") as handle:
-            data = handle.read(max_bytes + 1)
-    except OSError:
-        return None
-    if len(data) > max_bytes:
-        # Truncated read: caller records diagnostic; strings still swept from first max_bytes.
-        pass
-    parts = _NATIVE_STRING_RE.findall(data)
-    return "\n".join(part.decode("ascii", errors="replace") for part in parts)
-
-
 def analyze_apk_surface(
     apktool_dir: str | Path,
     *,
@@ -387,6 +367,11 @@ def analyze_apk_surface(
     )
     sweep = SweepState(DEPENDENCY_MARKERS)
     sweep.api_clients = {name: [] for name in API_CLIENT_MARKERS}
+    # Native mapping inputs, collected in the same pass (no second smali read):
+    # declared `native` methods join to Java_* exports; System.load calls join
+    # to .so files. Both are only parsed when the file actually contains them.
+    native_method_index = NativeMethodIndex()
+    native_loads: list[dict[str, Any]] = []
     # DOMAIN filter needs the manifest package (com.example.smoke is not a domain).
     # Manifest is parsed above, so package is known before sweeping.
     if isinstance(manifest_facts, dict):
@@ -429,28 +414,29 @@ def analyze_apk_surface(
             dependency_markers=DEPENDENCY_MARKERS,
             emit=lambda message: None,
         )
-    # ---- Native .so/.a strings sweep (G4) ----
-    # Surface previously listed .so paths only (inventory_only). Extract
-    # printable strings and sweep them with the same SweepState so native
-    # URLs/domains/secrets appear in endpoints/facts, not just in a path list.
-    native_strings_scanned = 0
-    native_strings_bytes = 0
-    native_secret_hints: list[dict[str, Any]] = []
-    for lib_rel in native_libraries:
-        lib_path = root / lib_rel
-        strings_text = _extract_native_strings(lib_path)
-        if strings_text is None:
-            diagnostics.append({"code": "native_strings_read_failed", "message": f"{lib_rel}: could not read native library"})
+        if path.suffix.lower() == ".smali":
+            native_method_index.add_file(text, relative)
+            native_loads.extend(extract_library_loads(text, relative))
+    # ---- Native analysis (G4 + crown jewel 5) ----
+    # ELF parse -> exports/imports, JNI join to declared native methods, load
+    # sites, streamed strings (ASCII + UTF-16LE), evidence-only findings. The
+    # deduped string set still feeds the endpoint sweep so native URLs/domains
+    # keep appearing in endpoints/facts exactly as before.
+    native_analysis = analyze_native(
+        root,
+        native_libraries,
+        native_method_index=native_method_index,
+        library_loads=native_loads,
+        progress=progress,
+    )
+    findings.extend(native_analysis.findings)
+    diagnostics.extend(native_analysis.diagnostics)
+    for lib_rel, strings_text in native_analysis.strings_by_lib.items():
+        if not strings_text:
             continue
-        native_strings_scanned += 1
-        native_strings_bytes += len(strings_text)
-        for _line in strings_text.splitlines():
-            _low = _line.lower()
-            if any(k in _low for k in ("secret", "passwd", "password", "api_key", "apikey", "api-key", "private_key", "private-key", "credential", "auth_token", "access_token")):
-                native_secret_hints.append({"value": _line.strip()[:500], "path": lib_rel})
         sweep.sweep_text(
             relative=lib_rel,
-            path=lib_path,
+            path=root / lib_rel,
             text=strings_text,
             code_rules=COMPILED_CODE_RULES,
             api_client_markers=API_CLIENT_MARKERS,
@@ -475,12 +461,13 @@ def analyze_apk_surface(
     if not smali_files:
         coverage["smali_security_indicators"] = "not_found"
     coverage["dependency_fingerprints"] = "success" if code_scanned else "not_scanned"
-    coverage["native_libraries"] = "inventory_only" if native_libraries else "not_found"
     partial_diagnostics = {
         "symlink_entries_skipped", "text_file_limit", "text_read_failed",
         "manifest_parse_failed", "network_config_parse_failed",
         "network_config_referenced_not_found",
         "finding_limit",
+        "native_elf_parse_failed", "native_not_elf", "native_string_limit",
+        "native_string_fact_limit", "native_finding_limit",
     }
     if symlink_count or any(item["code"] in partial_diagnostics for item in diagnostics):
         for area in ("endpoints_and_domains", "smali_security_indicators", "dependency_fingerprints"):
@@ -576,8 +563,11 @@ def analyze_apk_surface(
             fact_store.add("dependency_sdk", dependency["name"], evidence=None)
     for library in native_libraries:
         fact_store.add("native_library", library, evidence={"path": library})
-    for hint in native_secret_hints:
-        fact_store.add("native_secret_hint", hint["value"], evidence={"path": hint["path"]})
+    for fact in native_analysis.facts:
+        fact_store.add(
+            fact["kind"], fact["value"],
+            evidence=fact.get("evidence"), extra=fact.get("extra"),
+        )
 
     histogram = package_root_histogram(tree.entries, manifest_facts.get("package"))
     smali_entries = [
@@ -612,8 +602,7 @@ def analyze_apk_surface(
             deductions.append(deduction)
     deductions.sort(key=lambda item: item["id"])
     # Deduction facts now carry evidence from deductions.py directly. No post-hoc enrichment (re-adding would double-count).
-    if native_libraries:
-        coverage["native_libraries"] = "strings_scanned" if native_strings_scanned else "read_failed"
+    coverage.update(native_analysis.coverage)
     result = {
         "schema_version": 1,
         "analyzer": {"id": ANALYZER_ID, "version": ANALYZER_VERSION},
@@ -638,6 +627,10 @@ def analyze_apk_surface(
             "resource_and_asset_file_count": len(resource_files),
             "resource_and_asset_paths": [path.relative_to(root).as_posix() for path in resource_files],
             "native_libraries": native_libraries,
+            "native_analysis": native_analysis.libraries,
+            "jni_entries": native_analysis.jni_entries,
+            "jni_unmapped": native_analysis.unmapped_entries,
+            "native_library_loads": native_analysis.load_sites,
             "dependencies": dependencies,
             "endpoints": [metadata for _value, metadata in sorted(api_endpoints.items())],
             "api_routes": [metadata for _route, metadata in sorted(api_routes.items())],
@@ -673,9 +666,7 @@ def analyze_apk_surface(
             "api_client_library_evidence_count": sum(len(items) for items in api_clients.values()),
             "rate_limit_indicator_count": len(rate_limit_indicators),
             "dependency_fingerprint_count": len(dependencies),
-            "native_library_count": len(native_libraries),
-            "native_strings_scanned": native_strings_scanned,
-            "native_strings_bytes": native_strings_bytes,
+            **native_analysis.metrics,
         },
     }
     return finalize_result(result, tree_root=tree_root)

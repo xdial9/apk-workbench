@@ -250,6 +250,7 @@ class ElfSymbol:
     visibility: int
     shndx: int
     table: str  # "dynsym" | "symtab"
+    file_offset: int = -1  # byte offset of this symbol record in the file
 
     @property
     def is_export(self) -> bool:
@@ -781,6 +782,7 @@ def _read_symbols(reader: _Reader, result: ElfParseResult, endian: str) -> None:
                 visibility=other & 0x3,
                 shndx=shndx,
                 table=table_name,
+                file_offset=section.offset + index * entry_size,
             )
             if symbol.is_export:
                 result.exports.append(symbol)
