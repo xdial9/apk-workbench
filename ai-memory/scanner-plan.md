@@ -36,9 +36,9 @@ Everything below is the fix ladder. P0-P1 are done and verified.
 |---|---|---|---|
 | P0 | Truth in the data plane: per-file ledger, honest coverage, shard not drop | **DONE** | `a88eac2`, `131fd69` |
 | P1 | Identity/trust: signing schemes, certificates, ABIs, uses-library | **DONE** | `50bb2d0`, `ec9419d` |
-| P2a | Resource table: `resources.arsc` -> id/type/name/value -> `resources.jsonl` | **DONE** | (this commit) |
-| P2b | Resource links: smali id cross-ref + decoded-XML file attribution | **DONE** | (this commit) |
-| P2c | FileProvider `file_paths.xml` roots + layout/view inventory | **DONE** | (this commit) |
+| P2a | Resource table: `resources.arsc` -> id/type/name/value -> `resources.jsonl` | **DONE** | `25e54b4` |
+| P2b | Resource links: smali id cross-ref + decoded-XML file attribution | **DONE** | `133cb45` |
+| P2c | FileProvider `file_paths.xml` roots + layout/view inventory | **DONE** | `4adb6a5` |
 | P3 | Code model: class/method/field inventory, call graph v2, reflection sites | queued | — |
 | P4 | Link graph: typed edges with two cites each + entry_points | queued | — |
 | P5 | Detection breadth: 11 deduction templates, rule catalog 19 -> ~60 | queued | — |
@@ -234,8 +234,11 @@ An AI can answer these **from the bundle alone, with a citation**:
 | D17 | facts/ledger written at artifact root, not `surface/` | open (P8) |
 | D18 | only 3 driver-level tests | improved (301 total) |
 
-Also fixed outside the ledger: `insecure_http` false positive on the Android
-XML namespace (`ec9419d`).
+Fixed outside the ledger:
+- `insecure_http` false positive on the Android XML namespace (`ec9419d`).
+- `FactStore.add(extra=...)` could overwrite the fact's own `kind` / `value` /
+  `fingerprint` / `count` / `evidence`. It corrupted facts twice (endpoint
+  kind, resource value) before the guard in `facts.py` made it raise (P2b).
 
 --------------------------------------------------------------------------------
 ## 4. DECISIONS TAKEN (do not re-litigate without the user)
@@ -278,9 +281,30 @@ file and the briefing **before** the final commit of a phase.
 | ledger | `tests/test_surface_ledger.py` | 8 |
 | shards | `tests/test_surface_shards.py` | 6 |
 | identity | `tests/test_identity.py` | 11 |
+| resources (table + links) | `tests/test_resources.py` | 12 |
+| provider + layout | `tests/test_xml_assets.py` | 7 |
 | sweep | `tests/test_surface_sweep.py` | 16 |
 | classify | `tests/test_surface_classify.py` | 7 |
-| facts / handoff / workbook | `tests/test_surface_facts.py`, `test_surface_handoff.py`, `test_surface_serialize.py` | 22 |
+| facts / handoff / workbook | `tests/test_surface_facts.py` (9), `test_surface_handoff.py` (10), `test_surface_serialize.py` (4) | 23 |
 | native | `tests/test_native_*.py` (4 files) | 51 |
 | DEX | `tests/test_androguard_dex.py` | 4 |
-| resources | `tests/test_resources.py` | 7 |
+
+Scanner-related tests: 150 of the 321 collected. Hermetic fixture builders:
+`tests/elf_fixtures.py`, `tests/identity_fixtures.py`, `tests/arsc_fixtures.py`.
+
+--------------------------------------------------------------------------------
+## 7. COMMIT LOG (scanner track, oldest first)
+--------------------------------------------------------------------------------
+| Commit | What |
+|---|---|
+| `a88eac2` | P0: per-file ledger (`files.jsonl`), named symlinks/unreadable, extended magic table, honest `resource_inventory`, dead diagnostics removed |
+| `131fd69` | P0c: shard overflow (`shards/*.jsonl` + `shards-index.json`), metrics emitted/sharded/dropped, one hardened `DOMAIN_RE` |
+| `50bb2d0` | P1: APK identity (signing block v2/v3/v3.1, v1 PKCS#7, ABIs) + `apk:` citations |
+| `ec9419d` | fix: `insecure_http` no longer fires on the Android XML namespace |
+| `25e54b4` | P2a: `resources.arsc` -> `resources.jsonl` |
+| `133cb45` | P2b: smali resource-id resolution + definition files + FactStore guard |
+| `4adb6a5` | P2c: FileProvider roots + layout/view inventory (P2 complete) |
+
+Memory-only commits interleaved: `a7aa2af`, `eadf73d`, `45bec3e`, `cb52d53`.
+Push state: `origin/feat/native-elf-reader` tracks HEAD. `main` is still
+`ca2858c` (pre-scanner) — promoting it is the user's call.
