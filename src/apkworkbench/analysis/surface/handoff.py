@@ -69,8 +69,49 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def render_location(
+    path: Any,
+    line: Any = None,
+    offset: Any = None,
+    tree_root: str = TREE_ROOT_PREFIX,
+) -> str:
+    """Render one citation: ``path:line`` for text, ``path@0xOFFSET`` for bytes.
+
+    Native evidence is byte-addressed; a decoded text line number would be a
+    fabrication. The offset form is explicit about the address space so the
+    analyst never opens a binary as if it were text.
+    """
+    location = _folder_relative(str(path), tree_root)
+    if line:
+        return f"{location}:{line}"
+    if isinstance(offset, int) and not isinstance(offset, bool) and offset >= 0:
+        return f"{location}@0x{offset:x}"
+    return location
+
+
+def evidence_address_space(evidence: Any) -> str | None:
+    """Name the address space actually present in an evidence list."""
+    if isinstance(evidence, dict):
+        evidence = [evidence]
+    if not isinstance(evidence, list):
+        return None
+    spaces = set()
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("offset"), int):
+            spaces.add("byte")
+        elif item.get("line"):
+            spaces.add("line")
+    if len(spaces) == 1:
+        return spaces.pop()
+    if spaces:
+        return "mixed"
+    return None
+
+
 def _locations(evidence: Any, tree_root: str = TREE_ROOT_PREFIX) -> list[str]:
-    """Render evidence items as ``path:line`` strings; never invent a line."""
+    """Render evidence items as citations; never invent a line or an offset."""
     locations: list[str] = []
     if isinstance(evidence, dict):
         evidence = [evidence]
@@ -82,9 +123,9 @@ def _locations(evidence: Any, tree_root: str = TREE_ROOT_PREFIX) -> list[str]:
         path = item.get("path")
         if not path:
             continue
-        line = item.get("line")
-        location = _folder_relative(str(path), tree_root)
-        locations.append(f"{location}:{line}" if line else location)
+        locations.append(
+            render_location(path, item.get("line"), item.get("offset"), tree_root)
+        )
     return locations
 
 
@@ -100,7 +141,7 @@ def _fact_entry(
     locations = _locations(fact.get("evidence"), tree_root)
     return {
         # CAP-FREE: was 12-char fingerprint prefix - can collide, AI cannot match full fingerprint. Use FULL fingerprint.
-        "entry_id": f"FACT-{str(fact.get('fingerprint', ''))}",
+        "entry_id": f"FACT-{fact.get('fingerprint', '')}",
         "source": "facts.jsonl",
         "facts_jsonl_line": line_number,
         "kind": fact.get("kind"),
@@ -110,6 +151,7 @@ def _fact_entry(
         "occurrences": fact.get("count"),
         "has_location": bool(locations),
         "locations": locations,
+        "address_space": evidence_address_space(fact.get("evidence")),
         "flags": extra.get("flags") or [],
         "host_class": extra.get("host_class"),
         "how_to_verify": (
@@ -134,6 +176,7 @@ def _finding_entry(
         "confidence": finding.get("confidence"),
         "has_location": bool(locations),
         "locations": locations,
+        "address_space": evidence_address_space(evidence),
         "context": context if isinstance(context, (str, list)) else None,
         "how_to_verify": (
             "open the cited file at the cited line; the context key holds the "

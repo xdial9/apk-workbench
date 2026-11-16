@@ -282,3 +282,94 @@ def test_driver_emits_handoff_files_beside_static_analysis(tmp_path, monkeypatch
         entry["locations"] and entry["locations"][0].startswith("apktool/")
         for entry in location_map["entries"]
     )
+
+
+def test_native_byte_offset_citation_round_trips_and_line_cites_are_unchanged():
+    """N4: native evidence is byte-addressed; text evidence keeps path:line."""
+    from apkworkbench.analysis.surface.handoff import render_location
+
+    result = {
+        "schema_version": 1,
+        "analyzer": {"id": "apk-surface", "version": "0.4.0"},
+        "status": "success",
+        "facts": [
+            {
+                "kind": "native_export",
+                "value": "lib/arm64-v8a/libfoo.so::Java_com_example_Foo_bar",
+                "fingerprint": "a" * 64,
+                "count": 1,
+                "evidence": [
+                    {"path": "lib/arm64-v8a/libfoo.so", "offset": 4096},
+                ],
+            },
+            {
+                "kind": "url",
+                "value": "https://api.example.test",
+                "fingerprint": "b" * 64,
+                "count": 1,
+                "evidence": [{"path": "smali/com/example/A.smali", "line": 12}],
+            },
+        ],
+        "findings": [
+            {
+                "rule_id": "native_process_exec",
+                "category": "native_execution",
+                "confidence": 0.8,
+                "evidence": {
+                    "path": "lib/arm64-v8a/libfoo.so",
+                    "offset": 32,
+                    "line": None,
+                    "snippet": "system",
+                },
+            }
+        ],
+        "deductions": [],
+    }
+
+    payload = build_location_map(result)
+    native_fact, text_fact, finding = payload["entries"][0], payload["entries"][1], payload["entries"][2]
+
+    assert native_fact["locations"] == ["apktool/lib/arm64-v8a/libfoo.so@0x1000"]
+    assert native_fact["address_space"] == "byte"
+    assert native_fact["has_location"] is True
+    assert text_fact["locations"] == ["apktool/smali/com/example/A.smali:12"]
+    assert text_fact["address_space"] == "line"
+    assert finding["locations"] == ["apktool/lib/arm64-v8a/libfoo.so@0x20"]
+    assert finding["address_space"] == "byte"
+    # Existing text rendering is untouched (no offset, no line -> bare path).
+    assert render_location("smali/com/example/A.smali", 12) == "apktool/smali/com/example/A.smali:12"
+    assert render_location("lib/arm64-v8a/libfoo.so", None) == "apktool/lib/arm64-v8a/libfoo.so"
+
+
+def test_workbook_location_ledger_renders_native_offsets():
+    from apkworkbench.analysis.surface.workbook import build_workbook
+
+    result = {
+        "status": "success",
+        "coverage": {},
+        "facts": [
+            {
+                "kind": "native_string",
+                "value": "https://native.example.test",
+                "fingerprint": "c" * 64,
+                "count": 1,
+                "evidence": [{"path": "lib/arm64-v8a/libfoo.so", "offset": 255}],
+            }
+        ],
+        "findings": [
+            {
+                "rule_id": "native_anti_debug",
+                "confidence": 0.7,
+                "evidence": {"path": "lib/arm64-v8a/libfoo.so", "offset": 16, "line": None},
+            }
+        ],
+        "deductions": [],
+    }
+
+    ledger = build_workbook(result)["location_ledger"]
+
+    # The workbook ledger cites tree_root-relative paths (its documented rule);
+    # native entries add the byte address without changing the prefix rule.
+    assert ledger["facts"][0]["locations"] == ["lib/arm64-v8a/libfoo.so@0xff"]
+    assert ledger["facts"][0]["address_space"] == "byte"
+    assert ledger["findings"][0]["location"] == "lib/arm64-v8a/libfoo.so@0x10"

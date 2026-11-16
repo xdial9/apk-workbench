@@ -12,6 +12,22 @@ from __future__ import annotations
 
 from typing import Any
 
+from apkworkbench.analysis.surface.handoff import evidence_address_space
+
+
+def _render_local(path: Any, line: Any, offset: Any = None) -> str:
+    """Workbook cites stay tree_root-relative (ledger note), so no prefix here.
+
+    Byte-addressed native evidence gets the same @0xOFFSET form as the handoff
+    plane; text evidence stays path:line exactly as before.
+    """
+    text = str(path)
+    if line:
+        return f"{text}:{line}"
+    if isinstance(offset, int) and not isinstance(offset, bool) and offset >= 0:
+        return f"{text}@0x{offset:x}"
+    return text
+
 MISSION = (
     "You are the final analysis stage of a deterministic static-analysis "
     "pipeline. Your job: (1) map the raw decompiled application tree "
@@ -69,9 +85,9 @@ def _fact_locations(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for fact in facts:
         evidence = fact.get("evidence") or []
         locations = [
-            f"{item.get('path', '')}:{item.get('line')}" if item.get("line")
-            else str(item.get("path", ""))
+            _render_local(item.get("path", ""), item.get("line"), item.get("offset"))
             for item in evidence
+            if item.get("path")
         ]
         if not locations:
             continue
@@ -82,6 +98,7 @@ def _fact_locations(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "fingerprint": fact.get("fingerprint"),
             "occurrences": fact.get("count"),
             "locations": locations,
+            "address_space": evidence_address_space(evidence),
             "how_to_verify": "open the cited file(s); recompute hashes by streaming the file",
         })
     return entries
@@ -99,7 +116,8 @@ def _finding_locations(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "kind": "finding",
             "rule_id": finding.get("rule_id"),
             "index": index,
-            "location": f"{path}:{line}" if line else path,
+            "location": _render_local(path, line, evidence.get("offset")),
+            "address_space": evidence_address_space(evidence),
             "confidence": finding.get("confidence"),
             "how_to_verify": "open the cited file at the cited line; context key holds +/-2 lines",
         })
@@ -160,15 +178,15 @@ def _flagged_fact_leads(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not interesting:
             continue
         locations = [
-            f"{item.get('path', '')}:{item.get('line')}" if item.get("line")
-            else str(item.get("path", ""))
+            _render_local(item.get("path", ""), item.get("line"), item.get("offset"))
             for item in (fact.get("evidence") or [])
+            if item.get("path")
         ]
         leads.append({
             # CAP-FREE: was 12-char fingerprint prefix - collision risk, AI cannot match full fingerprint. Use FULL.
             "id": f"FACT-{fact.get('fingerprint', '')}",
             # CAP-FREE: was capped at 120 chars - hid flagged value. Keep FULL.
-            "title": f"Flagged fact ({fact.get('kind')}): {str(fact.get('value'))}",
+            "title": f"Flagged fact ({fact.get('kind')}): {fact.get('value')}",
             "priority": "normal",
             "suggested_method": [
                 (
