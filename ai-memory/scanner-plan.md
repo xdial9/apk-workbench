@@ -1,8 +1,8 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
 Status: **P0 DONE, P1 DONE, P2 DONE (a/b/c), P3 DONE (`3de13fe`),
-P4 IMPLEMENTED (uncommitted).** Verified 2026-11-16, **341 tests green**,
-tree dirty (P4 waits for a commit instruction). Briefing file
+P4 DONE (`2c3d535`).** Verified 2026-11-16, **341 tests green**, P4 tree
+committed (only pre-phase user edits remain in `ai-memory/`). Briefing file
 `/home/user/oc-handoff/99-briefing.md` does not exist in this checkout
 (no `/home/user`); the memory duty for it is UNFULFILLED, recorded here
 instead of inventing a path.
@@ -44,7 +44,7 @@ Everything below is the fix ladder. P0-P1 are done and verified.
 | P2b | Resource links: smali id cross-ref + decoded-XML file attribution | **DONE** | `133cb45` |
 | P2c | FileProvider `file_paths.xml` roots + layout/view inventory | **DONE** | `4adb6a5` |
 | P3 | Code model: class/method/field inventory, call graph v2, reflection sites | **DONE** | `3de13fe` |
-| P4 | Link graph: typed edges with two cites each + entry_points | **DONE (uncommitted)** | pending |
+| P4 | Link graph: typed edges with two cites each + entry_points | **DONE** | `2c3d535` |
 | P5 | Detection breadth: 11 deduction templates, rule catalog 19 -> ~60 | queued | — |
 | P6 | Containers: extract `.dex`/`.jar`/nested zips and analyse them | queued | — |
 | P7 | Scale: single-pass streaming, checkpoint, shard by unit | queued | — |
@@ -236,7 +236,7 @@ One `links.jsonl` of typed edges, two cites each: `component->class`,
 service, Application class).
 Exit: the ten questions below are answerable by querying `links.jsonl`.
 
-### P4 — DONE (uncommitted, verified 341 tests green)
+### P4 — DONE (`2c3d535`, verified 341 tests green)
 
 **What was built** — `src/apkworkbench/analysis/surface/links.py`:
 - `build_link_graph(surface_result, dex_result, *, trufflehog_findings=None,
@@ -485,7 +485,7 @@ from, used by the code-model tests).
 | `133cb45` | P2b: smali resource-id resolution + definition files + FactStore guard |
 | `4adb6a5` | P2c: FileProvider roots + layout/view inventory (P2 complete) |
 | `3de13fe` | P3: `class_model` / `method_model` / `string_class_index` / `reflection_sites`, `dex_class` on every edge, D4 fixed (+8 tests, real APK fixture) |
-| *(uncommitted)* | P4: `links.jsonl` (8 typed edge types, two `EvidenceLocation` cites each) + `entry_points.jsonl`, atomic write, pipeline wiring, +12 tests on the real fixture |
+| `2c3d535` | P4: `links.jsonl` (8 typed edge types, two `EvidenceLocation` cites each) + `entry_points.jsonl`, atomic write, pipeline wiring, +12 tests on the real fixture |
 Memory-only commits interleaved: `a7aa2af`, `eadf73d`, `45bec3e`, `cb52d53`,
 `9a2f8f1`.
 Push state: `origin/feat/native-elf-reader` tracks HEAD, and on 2026-11-16

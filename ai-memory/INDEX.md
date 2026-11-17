@@ -91,8 +91,8 @@ surface.txt/plan.txt checkboxes if applicable.
   facts (view_count/views/ids/custom_views) and `custom_view` facts. New
   coverage keys file_provider_paths + layout_inventory; metrics
   file_provider_root_count / layout_count / custom_view_count.
-  STATE: 341 tests green, P2 COMPLETE, P3 COMMITTED (3de13fe), P4 IMPLEMENTED
-  BUT UNCOMMITTED (2026-11-16). P3: class_model / method_model /
+  STATE: 341 tests green, P2 COMPLETE, P3 COMMITTED (3de13fe), P4 COMMITTED
+  (2c3d535), 2026-11-16. P3: class_model / method_model /
   string_class_index / reflection_sites in androguard_dex.py, `dex_class` on
   every call-graph edge, external refs and call sites, D4 fixed (callerless
   external methods emitted with call_sites=[] and counted by
@@ -108,10 +108,11 @@ surface.txt/plan.txt checkboxes if applicable.
   Exit criteria 1-3 answered from the two files on the real fixture
   (tests/test_surface_links.py, 12 tests incl. a pipeline run). Output is
   deterministic across PYTHONHASHSEED (sha256 f2246ff3..., 42 edges, 3 entry
-  points). Tree is dirty on purpose: no commit instruction was given.
+  points). P4 is committed; the only dirty files left are the pre-phase
+  user edits in ai-memory/ (mode-only diffs + two untracked scratch files).
   New defects: D19 still open (upstream list order), D20 (no asset->reader
   derivation), D21 (surface cannot see TruffleHog findings).
-  NEXT: commit P4 when told, then P5 detection breadth.
+  NEXT: P5 detection breadth.
   MAIN PROMOTED 2026-11-16: main was fast-forwarded to this branch's tip
   (clean, no force) and pushed, so origin/main now carries the scanner work.
   main and feat/native-elf-reader are the same commit.
