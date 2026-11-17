@@ -1,9 +1,9 @@
 # RESUME FILE — APK-Workbench (current state 2026-11-17)
 
-**Current snapshot:** M0 and M1 are complete on `main`; `.venv/bin/python -m
-pytest -q` reports 381 passed. Scanner P0-P7, per-bundle evidence freeze,
+**Current snapshot:** M0, M1, and M2 are complete on `main`; `.venv/bin/python
+-m pytest -q` reports 382 passed. Scanner P0-P7, per-bundle evidence freeze,
 handoff manifest, and `verify-workspace` are implemented and fixture-tested.
-Post-TruffleHog secret-link refresh and its distinct scan states are tested.
+Post-TruffleHog secret-link refresh and native report visibility are tested.
 The current delivery sequence is the product rescue board at
 `docs/engineering/PRODUCT-RESCUE-BOARD.md`.
 
@@ -28,16 +28,16 @@ asked.
   `tests/test_pipeline_integration.py`.
 - Native ELF/JNI analysis, cross-APK JNI matching, typed links, and trace
   chains exist. M1 rebuilds them after TruffleHog and distinguishes
-  successful-empty, failed, missing, and not-run scans. Full suite: 381
-  passed.
+  successful-empty, failed, missing, and not-run scans. M2 adds a tested
+  native report view; current full suite: 382 passed.
 - P8 is partial: a model dry-run, enforced output schemas, large-volume
   hierarchy, and split-component bundle aggregation remain unverified.
 - No representative result bundle was found in the repository. The external
   configured workspace has not been inspected; real-app report quality is
   therefore unverified.
-- M0 current-state synchronization and M1 post-scan secret-link integration
-  are complete. Next board item: M2 native report visibility. Do not start it
-  until the user asks for the next item.
+- M0 current-state synchronization, M1 post-scan secret-link integration,
+  and M2 native report visibility are complete. Next board item: M3, the
+  real-app end-to-end proof. Real-app report quality remains unverified.
 
 --------------------------------------------------------------------------------
 ## HISTORICAL PHASE ORDER — superseded by the product rescue board
@@ -47,8 +47,8 @@ asked.
 1. DONE  — PER-BUNDLE WORKSPACE + FREEZE (implementation present; see
            `oc-handoff/99-briefing.md` and `tests/test_workspace_freeze.py`).
 2. DONE  — Post-scan TruffleHog-to-link/trace integration (board M1).
-3. NEXT  — Make native evidence visible in final report (board M2).
-4.       — Produce and inspect one complete bundle/report (board M3).
+3. DONE  — Make native evidence visible in final report (board M2).
+4. NEXT  — Produce and inspect one complete bundle/report (board M3).
 5.       — Fix ONLY what the dry run proves: expect volume hierarchy, evidence
            precedence, output schema gate.
 6.       — Phase A ceilings, done as STREAMING to disk (not deletion): box has

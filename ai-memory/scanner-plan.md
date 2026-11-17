@@ -1,10 +1,10 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
 Current state (verified 2026-11-17): **P0-P7 DONE; M1 post-scan secret links
-and trace-chain refresh DONE; bundle freeze and `verify-workspace`
-implemented. P8 is PARTIAL**: the handoff/freeze mechanics exist, but model
-dry-run, output-contract enforcement, and volume hierarchy are not validated.
-Full suite: **381 passed**. Current open work is tracked in
+and trace-chain refresh DONE; M2 native report visibility DONE; bundle freeze
+and `verify-workspace` implemented. P8 is PARTIAL**: the handoff/freeze
+mechanics exist, but model dry-run, output-contract enforcement, and volume
+hierarchy are not validated. Full suite: **382 passed**. Current open work is tracked in
 [PRODUCT-RESCUE-BOARD.md](../docs/engineering/PRODUCT-RESCUE-BOARD.md).
 The older 2026-11-16 status snapshots below are retained as history, not as the
 current state.

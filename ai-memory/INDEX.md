@@ -49,15 +49,17 @@ DURING: register risks/hallucination doubts as VERIFY notes immediately.
 END: update STATE (phase item moved? decisions? VERIFYs resolved?) + tick
 surface.txt/plan.txt checkboxes if applicable.
 
-## STATE (current as of 2026-11-17; M1 complete)
-- Current verified snapshot: M0/M1 on `main`; `.venv/bin/python -m pytest -q`
-  reports **381 passed**. P0-P7 are implemented; bundle freeze,
+## STATE (current as of 2026-11-17; M2 complete)
+- Current verified snapshot: M0/M1/M2 on `main`; `.venv/bin/python -m pytest
+  -q` reports **382 passed**. P0-P7 are implemented; bundle freeze,
   `handoff.json`, `hashes.sha256`, and `verify-workspace` are implemented and
   fixture-tested. Native ELF/JNI analysis, cross-APK JNI matching, typed
   evidence links, and trace-chain generation are present. M1 rebuilds links
   after TruffleHog, distinguishes successful-empty, failed, missing, and
   not-run scan states, and writes current trace/handoff outputs before freeze.
-  P8 is PARTIAL:
+  M2 exposes per-library native state, JNI mappings/unmapped reasons, native
+  symbol/string coverage, citations, and native-related traces in final
+  reports. P8 is PARTIAL:
   no model dry-run, enforced AI output contract, location-map volume hierarchy,
   or split-component bundle aggregation has been demonstrated. No
   representative result bundle is in the repository; the external workspace
@@ -66,9 +68,10 @@ surface.txt/plan.txt checkboxes if applicable.
 - The detailed scanner/native history below includes older point-in-time
   snapshots. Those are historical evidence, not current work queues; use the
   current state above and the dated status in the canonical phase files.
-- Product rescue board M0 (current-state reconciliation) and M1 (post-scan
-  secret links and trace chains) are complete. M2 (native report visibility)
-  is next; do not begin it until the user asks for the next board item.
+- Product rescue board M0 (current-state reconciliation), M1 (post-scan
+  secret links and trace chains), and M2 (native report visibility) are
+  complete. M3 (one real-app end-to-end proof) is next; no real-app quality
+  claim is made until that evidence is produced.
 
 ### Historical scanner snapshot (2026-11-16; retained for audit trail)
 - SCANNER TRACK 2026-11-16 (canonical file: ai-memory/scanner-plan.md).

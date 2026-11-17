@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from apkworkbench.database.workspace import WorkspaceDatabase
-from apkworkbench.reporting.final_run import generate_final_run_report
+from apkworkbench.reporting.final_run import (
+    _native_evidence,
+    _native_html_section,
+    generate_final_run_report,
+)
 
 
 def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_findings(tmp_path):
@@ -97,13 +101,103 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
             }],
             "api_headers": [{"name": "retry-after", "evidence": []}],
             "rate_limit_indicators": [{"path": "smali/Main.smali", "line": 14}],
+            "native_analysis": [
+                {
+                    "path": "apktool/lib/arm64-v8a/libmapped.so",
+                    "state": "parsed",
+                    "exports_total": 6,
+                    "exports_emitted": 6,
+                    "imports_total": 4,
+                    "imports_emitted": 4,
+                    "jni_entries": 1,
+                    "jni_unmapped": 0,
+                    "strings_unique": 11,
+                    "strings_truncated": False,
+                    "load_sites": [{"path": "apktool/smali/Main.smali", "line": 8}],
+                    "load_status": "loaded",
+                    "load_reason": None,
+                },
+                {
+                    "path": "apktool/lib/arm64-v8a/libunmapped.so",
+                    "state": "parse_failed",
+                    "reason": "invalid ELF header",
+                    "exports_total": 0,
+                    "exports_emitted": 0,
+                    "imports_total": 0,
+                    "imports_emitted": 0,
+                    "jni_entries": 0,
+                    "jni_unmapped": 1,
+                    "strings_unique": 0,
+                    "strings_truncated": False,
+                    "load_sites": [],
+                    "load_status": "unreferenced",
+                    "load_reason": "unreferenced",
+                },
+            ],
+            "jni_entries": [{
+                "library": "apktool/lib/arm64-v8a/libmapped.so",
+                "java_class": "com.example.Main",
+                "java_method": "load",
+                "java_signature": "()V",
+                "smali_path": "apktool/smali/com/example/Main.smali",
+                "smali_line": 22,
+                "confidence": "exact",
+            }],
+            "jni_unmapped": [{
+                "library": "apktool/lib/arm64-v8a/libunmapped.so",
+                "symbol": "Java_com_example_Missing_run",
+                "reason": "no_matching_native_declaration",
+                "offset": 64,
+            }],
         },
         "metrics": {
             "native_files_found": 2,
             "native_jni_exports_total": 3,
             "native_jni_exports_mapped": 2,
             "native_jni_exports_unmapped": 1,
+            "native_library_count": 2,
+            "native_exports_total": 9,
+            "native_imports_total": 6,
+            "native_imports_emitted": 6,
+            "native_strings_total": 20,
+            "native_strings_emitted": 15,
+            "native_strings_sharded": 5,
+            "native_strings_dropped": 0,
         },
+        "coverage": {
+            "manifest_and_components": "success",
+            "native_libraries": "partial",
+            "native_strings": "sharded",
+        },
+        "facts": [
+            {
+                "kind": "native_jni_register_natives_candidate",
+                "value": "apktool/lib/arm64-v8a/libmapped.so",
+                "evidence": {
+                    "path": "apktool/lib/arm64-v8a/libmapped.so",
+                    "offset": 128,
+                },
+                "extra": {
+                    "reason": "candidates_only_no_provable_pairing",
+                },
+            },
+            {
+                "kind": "native_export",
+                "value": "apktool/lib/arm64-v8a/libmapped.so::Java_com_example_Main_load",
+                "evidence": {
+                    "path": "apktool/lib/arm64-v8a/libmapped.so",
+                    "offset": 256,
+                },
+            },
+            {
+                "kind": "native_import",
+                "value": "apktool/lib/arm64-v8a/libmapped.so::dlopen",
+                "evidence": {
+                    "path": "apktool/lib/arm64-v8a/libmapped.so",
+                    "offset": 512,
+                },
+            },
+        ],
 
         "dex_analysis": {
             "status": "success",
@@ -150,6 +244,54 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
     (artifact_root / "static-analysis.json").write_text(
         json.dumps(static_result), encoding="utf-8"
     )
+    trace_chain = {
+        "chain_length": 2,
+        "start_node": "component:activity:com.example.Main",
+        "end_node": "secret:TEST_DETECTOR",
+        "edges": [
+            {
+                "edge_type": "method->native",
+                "citations": [
+                    {
+                        "evidence_kind": "smali_declaration",
+                        "source_path": "apktool/smali/com/example/Main.smali",
+                        "line_start": 22,
+                    },
+                    {
+                        "evidence_kind": "native_symbol",
+                        "source_path": "apktool/lib/arm64-v8a/libmapped.so",
+                        "byte_offset_start": 256,
+                    },
+                ],
+            },
+            {
+                "edge_type": "native->secret",
+                "citations": [
+                    {
+                        "evidence_kind": "native_library",
+                        "source_path": "apktool/lib/arm64-v8a/libmapped.so",
+                    },
+                    {
+                        "evidence_kind": "trufflehog_finding",
+                        "source_path": "apktool/lib/arm64-v8a/libmapped.so",
+                        "line_start": 1,
+                    },
+                ],
+            },
+        ],
+    }
+    (artifact_root / "trace_chains.jsonl").write_text(
+        json.dumps(trace_chain) + "\n", encoding="utf-8"
+    )
+    native_link = {
+        "edge_type": "method->native",
+        "from": "method:Lcom/example/Main; load ()V",
+        "to": "native:libmapped.so",
+        "citations": trace_chain["edges"][0]["citations"],
+    }
+    (artifact_root / "links.jsonl").write_text(
+        json.dumps(native_link) + "\n", encoding="utf-8"
+    )
     reports_root = workspace / "reports"
     reports_root.mkdir(parents=True)
     (reports_root / f"phase_one_verification_{run_id}.json").write_text(
@@ -178,6 +320,21 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
     assert native_stage["native_jni_exports_mapped"] == 2
     assert native_stage["native_jni_exports_unmapped"] == 1
     assert native_stage["native_jni_mapping_complete"] is True
+    assert native_stage["native_strings_total"] == 20
+    assert native_stage["native_strings_emitted"] == 15
+    assert native_stage["native_strings_sharded"] == 5
+    native_evidence = payload["artifacts"][0]["native_evidence"]
+    assert native_evidence["status"] == "partial"
+    assert native_evidence["libraries"][1]["state"] == "parse_failed"
+    assert native_evidence["jni_unmapped"][0]["reason"] == (
+        "no_matching_native_declaration"
+    )
+    assert native_evidence["exports"][0]["value"].endswith(
+        "Java_com_example_Main_load"
+    )
+    assert native_evidence["imports"][0]["value"].endswith("::dlopen")
+    assert native_evidence["trace_chains"][0] == trace_chain
+    assert native_evidence["links"][0] == native_link
     assert payload["stages"]["independent_download_verification"]["status"] == "verified"
     assert payload["stages"]["reconciliation"]["complete"] == 1
     assert payload["api_catalog"]["endpoint_candidates"][0]["value"] == "https://api.example.test/v1"
@@ -201,6 +358,19 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
     assert "Network-call context" in html_text
     assert "/catalog/products" in html_text
     assert "Lokhttp3/Call; execute ()Lokhttp3/Response;" in html_text
+    assert "Native analysis" in html_text
+    assert "Native library inventory" in html_text
+    assert "invalid ELF header" in html_text
+    assert "no_matching_native_declaration" in html_text
+    assert "Dynamic JNI registration candidate" in html_text
+    assert "libmapped.so@0x100" in html_text
+    assert "JNI exports mapped to Java methods" in html_text
+    assert "Java_com_example_Main_load" in html_text
+    assert "::dlopen" in html_text
+    native_section = html_text.split("<h4>Native analysis</h4>", 1)[1].split(
+        "<h4>Static-analysis coverage</h4>", 1
+    )[0]
+    assert "ORIGINAL_VALUE_PRESERVED" not in native_section
     assert payload["artifacts"][0]["findings"]["trufflehog_verified_original_objects"][0] == original_finding
     # Unverified records are counted and retained, not reported as verified and
     # not allowed to abort the run.
@@ -266,6 +436,35 @@ def test_final_run_report_skips_surface_evidence_when_decompile_failed(tmp_path)
     artifact = payload["artifacts"][0]
     assert artifact["static_analysis"]["status"] == "not_run"
     assert artifact["processing"]["apktool_status"] == "failed"
+    assert artifact["native_evidence"]["status"] == "not_run"
+    assert "Native analysis was not run" in Path(result["html_path"]).read_text(
+        encoding="utf-8"
+    )
+
+
+def test_native_report_states_distinguish_absent_failed_and_not_run():
+    absent = _native_evidence(
+        {"status": "success", "coverage": {"native_libraries": "not_found"}},
+        [],
+        [],
+    )
+    failed = _native_evidence(
+        {"status": "failed", "coverage": {"native_libraries": "failed"}},
+        [],
+        [],
+    )
+    not_run = _native_evidence(None, None, None)
+
+    assert absent["status"] == "not_present"
+    assert "No native libraries were present" in "\n".join(
+        _native_html_section(absent)
+    )
+    assert failed["status"] == "failed"
+    assert "Native analysis failed" in "\n".join(_native_html_section(failed))
+    assert not_run["status"] == "not_run"
+    assert "Native analysis was not run" in "\n".join(
+        _native_html_section(not_run)
+    )
 
 
 def test_final_run_report_still_fails_when_surface_succeeded_but_missing(tmp_path):

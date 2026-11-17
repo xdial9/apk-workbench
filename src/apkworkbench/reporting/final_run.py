@@ -29,6 +29,136 @@ def _read_json(path: Path, root: Path) -> Any | None:
         raise FinalRunReportError(f"Cannot read run evidence {path}: {exc}") from exc
 
 
+def _read_jsonl(path: Path, root: Path) -> list[dict[str, Any]] | None:
+    if path.is_symlink():
+        raise FinalRunReportError(f"Refusing symlinked report input: {path}")
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root.resolve(strict=True))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise FinalRunReportError(f"Cannot resolve run evidence {path}: {exc}") from exc
+    records: list[dict[str, Any]] = []
+    try:
+        with resolved.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise FinalRunReportError(
+                        f"Malformed JSONL evidence {path}:{line_number}: {exc}"
+                    ) from exc
+                if not isinstance(value, dict):
+                    raise FinalRunReportError(
+                        f"Expected a JSON object in {path}:{line_number}."
+                    )
+                records.append(value)
+    except OSError as exc:
+        raise FinalRunReportError(f"Cannot read run evidence {path}: {exc}") from exc
+    return records
+
+
+def _native_evidence(
+    static_analysis: dict[str, Any] | None,
+    trace_chains: list[dict[str, Any]] | None,
+    links: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    if not isinstance(static_analysis, dict):
+        return {
+            "status": "not_run",
+            "coverage": {},
+            "metrics": {},
+            "libraries": [],
+            "jni_entries": [],
+            "jni_unmapped": [],
+            "exports": [],
+            "imports": [],
+            "export_records_total": 0,
+            "import_records_total": 0,
+            "dynamic_registration_candidates": [],
+            "links": [],
+            "links_status": "not_run",
+            "trace_chains": [],
+            "trace_chains_status": "not_run",
+        }
+
+    coverage = static_analysis.get("coverage")
+    coverage = coverage if isinstance(coverage, dict) else {}
+    native_coverage = coverage.get("native_libraries")
+    if static_analysis.get("status") == "failed":
+        status = "failed"
+    elif native_coverage == "not_found":
+        status = "not_present"
+    elif native_coverage is None:
+        status = "not_run"
+    else:
+        status = str(native_coverage)
+
+    inventory = static_analysis.get("inventory")
+    inventory = inventory if isinstance(inventory, dict) else {}
+    libraries = inventory.get("native_analysis")
+    libraries = libraries if isinstance(libraries, list) else []
+    entries = inventory.get("jni_entries")
+    entries = entries if isinstance(entries, list) else []
+    unmapped = inventory.get("jni_unmapped")
+    unmapped = unmapped if isinstance(unmapped, list) else []
+    facts = static_analysis.get("facts")
+    facts = facts if isinstance(facts, list) else []
+    dynamic_candidates = [
+        fact for fact in facts
+        if isinstance(fact, dict)
+        and fact.get("kind") == "native_jni_register_natives_candidate"
+    ]
+    exports = [
+        fact for fact in facts
+        if isinstance(fact, dict) and fact.get("kind") == "native_export"
+    ]
+    imports = [
+        fact for fact in facts
+        if isinstance(fact, dict) and fact.get("kind") == "native_import"
+    ]
+    native_traces = [
+        chain for chain in (trace_chains or [])
+        if any(
+            isinstance(edge, dict)
+            and edge.get("edge_type") in {"method->native", "native->secret"}
+            for edge in chain.get("edges", [])
+        )
+    ]
+    native_links = [
+        edge for edge in (links or [])
+        if edge.get("edge_type") in {"method->native", "native->secret"}
+    ]
+    return {
+        "status": status,
+        "coverage": {
+            key: value for key, value in coverage.items()
+            if isinstance(key, str) and key.startswith("native_")
+        },
+        "metrics": (
+            static_analysis.get("metrics")
+            if isinstance(static_analysis.get("metrics"), dict) else {}
+        ),
+        "libraries": libraries,
+        "jni_entries": entries,
+        "jni_unmapped": unmapped,
+        "exports": exports[:100],
+        "imports": imports[:100],
+        "export_records_total": len(exports),
+        "import_records_total": len(imports),
+        "dynamic_registration_candidates": dynamic_candidates,
+        "links": native_links,
+        "links_status": "available" if links is not None else "missing",
+        "trace_chains": native_traces,
+        "trace_chains_status": (
+            "available" if trace_chains is not None else "missing"
+        ),
+    }
+
+
 def _atomic_write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
@@ -47,6 +177,210 @@ def _atomic_write(path: Path, content: str) -> None:
             os.close(directory_fd)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _native_html_section(native: dict[str, Any]) -> list[str]:
+    metrics = native.get("metrics", {})
+    metrics = metrics if isinstance(metrics, dict) else {}
+    libraries = native.get("libraries", [])
+    entries = native.get("jni_entries", [])
+    unmapped = native.get("jni_unmapped", [])
+    dynamic_candidates = native.get("dynamic_registration_candidates", [])
+    status = str(native.get("status", "not_run"))
+
+    def metric(name: str) -> str:
+        value = metrics.get(name)
+        return "unavailable" if value is None else str(value)
+
+    parts = [
+        "<h4>Native analysis</h4>",
+        f"<p>Status: {html.escape(status)} · "
+        f"Libraries: {metric('native_library_count')} · "
+        f"JNI exports: {metric('native_jni_exports_total')} "
+        f"({metric('native_jni_exports_mapped')} mapped, "
+        f"{metric('native_jni_exports_unmapped')} unmapped) · "
+        f"Imports: {metric('native_imports_total')} total / "
+        f"{metric('native_imports_emitted')} emitted</p>",
+        f"<p>Native strings: {metric('native_strings_total')} total · "
+        f"{metric('native_strings_emitted')} emitted · "
+        f"{metric('native_strings_sharded')} sharded · "
+        f"{metric('native_strings_dropped')} dropped · "
+        f"coverage: {html.escape(str(native.get('coverage', {}).get('native_strings', 'unavailable')))}</p>",
+    ]
+    if status == "not_present":
+        parts.append("<p>No native libraries were present in the decoded artifact.</p>")
+    elif status == "not_run":
+        parts.append("<p>Native analysis was not run or its status is unavailable.</p>")
+    elif status == "failed":
+        parts.append("<p>Native analysis failed; inspect the retained diagnostics.</p>")
+
+    if libraries:
+        parts.append(
+            "<details open><summary>Native library inventory</summary>"
+            "<table><thead><tr><th>Library</th><th>Parse state / reason</th>"
+            "<th>Exports</th><th>Imports</th><th>JNI mapped / unmapped</th>"
+            "<th>Load state</th><th>Strings</th></tr></thead><tbody>"
+        )
+        for library in libraries:
+            if not isinstance(library, dict):
+                continue
+            parts.append(
+                "<tr>"
+                f"<td><code>{html.escape(str(library.get('path', 'unknown')))}</code></td>"
+                f"<td>{html.escape(str(library.get('state', 'unknown')))}"
+                f"{': ' + html.escape(str(library.get('reason'))) if library.get('reason') else ''}</td>"
+                f"<td>{html.escape(str(library.get('exports_total', 'unavailable')))} "
+                f"({html.escape(str(library.get('exports_emitted', 'unavailable')))} emitted)</td>"
+                f"<td>{html.escape(str(library.get('imports_total', 'unavailable')))} "
+                f"({html.escape(str(library.get('imports_emitted', 'unavailable')))} emitted)</td>"
+                f"<td>{html.escape(str(library.get('jni_entries', 'unavailable')))} / "
+                f"{html.escape(str(library.get('jni_unmapped', 'unavailable')))}</td>"
+                f"<td>{html.escape(str(library.get('load_status', 'unavailable')))}"
+                f"{': ' + html.escape(str(library.get('load_reason'))) if library.get('load_reason') else ''}</td>"
+                f"<td>{html.escape(str(library.get('strings_unique', 'unavailable')))} unique"
+                f"{' (truncated)' if library.get('strings_truncated') else ''}</td>"
+                "</tr>"
+            )
+        parts.append("</tbody></table></details>")
+    elif status not in {"not_present", "not_run"}:
+        parts.append("<p>No per-library records were emitted; review native coverage and diagnostics.</p>")
+
+    if entries:
+        parts.append(
+            "<details open><summary>JNI exports mapped to Java methods</summary>"
+            "<table><thead><tr><th>Native library</th><th>Java method</th>"
+            "<th>Smali citation</th><th>Mapping basis</th></tr></thead><tbody>"
+        )
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            parts.append(
+                "<tr>"
+                f"<td><code>{html.escape(str(entry.get('library', 'unknown')))}</code></td>"
+                f"<td><code>{html.escape(str(entry.get('java_class', 'unknown')))}."
+                f"{html.escape(str(entry.get('java_method', 'unknown')))}"
+                f"{html.escape(str(entry.get('java_signature', '')))}</code></td>"
+                f"<td><code>{html.escape(str(entry.get('smali_path', 'unknown')))}:"
+                f"{html.escape(str(entry.get('smali_line', '')))}</code></td>"
+                f"<td>{html.escape(str(entry.get('confidence', 'unavailable')))}</td>"
+                "</tr>"
+            )
+        parts.append("</tbody></table></details>")
+
+    for label, key, total_key in (
+        ("Native exports", "exports", "export_records_total"),
+        ("Native imports", "imports", "import_records_total"),
+    ):
+        records = native.get(key, [])
+        if records:
+            parts.append(
+                f"<details><summary>{label}: "
+                f"{html.escape(str(native.get(total_key, len(records))))} emitted "
+                f"(showing up to {len(records)})</summary><ul>"
+            )
+            for record in records:
+                evidence = record.get("evidence")
+                evidence = evidence if isinstance(evidence, dict) else {}
+                parts.append(
+                    f"<li><code>{html.escape(str(record.get('value', 'unknown')))}</code> "
+                    f"— {html.escape(str(evidence.get('path', 'unknown')))}"
+                    f"@0x{int(evidence.get('offset') or 0):x}</li>"
+                )
+            parts.append("</ul></details>")
+
+    def cite(citation: dict[str, Any]) -> str:
+        value = str(citation.get("source_path") or citation.get("evidence_kind") or "unknown")
+        if citation.get("line_start") is not None:
+            value += f":{citation['line_start']}"
+        if citation.get("byte_offset_start") is not None:
+            value += f"@0x{int(citation['byte_offset_start']):x}"
+        return html.escape(value)
+
+    unresolved: list[str] = []
+    for entry in unmapped:
+        if not isinstance(entry, dict):
+            continue
+        location = f"{entry.get('library', 'unknown')}@0x{int(entry.get('offset') or 0):x}"
+        unresolved.append(
+            f"<li>Unmapped JNI export <code>{html.escape(str(entry.get('symbol', 'unknown')))}</code> "
+            f"({html.escape(str(entry.get('reason', 'reason unavailable')))}; "
+            f"{html.escape(location)})</li>"
+        )
+    for fact in dynamic_candidates:
+        if not isinstance(fact, dict):
+            continue
+        evidence = fact.get("evidence")
+        evidence = evidence if isinstance(evidence, dict) else {}
+        extra = fact.get("extra")
+        extra = extra if isinstance(extra, dict) else {}
+        location = f"{evidence.get('path', fact.get('value', 'unknown'))}@0x{int(evidence.get('offset') or 0):x}"
+        unresolved.append(
+            f"<li>Dynamic JNI registration candidate in "
+            f"<code>{html.escape(str(fact.get('value', 'unknown')))}</code>: "
+            f"{html.escape(str(extra.get('reason', 'pairing unresolved')))} "
+            f"({html.escape(location)})</li>"
+        )
+    for library in libraries:
+        if not isinstance(library, dict):
+            continue
+        if library.get("load_sites"):
+            continue
+        unresolved.append(
+            f"<li>No load site for <code>{html.escape(str(library.get('path', 'unknown')))}</code>: "
+            f"{html.escape(str(library.get('load_reason') or library.get('load_status') or 'reason unavailable'))}</li>"
+        )
+    if status == "not_present":
+        unresolved.append("<li>No native libraries were present.</li>")
+    if unresolved:
+        parts.append("<h5>Unresolved native evidence</h5><ul>")
+        parts.extend(unresolved)
+        parts.append("</ul>")
+
+    native_links = native.get("links", [])
+    if native_links:
+        parts.append("<details><summary>JNI and native-secret links with citations</summary><ul>")
+        for edge in native_links:
+            citations = edge.get("citations", [])
+            locations = ", ".join(
+                cite(item) for item in citations if isinstance(item, dict)
+            )
+            parts.append(
+                f"<li>{html.escape(str(edge.get('edge_type', 'native link')))} "
+                f"— {locations or 'citation unavailable'}</li>"
+            )
+        parts.append("</ul></details>")
+    else:
+        parts.append(
+            f"<p>Native link records: {html.escape(str(native.get('links_status', 'unavailable')))}.</p>"
+        )
+
+    chains = native.get("trace_chains", [])
+    parts.append(
+        f"<h5>JNI/secret trace chains ({len(chains)})</h5>"
+    )
+    if chains:
+        parts.append("<ol>")
+        for chain in chains:
+            edge_types: list[str] = []
+            citations: list[str] = []
+            for edge in chain.get("edges", []):
+                if not isinstance(edge, dict):
+                    continue
+                edge_types.append(str(edge.get("edge_type", "unknown")))
+                for item in edge.get("citations", []):
+                    if isinstance(item, dict):
+                        citations.append(cite(item))
+            parts.append(
+                f"<li>{html.escape(' → '.join(edge_types))}"
+                f"<br><span class='muted'>{', '.join(citations) or 'citations unavailable'}</span></li>"
+            )
+        parts.append("</ol>")
+    else:
+        parts.append(
+            f"<p>No native trace chains; trace data status: "
+            f"{html.escape(str(native.get('trace_chains_status', 'unavailable')))}.</p>"
+        )
+    return parts
 
 
 def _html_document(payload: dict[str, Any]) -> str:
@@ -229,6 +563,7 @@ def _html_document(payload: dict[str, Any]) -> str:
                 parts.append("<details><summary>Androguard diagnostics</summary><pre>")
                 parts.append(html.escape(json.dumps(dex.get("diagnostics"), ensure_ascii=False, indent=2)))
                 parts.append("</pre></details>")
+        parts.extend(_native_html_section(artifact.get("native_evidence", {})))
         parts.append("<h4>Static-analysis coverage</h4>")
         coverage = static.get("coverage", {})
         if coverage:
@@ -344,6 +679,10 @@ def generate_final_run_report(
     native_jni_exports_total = 0
     native_jni_exports_mapped = 0
     native_jni_exports_unmapped = 0
+    native_strings_total = 0
+    native_strings_emitted = 0
+    native_strings_sharded = 0
+    native_strings_dropped = 0
 
     seen: set[tuple[str, str, str]] = set()
     for selected in manifest:
@@ -426,6 +765,10 @@ def generate_final_run_report(
                 native_jni_exports_total += int(native_metrics.get("native_jni_exports_total") or 0)
                 native_jni_exports_mapped += int(native_metrics.get("native_jni_exports_mapped") or 0)
                 native_jni_exports_unmapped += int(native_metrics.get("native_jni_exports_unmapped") or 0)
+                native_strings_total += int(native_metrics.get("native_strings_total") or 0)
+                native_strings_emitted += int(native_metrics.get("native_strings_emitted") or 0)
+                native_strings_sharded += int(native_metrics.get("native_strings_sharded") or 0)
+                native_strings_dropped += int(native_metrics.get("native_strings_dropped") or 0)
             api_inventory = static_analysis.get("inventory", {})
             if not isinstance(api_inventory, dict):
                 api_inventory = {}
@@ -502,6 +845,14 @@ def generate_final_run_report(
             api_inventory = {}
             static_failed += 1
 
+        native_trace_path = artifact_root / "trace_chains.jsonl"
+        native_links_path = artifact_root / "links.jsonl"
+        native_evidence = _native_evidence(
+            static_analysis if isinstance(static_analysis, dict) else None,
+            _read_jsonl(native_trace_path, results_root),
+            _read_jsonl(native_links_path, results_root),
+        )
+
         if status.get("scan_status") == "failed":
             trufflehog_failed += 1
         verified_findings += len(trufflehog_findings)
@@ -564,6 +915,7 @@ def generate_final_run_report(
                 "coverage": {},
                 "limitations": ["The static APK surface analyzer did not produce a report for this artifact."],
             },
+            "native_evidence": native_evidence,
             "findings": {
                 "static_indicators": static_list,
                 "trufflehog_verified_original_objects": trufflehog_findings,
@@ -630,6 +982,10 @@ def generate_final_run_report(
                     native_jni_exports_total
                     == native_jni_exports_mapped + native_jni_exports_unmapped
                 ),
+                "native_strings_total": native_strings_total,
+                "native_strings_emitted": native_strings_emitted,
+                "native_strings_sharded": native_strings_sharded,
+                "native_strings_dropped": native_strings_dropped,
                 "run_record": surface_run_record or {"status": "missing_or_legacy"},
             },
             "trufflehog_verified_secret_scan": {

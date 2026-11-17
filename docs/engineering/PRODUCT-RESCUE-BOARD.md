@@ -4,9 +4,9 @@
 verifiable, useful per-app result. This is a delivery board, not a proposal to
 rewrite the scanner or add another detection catalog.
 
-**Snapshot:** 2026-11-17, M0 and M1 are complete on `main`. Current full test
-suite: **381 passed**. The pre-existing untracked `ai-memory/test.txt` remains
-untouched.
+**Snapshot:** 2026-11-17, M0, M1, and M2 are complete on `main`. Current full
+test suite: **382 passed**. The pre-existing untracked `ai-memory/test.txt`
+remains untouched.
 
 **Evidence boundary:** no representative result bundle was found under the
 repository root. The configured external workspace was not inspected, so real
@@ -26,14 +26,13 @@ cross-APK JNI matching is wired through
 and `verify-workspace` exists in the CLI
 ([main.py](../../src/apkworkbench/cli/main.py)).
 
-The user's experience is still understandable. The human-facing final report
-shows DEX details, coverage, static indicators, and verified TruffleHog
-findings, while its native summary is principally counts such as files and
-mapped/unmapped JNI exports ([final_run.py](../../src/apkworkbench/reporting/final_run.py)).
 M1 now refreshes secret links after the scan, distinguishes missing and
 malformed output from a successful empty scan, and tests the resulting trace
-in the normal stage order. Making the native evidence readable in the HTML
-report remains the next product gap.
+in the normal stage order. M2 adds a native-focused report view with
+per-library parse/load state, JNI mappings and unmapped reasons, symbol and
+string counts, citations, and native-related traces
+([final_run.py](../../src/apkworkbench/reporting/final_run.py)). The real-app
+quality of those results remains unverified.
 
 This board deliberately does **not** call reports, native analysis, or bundle
 freezing nonexistent. Those features are present. It distinguishes “code
@@ -151,12 +150,16 @@ All acceptance criteria are met by the post-scan refresh path and
 ### M2 — Make native analysis visible and useful in the final report
 
 **Priority:** P0 · **Estimate:** M · **Depends on:** M1
+**Status:** DONE
 
 The native analyzer already emits structured library, symbol, JNI, load-site,
-string, and coverage data. The final JSON report includes each artifact's
-`static_analysis` object and has aggregate native JNI counters, but the HTML
-report does not currently present a native-focused per-library view. Make
-existing evidence discoverable; do not invent a native “risk score.”
+string, and coverage data. The final report now has per-artifact HTML tables
+for library parse state and reasons, exports/imports, JNI mappings, load-site
+state, string totals and coverage, unresolved JNI/dynamic registration, and
+native-related trace citations. The JSON report retains the original
+`static_analysis` records and adds filtered native links and trace chains.
+Empty, failed, and not-run states are explicit. No native risk score was
+introduced, and the new summary does not render secret values.
 
 **Likely files**
 - `src/apkworkbench/reporting/final_run.py`
@@ -185,6 +188,9 @@ existing evidence discoverable; do not invent a native “risk score.”
   or a stage was not run.
 - Secret values are not newly disclosed in summary text.
 - A fixture proves a mapped JNI path and a separate unmapped-with-reason path.
+
+All acceptance criteria are exercised by
+`tests/test_final_run_report.py`; the full suite passes 382 tests.
 
 ### M3 — Produce and inspect one complete bundle from start to report
 
