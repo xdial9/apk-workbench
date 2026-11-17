@@ -2,6 +2,7 @@
 
 **Verified:** 2026-11-17
 **Repository:** `main`; M0-M3 and the split-status correction are complete
+**Commits:** `4fa3e40`, `324fba4` (M3); `f3a9f75` (split-status fix, local/not pushed)
 **Tests:** `.venv/bin/python -m pytest -q` — 386 passed
 **Next:** stop at M3; M4 needs a separately selected scope
 
