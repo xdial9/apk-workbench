@@ -4,12 +4,21 @@
     android:versionCode="1"
     android:versionName="1.0">
     <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="34"/>
-    <application android:label="Dex Fixture" android:hasCode="true">
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <application android:name="com.example.App" android:label="Dex Fixture" android:hasCode="true">
         <activity android:name="com.example.Main" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https" android:host="app.example.test" android:pathPrefix="/feed"/>
+            </intent-filter>
         </activity>
+        <service android:name="com.example.SyncService" android:exported="true"
+            android:permission="android.permission.BIND_JOB_SERVICE"/>
     </application>
 </manifest>

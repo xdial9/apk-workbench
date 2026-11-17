@@ -1,7 +1,11 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
-Status: **P0 DONE, P1 DONE, P2 DONE (a/b/c), P3 IMPLEMENTED (uncommitted).** Verified
-2026-11-16, 329 tests green, tree dirty (P3 waits for a commit instruction).
+Status: **P0 DONE, P1 DONE, P2 DONE (a/b/c), P3 DONE (`3de13fe`),
+P4 IMPLEMENTED (uncommitted).** Verified 2026-11-16, **341 tests green**,
+tree dirty (P4 waits for a commit instruction). Briefing file
+`/home/user/oc-handoff/99-briefing.md` does not exist in this checkout
+(no `/home/user`); the memory duty for it is UNFULFILLED, recorded here
+instead of inventing a path.
 This file is the resume point for the scanner track. Read it after
 `ai-memory/INDEX.md` §STATE and before touching `analysis/`.
 
@@ -39,8 +43,8 @@ Everything below is the fix ladder. P0-P1 are done and verified.
 | P2a | Resource table: `resources.arsc` -> id/type/name/value -> `resources.jsonl` | **DONE** | `25e54b4` |
 | P2b | Resource links: smali id cross-ref + decoded-XML file attribution | **DONE** | `133cb45` |
 | P2c | FileProvider `file_paths.xml` roots + layout/view inventory | **DONE** | `4adb6a5` |
-| P3 | Code model: class/method/field inventory, call graph v2, reflection sites | **DONE (uncommitted)** | pending |
-| P4 | Link graph: typed edges with two cites each + entry_points | queued | — |
+| P3 | Code model: class/method/field inventory, call graph v2, reflection sites | **DONE** | `3de13fe` |
+| P4 | Link graph: typed edges with two cites each + entry_points | **DONE (uncommitted)** | pending |
 | P5 | Detection breadth: 11 deduction templates, rule catalog 19 -> ~60 | queued | — |
 | P6 | Containers: extract `.dex`/`.jar`/nested zips and analyse them | queued | — |
 | P7 | Scale: single-pass streaming, checkpoint, shard by unit | queued | — |
@@ -151,7 +155,7 @@ Everything below is the fix ladder. P0-P1 are done and verified.
   `layout_count`, `custom_view_count`.
 - **P2 is complete.** Next: P3 code model.
 
-### P3 — DONE (uncommitted, verified 329 tests green)
+### P3 — DONE (`3de13fe`, verified 329 tests green)
 Scope actually delivered (the prompt's list, not the whole plan line — no
 `caller_class`/`callee_class` on edges, they are derivable from `full_name`;
 noted as open below):
@@ -232,6 +236,108 @@ One `links.jsonl` of typed edges, two cites each: `component->class`,
 service, Application class).
 Exit: the ten questions below are answerable by querying `links.jsonl`.
 
+### P4 — DONE (uncommitted, verified 341 tests green)
+
+**What was built** — `src/apkworkbench/analysis/surface/links.py`:
+- `build_link_graph(surface_result, dex_result, *, trufflehog_findings=None,
+  tree_root="apktool/", manifest_relative="AndroidManifest.xml",
+  coverage=None, diagnostics=None) -> list[dict]`. Every edge is exactly
+  `{edge_type, from, to, citations:[cite, cite]}`; every cite is an
+  `EvidenceLocation` serialized by `contracts.citation_to_dict`, so the
+  round-trip `EvidenceLocation(**cite) == cite` holds (tested). One-sided
+  relations stay in the facts plane: no half-edges.
+- Edge types and how they are derived (existing P0–P3 data only, never a
+  re-parse and never similarity):
+  * `component->class` — `manifest_v2.components[]` x `dex.class_model`;
+    cites `manifest_component` (xpath) + `dex_class`. Unresolved class =>
+    diagnostic `link_component_class_unresolved`, **no edge**.
+  * `class->method` — `dex.class_model` + `dex.method_model` (already keyed
+    by `full_name`), both cites from the DEX model.
+  * `method->method` — `dex.internal_call_graph`; external callees are kept
+    (they exist in that graph) and claim no `dex_index`.
+  * `method->endpoint` — `dex.dex_api_strings` filtered to `urls` /
+    `route_candidate` (the unfiltered list also emits class-name noise).
+  * `endpoint->permission` — `dex.permission_api_usage` joined through the
+    calling method to the endpoint it reaches; cite carries
+    `extractor_coordinate = {permission, permissions, requested,
+    manifest_path}` where `requested` is the per-edge answer.
+  * `method->native` — the `native_jni_entry` facts `native.py::_map_jni_symbol`
+    already wrote (`.so` byte offset + smali line + `mapping_confidence`).
+    No re-demangling; the JNI matcher is reused, not duplicated.
+  * `native->secret` — only when TruffleHog findings are supplied (the
+    pipeline does not pass them yet). Absent => coverage
+    `link_type_native_secret = "not_applicable"` + diagnostic
+    `link_native_secret_source_absent`.
+  * `asset->reader` — provably not derivable from static data:
+    `link_type_asset_reader = "not_applicable"` + diagnostic
+    `link_asset_reader_not_derivable`. Never guessed.
+- `build_entry_points(surface_result, dex_result, *, tree_root=...)`:
+  exported components, deep-link targets, MAIN+LAUNCHER, and the
+  `android:name` Application class; each record says `exported`,
+  `externally_reachable`, `reachability[]`, `intent_actions`, `deep_links[]`,
+  `class_descriptor`, `class_in_dex`, `declared_permission(_requested)`,
+  `class_citation`.
+- `write_links(output_dir, edges, entry_points)` -> `{"links", "entry_points"}`.
+  Atomic temp+fsync+chmod 0600+`os.replace` pattern copied from
+  `apk_surface.py::_parse_resources_to_disk` (`.{name}.tmp-{pid}`); a failed
+  write leaves nothing behind and never touches `facts.jsonl`.
+
+**Decision — links are NOT folded into `FactStore`** (rationale in the module
+docstring): a fact dedups by value and carries `count` = occurrences, an edge
+is a relation between two proven locations. Publishing one relation in two
+planes invites drift. If it is ever folded, it must go through
+`FactStore.add(..., extra=...)` so `RESERVED_FACT_KEYS` rejects overwrite.
+
+**Wiring** — `apk_surface.py::run_static_surface_analysis`, between the DEX
+stage and `finalize_result` (mirrors the handoff block): merges
+`link_coverage` into `result["coverage"]`, appends link diagnostics, sets
+`metrics.link_edge_count` / `metrics.entry_point_count`; on `OSError` the
+artifact goes `partial` with `link_write_failed` and the reason is kept.
+
+**Fixture** — extended, not invented: `tests/fixtures/dexfixture/` gained
+`Api.smali` (endpoint constant + `LocationManager.getLastKnownLocation`),
+`App.smali`, `SyncService.smali`, `Main.onCreate -> Api.fetch`, and a manifest
+with `ACCESS_FINE_LOCATION`, an Application name, a `https/app.example.test/feed`
+deep link and an exported service behind `BIND_JOB_SERVICE`; APK rebuilt with
+apktool 2.7.0. The `.so` is **not** committed (`lib/` is gitignored); tests
+copy the decode tree and synthesize `lib/arm64-v8a/libdexfixture.so` with
+`tests.elf_fixtures.write_elf`.
+
+**Bug the tests caught (in the new code)**: `_endpoint_edges` first returned
+endpoint -> {callers}, which made `endpoint->permission` emit zero edges.
+Correct direction is caller -> {endpoints}; fixed before the first green run.
+
+**Exit criteria — all three answered from `links.jsonl` +
+`entry_points.jsonl` on the real fixture** (`tests/test_surface_links.py`):
+1. `component:activity:com.example.Main` -> `class:Lcom/example/Main;`,
+   `exported=true`, reachability `{exported, launcher_activity, deep_link}`,
+   deep link `https://app.example.test/feed`; `SyncService` exported behind
+   `BIND_JOB_SERVICE` (`requested=false`); Application `com.example.App`
+   resolves to `Lcom/example/App;`.
+2. `endpoint:https://api.example.test/v1/feed` called by
+   `method:Lcom/example/Api; fetch ()Ljava/lang/String;`; the caller side
+   `method:Lcom/example/Main; onCreate ()V -> Api.fetch` plus
+   component->class->method is the entry-point chain.
+3. `endpoint->permission` emits **both**
+   `ACCESS_FINE_LOCATION` (`requested=true`) and
+   `ACCESS_COARSE_LOCATION` (`requested=false`) — never collapsed, never
+   dropped because the manifest omits one.
+
+**Determinism** — edges are de-duplicated on canonical JSON and sorted, so
+output is stable across processes: `PYTHONHASHSEED=0/1/12345` on the fixture
+all give `sha256=f2246ff3141d…`, 42 edges, 3 entry points. (D19 still makes
+the *upstream* `internal_call_graph` order vary; links does not inherit it.)
+
+**Observed, not done here**: the Application class is an entry point with its
+own `class_citation` but has no `component->class` edge (it is not in
+`manifest.components[]`); a walker starts from the entry point. TruffleHog
+findings are not yet passed into `build_link_graph` from the pipeline (the
+trufflehog stage runs after surface analysis), so `native->secret` is
+`not_applicable` in a normal run until P5/P8 joins the two stages.
+`caller_class`/`callee_class` on call-graph edges is still the P3 leftover.
+`assets` are inventoried but have no reader edge.
+
+
 ### P5 — Detection breadth
 Implement the 11 templates from `appdev.txt` §12 (5 exist); grow
 `CODE_RULES` from 19 to a catalog (reflection, pinning, keystore, SQL string
@@ -266,10 +372,10 @@ An AI can answer these **from the bundle alone, with a citation**:
 1. Who signed it, with what certificate SHA-256, under which scheme? — **DONE (P1)**
 2. Package, version, SDK range, ABI set, split set, install size? — partial (ABIs/SDKs yes; split set is bundle-level, P8)
 3. File count, how many analysed, and for each skipped file: why? — **DONE (P0)**
-4. What classes exist, how many methods each, where declared? — P3
-5. Which component is exported, which class implements it, what can invoke it? — P4
-6. Which endpoint is called by which method, from which entry point? — P4
-7. Which permission gates that path, is it requested? — P4
+4. What classes exist, how many methods each, where declared? — **DONE (P3)**
+5. Which component is exported, which class implements it, what can invoke it? — **DONE (P4)**
+6. Which endpoint is called by which method, from which entry point? — **DONE (P4)**
+7. Which permission gates that path, is it requested? — **DONE (P4)**
 8. Which native library implements which declared method, who calls it? — **DONE (N1-N13)**
 9. Which secret exists, in which file/offset/method, who uses it? — partial (native only)
 10. What could the scanner not see, and what is the evidence? — partial (coverage + ledger; packed/encrypted evidence is P6)
@@ -297,7 +403,9 @@ An AI can answer these **from the bundle alone, with a citation**:
 | D16 | no per-file status ledger | **FIXED** P0 |
 | D17 | facts/ledger written at artifact root, not `surface/` | open (P8) |
 | D18 | only 3 driver-level tests | improved (301 total) |
-| D19 | `internal_call_graph` / `call_sites` / `dex_api_strings[].references` order comes from set iteration -> two runs are byte-different (content identical) | open (found in P3 verification, pre-existing at HEAD) |
+| D19 | `internal_call_graph` / `call_sites` / `dex_api_strings[].references` order comes from set iteration -> two runs are byte-different (content identical) | open (found in P3 verification, pre-existing at HEAD; P4 output is unaffected, it sorts edges) |
+| D20 | `asset->reader` has no provable derivation — assets are inventoried but no edge says who reads them | open (P5; P4 records `link_type_asset_reader=not_applicable` + diagnostic, never a guess) |
+| D21 | surface stage cannot see TruffleHog findings (trufflehog runs after surface), so `native->secret` is `not_applicable` in a pipeline run | open (P5/P8 stage join) |
 
 Fixed outside the ledger:
 - `insecure_http` false positive on the Android XML namespace (`ec9419d`).
@@ -317,6 +425,10 @@ Fixed outside the ledger:
 - No time-dependent verdicts (no "certificate expired" finding).
 - Caps never delete: shard + count + coverage `sharded`.
 - ARSC is parsed by us (stdlib), decoded XML used as cross-check.
+- Links stay a separate plane: `links.jsonl` edges are relations, not facts;
+  they are never folded into `FactStore` (a fact dedups by value + count, an
+  edge is a pair of proven locations). Folding later requires
+  `FactStore.add(..., extra=...)` so `RESERVED_FACT_KEYS` guards it.
 - Control-flow / decompiled pseudo-code is NOT in scope before P4 (weeks, not
   days).
 
@@ -353,8 +465,9 @@ file and the briefing **before** the final commit of a phase.
 | facts / handoff / workbook | `tests/test_surface_facts.py` (9), `test_surface_handoff.py` (10), `test_surface_serialize.py` (4) | 23 |
 | native | `tests/test_native_*.py` (4 files) | 51 |
 | DEX | `tests/test_androguard_dex.py` | 12 |
+| links + entry points | `tests/test_surface_links.py` | 12 |
 
-Scanner-related tests: 158 of the 329 collected. Hermetic fixture builders:
+Scanner-related tests: 170 of the 341 collected. Hermetic fixture builders:
 `tests/elf_fixtures.py`, `tests/identity_fixtures.py`, `tests/arsc_fixtures.py`,
 `tests/fixtures/dexfixture/` (real 1.8 KB APK + the smali sources it was built
 from, used by the code-model tests).
@@ -371,8 +484,8 @@ from, used by the code-model tests).
 | `25e54b4` | P2a: `resources.arsc` -> `resources.jsonl` |
 | `133cb45` | P2b: smali resource-id resolution + definition files + FactStore guard |
 | `4adb6a5` | P2c: FileProvider roots + layout/view inventory (P2 complete) |
-| *(uncommitted)* | P3: `class_model` / `method_model` / `string_class_index` / `reflection_sites`, `dex_class` on every edge, D4 fixed (+8 tests, real APK fixture) |
-
+| `3de13fe` | P3: `class_model` / `method_model` / `string_class_index` / `reflection_sites`, `dex_class` on every edge, D4 fixed (+8 tests, real APK fixture) |
+| *(uncommitted)* | P4: `links.jsonl` (8 typed edge types, two `EvidenceLocation` cites each) + `entry_points.jsonl`, atomic write, pipeline wiring, +12 tests on the real fixture |
 Memory-only commits interleaved: `a7aa2af`, `eadf73d`, `45bec3e`, `cb52d53`,
 `9a2f8f1`.
 Push state: `origin/feat/native-elf-reader` tracks HEAD, and on 2026-11-16

@@ -14,6 +14,20 @@
 
 
 # virtual methods
+# Launcher entry point: one internal call edge Main.onCreate -> Api.fetch, so the
+# endpoint in Api.fetch is reachable from an exported component by a real edge.
+.method public onCreate()V
+    .locals 0
+
+    invoke-static {}, Lcom/example/Api;->fetch()Ljava/lang/String;
+
+    return-void
+.end method
+
+# JNI target: libdexfixture.so exports Java_com_example_Main_compute.
+.method public static native compute()V
+.end method
+
 .method public static load()V
     .locals 0
 

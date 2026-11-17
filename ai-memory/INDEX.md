@@ -91,23 +91,34 @@ surface.txt/plan.txt checkboxes if applicable.
   facts (view_count/views/ids/custom_views) and `custom_view` facts. New
   coverage keys file_provider_paths + layout_inventory; metrics
   file_provider_root_count / layout_count / custom_view_count.
-  STATE: 329 tests green, P2 COMPLETE, P3 IMPLEMENTED BUT UNCOMMITTED
-  (2026-11-16): class_model / method_model / string_class_index /
-  reflection_sites in androguard_dex.py, `dex_class` on every call-graph edge,
-  external refs and call sites, D4 fixed (callerless external methods emitted
-  with call_sites=[] and counted by external_methods_without_callers), new
-  coverage key code_model, real 1.8 KB APK fixture tests/fixtures/dexfixture/.
-  Tree is dirty on purpose: no commit instruction was given. New defect D19
-  (set-iteration order makes call-graph/call-site lists byte-unstable across
-  runs) found and left open.
-  NEXT: commit P3 when told, then P4 link graph (links.jsonl + entry_points).
+  STATE: 341 tests green, P2 COMPLETE, P3 COMMITTED (3de13fe), P4 IMPLEMENTED
+  BUT UNCOMMITTED (2026-11-16). P3: class_model / method_model /
+  string_class_index / reflection_sites in androguard_dex.py, `dex_class` on
+  every call-graph edge, external refs and call sites, D4 fixed (callerless
+  external methods emitted with call_sites=[] and counted by
+  external_methods_without_callers), new coverage key code_model, real 1.8 KB
+  APK fixture tests/fixtures/dexfixture/. P4: surface/links.py builds
+  `links.jsonl` (8 typed edge types, exactly two EvidenceLocation cites each,
+  de-duped + sorted) and `entry_points.jsonl` (exported components, deep
+  links, MAIN+LAUNCHER, Application class) and is wired into
+  run_static_surface_analysis (coverage keys link_type_*, metrics
+  link_edge_count / entry_point_count). Links are a separate plane, NOT folded
+  into FactStore. `asset->reader` and, without TruffleHog input,
+  `native->secret` are `not_applicable` with a diagnostic, never guessed.
+  Exit criteria 1-3 answered from the two files on the real fixture
+  (tests/test_surface_links.py, 12 tests incl. a pipeline run). Output is
+  deterministic across PYTHONHASHSEED (sha256 f2246ff3..., 42 edges, 3 entry
+  points). Tree is dirty on purpose: no commit instruction was given.
+  New defects: D19 still open (upstream list order), D20 (no asset->reader
+  derivation), D21 (surface cannot see TruffleHog findings).
+  NEXT: commit P4 when told, then P5 detection breadth.
   MAIN PROMOTED 2026-11-16: main was fast-forwarded to this branch's tip
   (clean, no force) and pushed, so origin/main now carries the scanner work.
   main and feat/native-elf-reader are the same commit.
-  NEXT: P3 code model (class/method/field inventory, call graph v2 with
-  caller_class/callee_class + dex file, external refs with AND without
-  callers, string->class index, reflection sites, one-hop dynamic-load
-  target).
+  NEXT (now DONE, 3de13fe): P3 code model (class/method/field inventory,
+  call graph v2 with caller_class/callee_class + dex file, external refs with
+  AND without callers, string->class index, reflection sites, one-hop
+  dynamic-load target).
 - VERIFIED SNAPSHOT 2026-11-16 (git + pytest, not memory): working branch
   feat/native-elf-reader; tests 271 green; native N1-N13 all committed
   (N13 asset/container-embedded .so = f1b921d). Before this snapshot those

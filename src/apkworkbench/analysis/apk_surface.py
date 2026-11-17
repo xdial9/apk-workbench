@@ -25,6 +25,11 @@ from apkworkbench.analysis.surface.classify import (
 )
 from apkworkbench.analysis.surface.serialize import finalize_result
 from apkworkbench.analysis.surface.handoff import write_handoff
+from apkworkbench.analysis.surface.links import (
+    build_entry_points,
+    build_link_graph,
+    write_links,
+)
 from apkworkbench.analysis.surface.ledger import (
     build_file_ledger,
     summarize as summarize_file_ledger,
@@ -1284,6 +1289,46 @@ def run_static_surface_analysis(
                 "package_id": package_id, "version_code": version_code,
                 "sha256": digest, "source_apk": str(source_apk),
             }
+            # P4 link graph: typed edges (two citations each) + entry points,
+            # written next to facts.jsonl so an AI can walk
+            # component -> class -> method -> endpoint -> permission without
+            # re-deriving a single join. A failed write is recorded, never
+            # hidden: the artifact goes partial and the reason is a diagnostic.
+            try:
+                link_coverage: dict[str, str] = {}
+                link_diagnostics: list[dict[str, str]] = []
+                link_edges = build_link_graph(
+                    result, dex_result,
+                    tree_root=citation_root,
+                    coverage=link_coverage,
+                    diagnostics=link_diagnostics,
+                )
+                link_entry_points = build_entry_points(
+                    result, dex_result, tree_root=citation_root
+                )
+                write_links(output_root, link_edges, link_entry_points)
+            except OSError as exc:
+                result["status"] = "partial"
+                result.setdefault("diagnostics", []).append({
+                    "code": "link_write_failed",
+                    "message": f"{type(exc).__name__}: {exc}",
+                })
+                _emit_progress(
+                    progress,
+                    f"  Link graph write FAILED ({type(exc).__name__}: {exc}); "
+                    f"artifact marked partial",
+                )
+            else:
+                result["coverage"].update(link_coverage)
+                result.setdefault("diagnostics", []).extend(link_diagnostics)
+                metrics = result.setdefault("metrics", {})
+                metrics["link_edge_count"] = len(link_edges)
+                metrics["entry_point_count"] = len(link_entry_points)
+                _emit_progress(
+                    progress,
+                    f"  Links: {len(link_edges)} typed edges + "
+                    f"{len(link_entry_points)} entry points",
+                )
             finalize_result(result, tree_root=citation_root)
             _atomic_write_json(target, result)
             # S8 handoff contract: the prompt chain reads surface/facts.jsonl
