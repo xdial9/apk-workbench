@@ -63,6 +63,7 @@ EDGE_TYPES = (
     "method->method",
     "method->endpoint",
     "endpoint->permission",
+    "permission->secret",
     "method->native",
     "native->secret",
     "asset->reader",
@@ -79,6 +80,7 @@ COVERAGE_KEYS = {
     "method->method": "link_type_method_method",
     "method->endpoint": "link_type_method_endpoint",
     "endpoint->permission": "link_type_endpoint_permission",
+    "permission->secret": "link_type_permission_secret",
     "method->native": "link_type_method_native",
     "native->secret": "link_type_native_secret",
     "asset->reader": "link_type_asset_reader",
@@ -738,6 +740,119 @@ def _native_secret_edges(
     return edges
 
 
+def _file_path_to_class(file_path: str) -> str | None:
+    """Convert a smali file path to a class descriptor.
+    
+    e.g., smali/com/example/Foo.smali -> Lcom/example/Foo;
+    smali_classes2/com/example/Foo.smali -> Lcom/example/Foo;
+    """
+    if not file_path.endswith(".smali"):
+        return None
+    rel = file_path[:-len(".smali")]
+    if rel.startswith("smali/"):
+        rel = rel[len("smali/"):]
+    elif rel.startswith("smali_classes"):
+        parts = rel.split("/", 1)
+        if len(parts) == 2:
+            rel = parts[1]
+        else:
+            return None
+    else:
+        return None
+    return "L" + rel.replace("/", ".") + ";"
+
+
+def _permission_secret_edges(
+    surface_result: dict[str, Any],
+    dex_result: dict[str, Any] | None,
+    trufflehog_findings: list[dict[str, Any]] | None,
+    *,
+    tree_root: str,
+    diagnostics: list[dict[str, str]] | None,
+) -> list[dict[str, Any]]:
+    """Link permissions to TruffleHog secrets found in code files.
+    
+    For each TruffleHog finding found in a smali/Java file, find which
+    permission_api_usage entries have call_sites in that same class, and
+    create permission->secret edges.
+    """
+    edges: list[dict[str, Any]] = []
+
+    if not trufflehog_findings:
+        return edges
+
+    dex_result = dex_result or {}
+    permission_usages = dex_result.get("permission_api_usage", [])
+    if not permission_usages:
+        return edges
+
+    # Build a map from class name -> set of permissions
+    class_to_permissions: dict[str, set[str]] = {}
+    for usage in permission_usages:
+        if not isinstance(usage, dict):
+            continue
+        permissions = [str(p) for p in usage.get("permissions", [])]
+        if not permissions:
+            continue
+        for site in usage.get("call_sites", []):
+            if not isinstance(site, dict):
+                continue
+            caller = str(site.get("caller", ""))
+            if not caller:
+                continue
+            # caller format: Lcom/example/Foo; methodName (args)Ret
+            class_part = caller.split(";", 1)[0] + ";" if ";" in caller else ""
+            if class_part:
+                class_to_permissions.setdefault(class_part, set()).update(permissions)
+
+    if not class_to_permissions:
+        return edges
+
+    for finding in trufflehog_findings:
+        if not isinstance(finding, dict):
+            continue
+        path, line = _finding_path_line(finding)
+        if not path:
+            continue
+
+        # Extract class name from smali file path
+        class_name = _file_path_to_class(path)
+        if not class_name:
+            continue
+
+        perms = class_to_permissions.get(class_name, set())
+        if not perms:
+            continue
+
+        detector = str(finding.get("DetectorName") or finding.get("DetectorType") or "unknown")
+        verified = finding.get("Verified") is True
+
+        for permission in sorted(perms):
+            edges.append(_make_edge(
+                "permission->secret",
+                permission_node(permission),
+                secret_node(detector, _cite_path(path, tree_root), line),
+                EvidenceLocation(
+                    evidence_kind="permission_requirement",
+                    source_path=_cite_path(path, tree_root),
+                    extractor_coordinate={"permission": permission},
+                ),
+                EvidenceLocation(
+                    evidence_kind="trufflehog_finding",
+                    source_path=_cite_path(path, tree_root),
+                    line_start=line,
+                    extractor_coordinate={
+                        "detector": detector,
+                        "detector_type": finding.get("DetectorType"),
+                        "decoder": finding.get("DecoderName"),
+                        "verification": "verified" if verified else "unverified",
+                    },
+                ),
+            ))
+
+    return edges
+
+
 def build_link_graph(
     surface_result: dict[str, Any],
     dex_result: dict[str, Any] | None,
@@ -783,6 +898,10 @@ def build_link_graph(
     ))
     edges.extend(_native_secret_edges(
         surface_result, trufflehog_findings,
+        tree_root=tree_root, diagnostics=diagnostics,
+    ))
+    edges.extend(_permission_secret_edges(
+        surface_result, dex_result, trufflehog_findings,
         tree_root=tree_root, diagnostics=diagnostics,
     ))
 
@@ -1008,6 +1127,87 @@ def _atomic_write_jsonl(path: Path, records: list[dict[str, Any]]) -> Path:
     return path
 
 
+TRACE_CHAINS_FILENAME = "trace_chains.jsonl"
+
+
+def build_trace_chains(
+    edges: list[dict[str, Any]],
+    entry_points: list[dict[str, Any]],
+    max_depth: int = 8,
+) -> list[dict[str, Any]]:
+    """Find end-to-end trace chains from entry points to secrets.
+
+    Walks the link graph from each entry point (component node) to every
+    reachable secret node (native->secret or permission->secret target),
+    returning the full chain with edge types and citations at each hop.
+    Used by the AI to trace: URL → method → caller → entry point →
+    permission → native call → secret.
+    """
+    # Build adjacency list: from_node -> list of (edge, to_node)
+    adj: dict[str, list[tuple[dict[str, Any], str]]] = {}
+    for edge in edges:
+        frm = edge.get("from", "")
+        to = edge.get("to", "")
+        adj.setdefault(frm, []).append((edge, to))
+
+    # Start nodes: component nodes (source of component->class edges)
+    start_nodes: set[str] = set()
+    for edge in edges:
+        if edge.get("edge_type") == "component->class":
+            start_nodes.add(edge.get("from", ""))
+
+    # End nodes: secret nodes (target of native->secret or permission->secret)
+    secret_nodes: set[str] = set()
+    for edge in edges:
+        if edge.get("edge_type") in ("native->secret", "permission->secret"):
+            secret_nodes.add(edge.get("to", ""))
+
+    if not start_nodes or not secret_nodes:
+        return []
+
+    chains: list[dict[str, Any]] = []
+
+    def dfs(
+        node: str,
+        path: list[dict[str, Any]],
+        visited: set[str],
+        depth: int,
+    ) -> None:
+        if depth > max_depth:
+            return
+        if node in secret_nodes:
+            chains.append({
+                "chain_length": len(path),
+                "start_node": path[0]["from"] if path else node,
+                "end_node": node,
+                "edges": path,
+            })
+            return
+        for edge, to_node in adj.get(node, []):
+            if to_node in visited:
+                continue  # avoid cycles
+            visited.add(to_node)
+            path.append(edge)
+            dfs(to_node, path, visited, depth + 1)
+            path.pop()
+            visited.discard(to_node)
+
+    for start in sorted(start_nodes):
+        dfs(start, [], {start}, 0)
+
+    chains.sort(key=lambda c: c["chain_length"])
+    return chains
+
+
+def write_trace_chains(
+    directory: str | Path,
+    chains: list[dict[str, Any]],
+) -> Path:
+    """Write ``trace_chains.jsonl`` into ``directory``."""
+    target = Path(directory) / TRACE_CHAINS_FILENAME
+    return _atomic_write_jsonl(target, chains)
+
+
 def write_links(
     directory: str | Path,
     edges: list[dict[str, Any]],
@@ -1021,3 +1221,13 @@ def write_links(
             target / ENTRY_POINTS_FILENAME, entry_points
         ),
     }
+
+
+def write_trace_chains_to_dir(
+    directory: str | Path,
+    edges: list[dict[str, Any]],
+    entry_points: list[dict[str, Any]],
+) -> Path:
+    """Convenience: build trace chains from edges + entry points and write."""
+    chains = build_trace_chains(edges, entry_points)
+    return write_trace_chains(directory, chains)

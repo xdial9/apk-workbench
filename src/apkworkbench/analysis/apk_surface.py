@@ -31,6 +31,7 @@ from apkworkbench.analysis.surface.links import (
     build_entry_points,
     build_link_graph,
     write_links,
+    write_trace_chains_to_dir,
 )
 from apkworkbench.analysis.surface.ledger import (
     build_file_ledger,
@@ -1546,6 +1547,183 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def cross_apk_native_jni_match(
+    results_root: Path,
+    eligible_rows: list[dict[str, str]],
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Cross-APK native JNI matching (crown jewel 5).
+
+    When .so files live in split APKs but smali `native` declarations live
+    in the base APK (or another split), per-APK analysis cannot match them
+    because `native_method_index` is built from that APK's smali only.
+    This pass collects all native exports and all smali `native` declarations
+    from every APK in the run, matches them across APK boundaries, and writes
+    `native_jni_entry` facts back to each APK's surface/static-analysis.json.
+
+    Returns a dict with matched/unmatched counts and per-artifact results.
+    """
+    from types import SimpleNamespace
+    from apkworkbench.analysis.surface.native import (
+        NativeMethodIndex,
+        demangle_jni_symbol,
+        _map_jni_symbol,
+    )
+
+    # ---- Phase 1: Build combined NativeMethodIndex from ALL APKs' smali ----
+    combined_index = NativeMethodIndex()
+    smali_files = 0
+    for row in eligible_rows:
+        package_id = row.get("package_id", "")
+        version_code = str(row.get("version_code", ""))
+        digest = row.get("sha256", "").lower()
+        decoded = results_root / package_id / version_code / digest / "apktool"
+        if not decoded.is_dir():
+            continue
+        for smali_file in decoded.rglob("*.smali"):
+            try:
+                text = smali_file.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            relative = smali_file.relative_to(decoded).as_posix()
+            combined_index.add_file(text, relative)
+            smali_files += 1
+
+    if smali_files == 0:
+        return {"matched": 0, "unmatched": 0, "smali_files": 0, "artifacts_updated": []}
+
+    # ---- Phase 2: Collect all native_export facts from ALL APKs ----
+    exports: list[tuple[str, str, int, str]] = []  # library, symbol, offset, digest
+    for row in eligible_rows:
+        package_id = row.get("package_id", "")
+        version_code = str(row.get("version_code", ""))
+        digest = row.get("sha256", "").lower()
+        target = results_root / package_id / version_code / digest / "surface" / "static-analysis.json"
+        if not target.is_file():
+            continue
+        try:
+            result = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for fact in result.get("facts", []):
+            if not isinstance(fact, dict) or fact.get("kind") != "native_export":
+                continue
+            extra = fact.get("extra", {})
+            library = extra.get("library", "")
+            symbol = extra.get("symbol", "")
+            evidence = fact.get("evidence", {})
+            offset = 0
+            if isinstance(evidence, dict):
+                offset = evidence.get("offset", 0)
+            elif isinstance(evidence, list) and len(evidence) > 0:
+                first = evidence[0]
+                if isinstance(first, dict):
+                    offset = first.get("offset", 0)
+            if library and symbol and symbol.startswith("Java_"):
+                exports.append((library, symbol, offset, digest))
+
+    if not exports:
+        return {"matched": 0, "unmatched": 0, "smali_files": smali_files, "artifacts_updated": []}
+
+    # ---- Phase 3: Match exports to smali declarations ----
+    matched_by_digest: dict[str, list[tuple[str, str, int, dict]]] = {}
+    unmatched = 0
+
+    for library, symbol, offset, digest in exports:
+        name = demangle_jni_symbol(symbol)
+        if name is None or name.problem or not name.java_class or not name.java_method:
+            unmatched += 1
+            continue
+        sym = SimpleNamespace(name=symbol, file_offset=offset)
+        entry, _reason = _map_jni_symbol(library, sym, name, combined_index)
+        if entry is not None:
+            matched_by_digest.setdefault(digest, []).append((library, symbol, offset, entry))
+        else:
+            unmatched += 1
+
+    if not matched_by_digest:
+        return {"matched": 0, "unmatched": unmatched, "smali_files": smali_files, "artifacts_updated": []}
+
+    # ---- Phase 4: Write native_jni_entry facts to each APK's surface ----
+    artifacts_updated = []
+    total_matched = 0
+
+    for digest, exports_list in matched_by_digest.items():
+        row = next((r for r in eligible_rows if r.get("sha256", "").lower() == digest), None)
+        if row is None:
+            continue
+        package_id = row.get("package_id", "")
+        version_code = str(row.get("version_code", ""))
+        target = results_root / package_id / version_code / digest / "surface" / "static-analysis.json"
+        if not target.is_file():
+            continue
+
+        try:
+            result = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+
+        facts = result.setdefault("facts", [])
+        for library, symbol, offset, entry in exports_list:
+            facts.append({
+                "kind": "native_jni_entry",
+                "value": f"{library}::{symbol}",
+                "evidence": [
+                    {"path": library, "offset": offset},
+                    {"path": entry["smali_path"], "line": entry["smali_line"]},
+                ],
+                "extra": {
+                    "library": library,
+                    "symbol": symbol,
+                    "java_class": entry["java_class"],
+                    "java_method": entry["java_method"],
+                    "java_signature": entry["java_signature"],
+                    "mapping_confidence": entry["confidence"],
+                    "cross_apk_match": True,
+                },
+            })
+
+        # Update metrics
+        metrics = result.setdefault("metrics", {})
+        current_mapped = metrics.get("native_jni_exports_mapped", 0)
+        metrics["native_jni_exports_mapped"] = current_mapped + len(exports_list)
+        metrics["native_jni_mapping_complete"] = True
+
+        # Update coverage
+        coverage = result.setdefault("coverage", {})
+        coverage["native_jni_mapping"] = "mapped"
+        coverage["link_type_method_native"] = "success"
+
+        # Update native library entries with matched entries
+        for lib_report in result.get("libraries", []):
+            lib_name = lib_report.get("relative", "")
+            for library, symbol, offset, entry in exports_list:
+                if lib_name == library:
+                    lib_report.setdefault("jni_entries", []).append(entry)
+
+        try:
+            _atomic_write_json(target, result)
+            total_matched += len(exports_list)
+            artifacts_updated.append({
+                "package_id": package_id,
+                "version_code": version_code,
+                "sha256": digest,
+                "matched": len(exports_list),
+            })
+            if progress is not None:
+                progress(f"  Cross-APK JNI: matched {len(exports_list)} export(s) for {digest[:12]}")
+        except OSError as exc:
+            if progress is not None:
+                progress(f"  Cross-APK JNI write FAILED for {digest[:12]}: {exc}")
+
+    return {
+        "matched": total_matched,
+        "unmatched": unmatched,
+        "smali_files": smali_files,
+        "artifacts_updated": artifacts_updated,
+    }
+
+
 def run_static_surface_analysis(
     database,
     workspace: str | Path,
@@ -1814,6 +1992,15 @@ def run_static_surface_analysis(
                     result, dex_result, tree_root=citation_root
                 )
                 write_links(output_root, link_edges, link_entry_points)
+                # Write trace chains: entry point → ... → secret paths
+                # for the AI to trace end-to-end.
+                try:
+                    write_trace_chains_to_dir(output_root, link_edges, link_entry_points)
+                except OSError as exc:
+                    result.setdefault("diagnostics", []).append({
+                        "code": "trace_chain_write_failed",
+                        "message": f"{type(exc).__name__}: {exc}",
+                    })
             except OSError as exc:
                 result["status"] = "partial"
                 result.setdefault("diagnostics", []).append({
@@ -1914,6 +2101,33 @@ def run_static_surface_analysis(
             summary["skipped"], summary["partial"], summary["finding_count"],
             summary["artifacts"],
         )
+    # ---- Cross-APK native JNI matching (crown jewel 5) ----
+    # When .so files live in split APKs but smali `native` declarations live
+    # in the base APK (or another split), per-APK analysis can't match them.
+    # This pass matches all native exports to all smali declarations across
+    # the run, writing native_jni_entry facts back to each APK's surface.
+    if eligible:
+        cross_summary = cross_apk_native_jni_match(results_root, eligible, progress)
+        _emit_progress(
+            progress,
+            f"  Cross-APK JNI matching: {cross_summary['matched']} matched, "
+            f"{cross_summary['unmatched']} unmatched, "
+            f"{cross_summary['smali_files']} smali files indexed",
+        )
+        # Update summary artifacts with cross-APK JNI results
+        cross_by_digest = {a["sha256"]: a for a in cross_summary["artifacts_updated"]}
+        for artifact in summary["artifacts"]:
+            if artifact["sha256"] in cross_by_digest:
+                artifact_pkg = artifact["package_id"]
+                artifact_ver = artifact["version_code"]
+                artifact_digest = artifact["sha256"]
+                target = results_root / artifact_pkg / artifact_ver / artifact_digest / "surface" / "static-analysis.json"
+                try:
+                    updated = json.loads(target.read_text(encoding="utf-8"))
+                    artifact["coverage"] = updated.get("coverage", artifact.get("coverage", {}))
+                    artifact["finding_count"] = len(updated.get("findings", []))
+                except (OSError, ValueError):
+                    pass
     if marker_path is not None:
         marker_status = (
             "failed" if summary["failed"]
