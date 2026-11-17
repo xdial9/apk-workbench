@@ -64,6 +64,7 @@ EDGE_TYPES = (
     "method->endpoint",
     "endpoint->permission",
     "permission->secret",
+    "method->secret",
     "method->native",
     "native->secret",
     "asset->reader",
@@ -81,6 +82,7 @@ COVERAGE_KEYS = {
     "method->endpoint": "link_type_method_endpoint",
     "endpoint->permission": "link_type_endpoint_permission",
     "permission->secret": "link_type_permission_secret",
+    "method->secret": "link_type_method_secret",
     "method->native": "link_type_method_native",
     "native->secret": "link_type_native_secret",
     "asset->reader": "link_type_asset_reader",
@@ -853,6 +855,112 @@ def _permission_secret_edges(
     return edges
 
 
+def _method_secret_edges(
+    surface_result: dict[str, Any],
+    dex_result: dict[str, Any] | None,
+    trufflehog_findings: list[dict[str, Any]] | None,
+    *,
+    tree_root: str,
+    diagnostics: list[dict[str, str]] | None,
+) -> list[dict[str, Any]]:
+    """Link TruffleHog findings found in smali files to the methods they're in.
+
+    For each finding whose SourceMetadata points at a .smali file, map the file
+    to a class, find all methods in that class from the DEX model, and create
+    method->secret edges. This gives the AI concrete starting points: from any
+    exported component, walk class->method->...->method->secret.
+    """
+    edges: list[dict[str, Any]] = []
+
+    if not trufflehog_findings:
+        return edges
+
+    dex_result = dex_result or {}
+    classes, methods = _class_index(dex_result)
+    if not classes or not methods:
+        return edges
+
+    # Build class name -> list of methods
+    class_to_methods: dict[str, list[dict[str, Any]]] = {}
+    for method in methods.values():
+        class_name = str(method.get("class_name") or "")
+        if class_name:
+            class_to_methods.setdefault(class_name, []).append(method)
+
+    for finding in trufflehog_findings:
+        if not isinstance(finding, dict):
+            continue
+        path, line = _finding_path_line(finding)
+        if not path:
+            continue
+        # Only smali files can be mapped to methods
+        if not path.endswith(".smali"):
+            continue
+        class_name = _smali_path_to_class(path)
+        if not class_name:
+            continue
+        class_methods = class_to_methods.get(class_name, [])
+        if not class_methods:
+            continue
+        detector = str(
+            finding.get("DetectorName") or finding.get("DetectorType") or "unknown"
+        )
+        verified = finding.get("Verified") is True
+        for method in class_methods:
+            full_name = str(method.get("full_name") or "")
+            if not full_name:
+                continue
+            edges.append(_make_edge(
+                "method->secret",
+                method_node(full_name),
+                secret_node(detector, _cite_path(path, tree_root), line),
+                EvidenceLocation(
+                    evidence_kind="dex_method",
+                    dex_class=class_name,
+                    method_signature=full_name,
+                    extractor_coordinate={
+                        "dex_index": method.get("dex_index"),
+                        "offset": line,
+                    },
+                ),
+                EvidenceLocation(
+                    evidence_kind="trufflehog_finding",
+                    source_path=_cite_path(path, tree_root),
+                    line_start=line,
+                    extractor_coordinate={
+                        "detector": detector,
+                        "detector_type": finding.get("DetectorType"),
+                        "decoder": finding.get("DecoderName"),
+                        "verification": "verified" if verified else "unverified",
+                    },
+                ),
+            ))
+    return edges
+
+
+def _smali_path_to_class(smali_path: str) -> str | None:
+    """Convert a smali file path to a class descriptor.
+
+    smali/com/example/Foo.smali -> Lcom/example/Foo;
+    smali_classes2/com/example/Foo.smali -> Lcom/example/Foo;
+    """
+    rel = smali_path
+    if rel.startswith("smali/"):
+        rel = rel[len("smali/"):]
+    elif rel.startswith("smali_classes"):
+        parts = rel.split("/", 1)
+        if len(parts) == 2:
+            rel = parts[1]
+        else:
+            return None
+    else:
+        return None
+    if not rel.endswith(".smali"):
+        return None
+    rel = rel[:-len(".smali")]
+    return "L" + rel.replace("/", ".") + ";"
+
+
 def build_link_graph(
     surface_result: dict[str, Any],
     dex_result: dict[str, Any] | None,
@@ -898,6 +1006,10 @@ def build_link_graph(
     ))
     edges.extend(_native_secret_edges(
         surface_result, trufflehog_findings,
+        tree_root=tree_root, diagnostics=diagnostics,
+    ))
+    edges.extend(_method_secret_edges(
+        surface_result, dex_result, trufflehog_findings,
         tree_root=tree_root, diagnostics=diagnostics,
     ))
     edges.extend(_permission_secret_edges(
@@ -1159,7 +1271,7 @@ def build_trace_chains(
     # End nodes: secret nodes (target of native->secret or permission->secret)
     secret_nodes: set[str] = set()
     for edge in edges:
-        if edge.get("edge_type") in ("native->secret", "permission->secret"):
+        if edge.get("edge_type") in ("native->secret", "permission->secret", "method->secret"):
             secret_nodes.add(edge.get("to", ""))
 
     if not start_nodes or not secret_nodes:
