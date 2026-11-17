@@ -1,9 +1,11 @@
 # APK Workbench — Current Engineering Brief
 
 **Verified:** 2026-11-17
-**Repository:** `main`; M0, M1, and M2 are complete
-**Tests:** `.venv/bin/python -m pytest -q` — 382 passed
-**Next work:** M3 on `docs/engineering/PRODUCT-RESCUE-BOARD.md`
+**Repository:** `main`; M0, M1, and M2 are complete; M3 validation is in
+progress and blocked by real-run JNI evidence inconsistencies
+**Tests:** `.venv/bin/python -m pytest -q` — 383 passed
+**Next work:** resolve M3 findings in a new output workspace; preserve the
+frozen Simple Calculator run
 
 ## Current state
 
@@ -17,18 +19,28 @@
   reasons, export/import records, native string counts and coverage, and
   cited native-related links/traces to the final report. Secret values are
   not included in the new native summary.
-- Focused final-report tests pass; the full suite passes (382).
-- No representative result bundle was found in the repository. The external
-  configured workspace was not inspected; real-app report quality remains
-  unverified.
+- M3 inspected real Google Play run
+  `b8e85b99-a5f9-496d-b3a4-e15cb1deca73` (Simple Calculator v85): 4 APK
+  components verified, report regenerated, all 4 evidence bundles frozen and
+  `verify-workspace` passed. Reconciliation accounted for 4/4 (1 complete,
+  3 complete-with-warnings). The report has 13 retained unverified
+  TruffleHog findings and 0 verified findings.
+- M3 is not accepted: native metrics report 7 mapped and 7 unmapped JNI
+  exports out of 7, while the component inventory has 0 mapped and 7
+  unmapped. No per-stage `status.json` files were found. The JSON report is
+  about 758 MB and HTML about 1.13 GB.
+- Do not mutate the frozen run. Fix the cross-APK JNI inventory/metric
+  reconciliation and per-stage status outputs, then validate in a new output
+  workspace. Focused changes also fixed streaming selection of native-only
+  links and the missing-hash verifier CLI error; full suite: 383 passed.
 
 ## Rescue sequence
 
 1. **M0 — current-state reconciliation:** complete.
 2. **M1 — post-scan secret links:** complete.
 3. **M2 — native report visibility:** complete.
-4. **M3 — one real-app end-to-end proof:** next; must not substitute
-   fixture-only success for this proof.
+4. **M3 — one real-app end-to-end proof:** in progress; the first real report
+   exposed blockers and must be rerun after they are fixed.
 5. **M4/M5 — re-audit determinism/scale and establish a release gate** only
    after the end-to-end evidence exists.
 

@@ -71,3 +71,22 @@ def test_reconcile_command_reports_unresolved_then_complete_run(monkeypatch, tmp
     assert complete.exit_code == 0
     assert "Complete: 1" in complete.output
     assert "All manifest items have a complete terminal outcome." in complete.output
+
+
+def test_verify_workspace_reports_missing_hash_manifest_without_traceback(
+    monkeypatch, tmp_path
+):
+    class ConfigStub:
+        def get(self, key, default=None):
+            return str(tmp_path) if key == "workspace" else default
+
+    monkeypatch.setattr(cli, "Config", ConfigStub)
+    target = tmp_path / "bundle"
+    target.mkdir()
+
+    result = CliRunner().invoke(cli.main, ["verify-workspace", str(target)])
+
+    assert result.exit_code == 1
+    assert "Status: ERROR" in result.output
+    assert "hashes.sha256 not found" in result.output
+    assert "Traceback" not in result.output

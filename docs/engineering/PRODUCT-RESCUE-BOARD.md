@@ -4,14 +4,17 @@
 verifiable, useful per-app result. This is a delivery board, not a proposal to
 rewrite the scanner or add another detection catalog.
 
-**Snapshot:** 2026-11-17, M0, M1, and M2 are complete on `main`. Current full
-test suite: **382 passed**. The pre-existing untracked `ai-memory/test.txt`
-remains untouched.
+**Snapshot:** 2026-11-17, M0, M1, and M2 are complete on `main`. M3's real-run
+validation has been exercised but is **blocked** by a JNI evidence mismatch.
+Current full test suite: **383 passed**. The pre-existing untracked
+`ai-memory/test.txt` remains untouched.
 
-**Evidence boundary:** no representative result bundle was found under the
-repository root. The configured external workspace was not inspected, so real
-APK output quality remains unverified. The test suite proves fixture behavior,
-not the quality of a completed real-app report.
+**Evidence boundary:** the configured external workspace contains a real
+Simple Calculator v85 run (`b8e85b99-a5f9-496d-b3a4-e15cb1deca73`), but its
+final report exposes a cross-APK JNI mapping inconsistency. The four bundles
+are frozen and verify, but M3 is not accepted until that discrepancy and the
+missing per-stage `status.json` outputs are resolved and the report is
+regenerated.
 
 ## Bottom line
 
@@ -190,11 +193,44 @@ introduced, and the new summary does not render secret values.
 - A fixture proves a mapped JNI path and a separate unmapped-with-reason path.
 
 All acceptance criteria are exercised by
-`tests/test_final_run_report.py`; the full suite passes 382 tests.
+`tests/test_final_run_report.py`; the full suite passes 383 tests.
 
 ### M3 — Produce and inspect one complete bundle from start to report
 
 **Priority:** P0 · **Estimate:** M · **Depends on:** M1 and M2
+
+**Status: IN PROGRESS — real-run validation found an acceptance blocker.**
+
+**Run evidence (2026-11-17):**
+- Real input: Simple Calculator v85, Google Play run
+  `b8e85b99-a5f9-496d-b3a4-e15cb1deca73`; 4 APK components, independently
+  verified; 32,997,496 bytes total.
+- Existing successful Apktool and TruffleHog results were reused rather than
+  rescanned. Post-scan refresh completed for all 4 components. The final JSON
+  retains 13 unverified TruffleHog findings and reports 0 verified findings.
+- Surface analysis accounted for 4 components: 1 success, 3 partial, 0 failed;
+  2,074 static indicators. Reconciliation accounted for 4/4: 1 `complete`,
+  3 `complete_with_warnings`. The CLI exits nonzero for the warning outcomes;
+  it does not report an unaccounted component.
+- Reports were regenerated:
+  `workspace/reports/runs/b8e85b99-a5f9-496d-b3a4-e15cb1deca73/final-report.json`
+  and `final-report.html`. They contain 471 endpoint candidates, 15 routes,
+  2,160 Smali API call sites, 8,339 external DEX method references, 3,786 DEX
+  API/config strings, 28 permission/API groups, and 201 rate-limit/retry clues.
+  Their sizes are about 758 MB JSON and 1.13 GB HTML.
+- The native split has 3 ELF libraries and 7 JNI exports. The generated report
+  says 7 mapped and 7 unmapped (total 7), while that component's JNI inventory
+  has 0 mapped entries and 7 unmapped entries. The run-level consistency flag
+  is false. `cross_apk_native_jni_match` appends mapped facts and increments
+  the mapped metric without reconciling the inventory/unmapped records. This
+  is a verified source/report inconsistency; do not claim JNI mapping coverage
+  is complete.
+- No stage `status.json` files were found in the four component bundles (stage
+  status is present in the processing database and final report instead).
+- All 4 component bundles were frozen after report generation;
+  `verify-workspace` passed for each with 0 mismatches, missing files, or extra
+  files. Keep these bundles immutable while fixing the writer; validate any
+  rerun in a new output workspace/run.
 
 Run one small, representative app through the normal workflow. Prefer a
 previously acquired local APK bundle. If none is available, use an operator-
@@ -223,8 +259,9 @@ validation. Avoid a large corpus.
   raw secrets.
 
 **Known boundary:** no representative result bundle was found in the repository
-tree at this snapshot; an external configured workspace may contain one and
-has not been checked.
+tree. The external workspace was inspected as described above; M3 remains
+open until the JNI inventory mismatch and per-stage status output are fixed and
+the current-code report passes the acceptance checks.
 
 ### M4 — Re-audit determinism, unresolved scanner defects, and scale behavior
 
@@ -288,10 +325,10 @@ commands/report match that contract.
 
 ## Immediate next ticket
 
-M0 is complete. Start with **M1** before expanding scope. M1 is the shortest
-path to answering the practical question:
-does the pipeline combine its own app analysis with the secret-scan result to
-produce useful, cited traces?
+Finish **M3**: make cross-APK JNI mappings consistent across facts, metrics,
+inventories, and report sections; emit per-stage `status.json` outputs; then
+validate the corrected behavior in a new output workspace and freeze/verify
+the resulting bundles. Do not start M4 until this real-run gate passes.
 
 Do not begin with more detection rules, a broad architecture rewrite, a
 large-scale acquisition, or a new reporting framework.

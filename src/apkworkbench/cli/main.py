@@ -705,7 +705,10 @@ def verify_workspace(folder: Path) -> None:
 
     click.echo("VERIFY-WORKSPACE")
     click.echo(f"  Status: {result['status'].upper()}")
-    click.echo(f"  Hash file: {result['hash_file']}")
+    if result.get("hash_file"):
+        click.echo(f"  Hash file: {result['hash_file']}")
+    if result.get("reason"):
+        click.echo(f"  Reason: {result['reason']}")
     click.echo(f"  Mismatches: {len(result['mismatches'])}")
     for m in result["mismatches"]:
         click.echo(f"    - {m['rel_path']}: {m['reason']}")

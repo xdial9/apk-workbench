@@ -49,29 +49,30 @@ DURING: register risks/hallucination doubts as VERIFY notes immediately.
 END: update STATE (phase item moved? decisions? VERIFYs resolved?) + tick
 surface.txt/plan.txt checkboxes if applicable.
 
-## STATE (current as of 2026-11-17; M2 complete)
-- Current verified snapshot: M0/M1/M2 on `main`; `.venv/bin/python -m pytest
-  -q` reports **382 passed**. P0-P7 are implemented; bundle freeze,
+## STATE (current as of 2026-11-17; M3 validation in progress)
+- Current verified snapshot: M0/M1/M2 are complete; `.venv/bin/python -m
+  pytest -q` reports **383 passed**. P0-P7 are implemented; bundle freeze,
   `handoff.json`, `hashes.sha256`, and `verify-workspace` are implemented and
-  fixture-tested. Native ELF/JNI analysis, cross-APK JNI matching, typed
-  evidence links, and trace-chain generation are present. M1 rebuilds links
-  after TruffleHog, distinguishes successful-empty, failed, missing, and
-  not-run scan states, and writes current trace/handoff outputs before freeze.
-  M2 exposes per-library native state, JNI mappings/unmapped reasons, native
-  symbol/string coverage, citations, and native-related traces in final
-  reports. P8 is PARTIAL:
-  no model dry-run, enforced AI output contract, location-map volume hierarchy,
-  or split-component bundle aggregation has been demonstrated. No
-  representative result bundle is in the repository; the external workspace
-  was not inspected. The active delivery board is
-  `docs/engineering/PRODUCT-RESCUE-BOARD.md`.
+  fixture-tested. A real Simple Calculator v85 run
+  (`b8e85b99-a5f9-496d-b3a4-e15cb1deca73`) was independently verified,
+  refreshed after TruffleHog, reported, frozen, and verified component by
+  component. Reconciliation accounted for 4/4 components (1 complete, 3 with
+  warnings). M3 is **not accepted**: the native split report claims 7 mapped
+  and 7 unmapped JNI exports out of 7, while its inventory has 0 mapped and 7
+  unmapped entries; per-stage `status.json` files are also absent. The
+  regenerated report is about 758 MB JSON / 1.13 GB HTML. Preserve the frozen
+  run; fix these outputs and validate a new run before M4. P8 remains PARTIAL:
+  no model dry-run, enforced AI output contract, location-map volume
+  hierarchy, or split-component bundle aggregation has been demonstrated.
+  The active delivery board is `docs/engineering/PRODUCT-RESCUE-BOARD.md`.
 - The detailed scanner/native history below includes older point-in-time
   snapshots. Those are historical evidence, not current work queues; use the
   current state above and the dated status in the canonical phase files.
 - Product rescue board M0 (current-state reconciliation), M1 (post-scan
   secret links and trace chains), and M2 (native report visibility) are
-  complete. M3 (one real-app end-to-end proof) is next; no real-app quality
-  claim is made until that evidence is produced.
+  complete. M3's real-app validation has produced evidence but is blocked by
+  the JNI inventory mismatch and missing per-stage status files; no claim of
+  successful native mapping is made.
 
 ### Historical scanner snapshot (2026-11-16; retained for audit trail)
 - SCANNER TRACK 2026-11-16 (canonical file: ai-memory/scanner-plan.md).

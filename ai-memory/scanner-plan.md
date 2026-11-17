@@ -1,10 +1,18 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
 Current state (verified 2026-11-17): **P0-P7 DONE; M1 post-scan secret links
-and trace-chain refresh DONE; M2 native report visibility DONE; bundle freeze
-and `verify-workspace` implemented. P8 is PARTIAL**: the handoff/freeze
-mechanics exist, but model dry-run, output-contract enforcement, and volume
-hierarchy are not validated. Full suite: **382 passed**. Current open work is tracked in
+and trace-chain refresh DONE; M2 native report visibility DONE; M3 real-run
+validation IN PROGRESS**. M3 used the real Simple Calculator v85 run
+`b8e85b99-a5f9-496d-b3a4-e15cb1deca73`: download verification passed for all
+4 APK components, reports were regenerated, all 4 evidence bundles froze and
+passed `verify-workspace`, but M3 is blocked by inconsistent cross-APK JNI
+metrics/inventory (7 mapped + 7 unmapped for 7 exports) and absent per-stage
+`status.json` files. The 758 MB JSON / 1.13 GB HTML report is also a scale
+constraint. The M3 follow-up is to fix those output mismatches and validate in
+a new workspace; do not mutate the frozen evidence. P8 remains PARTIAL:
+handoff/freeze mechanics exist, but model dry-run, output-contract enforcement,
+and volume hierarchy are not validated. Full suite: **383 passed**. Current
+open work is tracked in
 [PRODUCT-RESCUE-BOARD.md](../docs/engineering/PRODUCT-RESCUE-BOARD.md).
 The older 2026-11-16 status snapshots below are retained as history, not as the
 current state.

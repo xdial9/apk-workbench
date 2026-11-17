@@ -29,7 +29,12 @@ def _read_json(path: Path, root: Path) -> Any | None:
         raise FinalRunReportError(f"Cannot read run evidence {path}: {exc}") from exc
 
 
-def _read_jsonl(path: Path, root: Path) -> list[dict[str, Any]] | None:
+def _read_jsonl(
+    path: Path,
+    root: Path,
+    *,
+    native_only: bool = False,
+) -> list[dict[str, Any]] | None:
     if path.is_symlink():
         raise FinalRunReportError(f"Refusing symlinked report input: {path}")
     try:
@@ -55,6 +60,19 @@ def _read_jsonl(path: Path, root: Path) -> list[dict[str, Any]] | None:
                     raise FinalRunReportError(
                         f"Expected a JSON object in {path}:{line_number}."
                     )
+                if native_only:
+                    edge_types = {"method->native", "native->secret"}
+                    chain_edges = value.get("edges")
+                    is_native = value.get("edge_type") in edge_types or (
+                        isinstance(chain_edges, list)
+                        and any(
+                            isinstance(edge, dict)
+                            and edge.get("edge_type") in edge_types
+                            for edge in chain_edges
+                        )
+                    )
+                    if not is_native:
+                        continue
                 records.append(value)
     except OSError as exc:
         raise FinalRunReportError(f"Cannot read run evidence {path}: {exc}") from exc
@@ -849,8 +867,8 @@ def generate_final_run_report(
         native_links_path = artifact_root / "links.jsonl"
         native_evidence = _native_evidence(
             static_analysis if isinstance(static_analysis, dict) else None,
-            _read_jsonl(native_trace_path, results_root),
-            _read_jsonl(native_links_path, results_root),
+            _read_jsonl(native_trace_path, results_root, native_only=True),
+            _read_jsonl(native_links_path, results_root, native_only=True),
         )
 
         if status.get("scan_status") == "failed":

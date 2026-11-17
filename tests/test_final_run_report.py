@@ -289,8 +289,15 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
         "to": "native:libmapped.so",
         "citations": trace_chain["edges"][0]["citations"],
     }
+    unrelated_link = {
+        "edge_type": "method->endpoint",
+        "from": "method:Lcom/example/Main; load ()V",
+        "to": "endpoint:https://api.example.test/v1",
+        "citations": [],
+    }
     (artifact_root / "links.jsonl").write_text(
-        json.dumps(native_link) + "\n", encoding="utf-8"
+        json.dumps(native_link) + "\n" + json.dumps(unrelated_link) + "\n",
+        encoding="utf-8",
     )
     reports_root = workspace / "reports"
     reports_root.mkdir(parents=True)
@@ -335,6 +342,7 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
     assert native_evidence["imports"][0]["value"].endswith("::dlopen")
     assert native_evidence["trace_chains"][0] == trace_chain
     assert native_evidence["links"][0] == native_link
+    assert len(native_evidence["links"]) == 1
     assert payload["stages"]["independent_download_verification"]["status"] == "verified"
     assert payload["stages"]["reconciliation"]["complete"] == 1
     assert payload["api_catalog"]["endpoint_candidates"][0]["value"] == "https://api.example.test/v1"
