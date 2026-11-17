@@ -1,7 +1,7 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
-Status: **P0 DONE, P1 DONE, P2 DONE (a/b/c), P3 NEXT.** Verified
-2026-11-16, 321 tests green, tree clean, branch pushed.
+Status: **P0 DONE, P1 DONE, P2 DONE (a/b/c), P3 IMPLEMENTED (uncommitted).** Verified
+2026-11-16, 329 tests green, tree dirty (P3 waits for a commit instruction).
 This file is the resume point for the scanner track. Read it after
 `ai-memory/INDEX.md` §STATE and before touching `analysis/`.
 
@@ -39,7 +39,7 @@ Everything below is the fix ladder. P0-P1 are done and verified.
 | P2a | Resource table: `resources.arsc` -> id/type/name/value -> `resources.jsonl` | **DONE** | `25e54b4` |
 | P2b | Resource links: smali id cross-ref + decoded-XML file attribution | **DONE** | `133cb45` |
 | P2c | FileProvider `file_paths.xml` roots + layout/view inventory | **DONE** | `4adb6a5` |
-| P3 | Code model: class/method/field inventory, call graph v2, reflection sites | queued | — |
+| P3 | Code model: class/method/field inventory, call graph v2, reflection sites | **DONE (uncommitted)** | pending |
 | P4 | Link graph: typed edges with two cites each + entry_points | queued | — |
 | P5 | Detection breadth: 11 deduction templates, rule catalog 19 -> ~60 | queued | — |
 | P6 | Containers: extract `.dex`/`.jar`/nested zips and analyse them | queued | — |
@@ -151,6 +151,70 @@ Everything below is the fix ladder. P0-P1 are done and verified.
   `layout_count`, `custom_view_count`.
 - **P2 is complete.** Next: P3 code model.
 
+### P3 — DONE (uncommitted, verified 329 tests green)
+Scope actually delivered (the prompt's list, not the whole plan line — no
+`caller_class`/`callee_class` on edges, they are derivable from `full_name`;
+noted as open below):
+- `androguard_dex.py` new section after the internal_call_graph loop:
+  * `class_model`: one entry per internal class — `dex_index, class_name,
+    access_flags (string), superclass, interfaces, source_file, method_count,
+    field_count, annotations`. `source_file` comes from
+    `ClassDefItem.get_source_file_idx()` + `CM.get_string()`, `NO_INDEX`
+    (0xFFFFFFFF) -> null. Class annotations via `get_annotations()`.
+  * `method_model`: one entry per internal method — `class_name, method_name,
+    full_name, access_flags, descriptor, annotations`. Method annotations come
+    from the class `AnnotationsDirectoryItem` (method_idx -> type list), since
+    EncodedMethod carries none. Join key to the call graph is `full_name`.
+  * `string_class_index`: string value -> sorted list of referencing class
+    names, built inside the existing `dx.get_strings()` loop (before the
+    endpoint-candidate filter, so class-name literals are indexed). Values no
+    class references are absent (documented in `limitations`), not dropped.
+  * `reflection_sites`: one entry per hit on `Class->forName`,
+    `Class->getMethod|getDeclaredMethod|getField|getDeclaredField`,
+    `Method->invoke` — `caller, caller_class, api, offset,
+    argument_resolved, resolved_target, resolution_kind, unresolved_reason`.
+    One-hop resolution = nearest preceding string constant in the same method,
+    ordered by xref offset. `Method->invoke` never resolves (its args are
+    objects) -> `unresolved_reason=no_literal_argument`. Sorted for
+    determinism.
+  * `dex_class` (DEX index in `dx.vms`) on every `internal_call_graph` entry
+    (edge origin = caller) and every `external_method_references` entry; also
+    on every `call_sites` element, which is the only exact per-edge fact when
+    one Analysis spans several DEX files. External methods have no owning DEX,
+    so the entry-level value is set only when all call sites share one DEX.
+  * metrics: `class_model_count`, `method_model_count`,
+    `string_class_index_entries`, `reflection_site_count`,
+    `external_methods_without_callers`. New coverage key `code_model`
+    (`success | partial | not_applicable | failed | timed_out`).
+  * every error/empty payload now carries the four new keys + a `coverage`
+    entry, so the schema is stable across success/timeout/failure.
+- `tests/test_androguard_dex.py`: 4 -> 12 tests. New real-APK fixture
+  `tests/fixtures/dexfixture/dexfixture.apk` (apktool-built from the committed
+  smali sources next to it: 3 classes, annotations, literal + parameter
+  `Class.forName`, `getMethod`/`getDeclaredMethod`/`Method.invoke`). The
+  monkeypatched stack became a reusable `install_fake_androguard()` helper
+  that mirrors the introspected 4.1.4 surface.
+- VERIFIED against the real library (not guessed): androguard 4.1.4
+  `ClassAnalysis.get_vm_class()`, `get_methods()` (dict_values),
+  `get_nb_methods()`, `get_fields()`, `MethodAnalysis.get_access_flags_string
+  ()`, `get_method().get_method_idx()`, `get_vm()`, `ClassDefItem
+  .get_source_file_idx()/get_interfaces()/get_annotations()/
+  annotations_directory_item`, `ClassDefItem.CM.vm` as the DEX link (not
+  `CD.CM is DEX` — that identity is false).
+- Exit criteria: `len(class_model) == metrics.classes` and every
+  `method_model`/`internal_call_graph` entry resolves to a `class_model`
+  entry, both asserted on the real fixture.
+- Observed, NOT fixed (new defect D19): list order in
+  `internal_call_graph`, `external_references[].call_sites` and
+  `dex_api_strings[].references` still comes from Python set iteration, so two
+  runs are byte-different (content identical). Pre-existing at HEAD, proven by
+  running the pre-P3 file 3x. The new P3 keys are deterministic.
+- Not done here (P3 plan line, outside this prompt): `caller_class`/
+  `callee_class` keys on edges; field-level model (only `field_count`).
+- `.venv` did not exist in this checkout; recreated from `pyproject.toml`
+  (androguard==4.1.4) before any work. `ai-memory/*` files were already
+  modified (0-line/mode-only diffs) before this phase started.
+
 ### P3 — Code model
 Class/method/field inventory with DEX index + smali path (name, access,
 superclass, interfaces, signature, annotations); call graph v2 (add
@@ -218,8 +282,8 @@ An AI can answer these **from the bundle alone, with a citation**:
 | D1 | `resource_inventory=success` without parsing | **FIXED** P0 |
 | D2 | `packed_indicator` deduction has no evidence | open |
 | D3 | `obfuscation_metric` deduction has no evidence | open |
-| D4 | external methods without callers dropped, metric hides it | open (P3) |
-| D5 | DEX strings deduped by value, DEX-of-origin lost | open (P3) |
+| D4 | external methods without callers dropped, metric hides it | **FIXED** P3 (emitted with `call_sites=[]`, counted in `external_methods_without_callers`) |
+| D5 | DEX strings deduped by value, DEX-of-origin lost | open (P3 partial: `string_class_index` is keyed by value, same limit; document it) |
 | D6 | stripped-section ELF yields no symbols despite `PT_DYNAMIC` | open (P3/native) |
 | D7 | load-site map keyed on basename only | open |
 | D8 | `text_file_limit` / `finding_limit` referenced, never emitted | **FIXED** P0 |
@@ -233,6 +297,7 @@ An AI can answer these **from the bundle alone, with a citation**:
 | D16 | no per-file status ledger | **FIXED** P0 |
 | D17 | facts/ledger written at artifact root, not `surface/` | open (P8) |
 | D18 | only 3 driver-level tests | improved (301 total) |
+| D19 | `internal_call_graph` / `call_sites` / `dex_api_strings[].references` order comes from set iteration -> two runs are byte-different (content identical) | open (found in P3 verification, pre-existing at HEAD) |
 
 Fixed outside the ledger:
 - `insecure_http` false positive on the Android XML namespace (`ec9419d`).
@@ -287,10 +352,12 @@ file and the briefing **before** the final commit of a phase.
 | classify | `tests/test_surface_classify.py` | 7 |
 | facts / handoff / workbook | `tests/test_surface_facts.py` (9), `test_surface_handoff.py` (10), `test_surface_serialize.py` (4) | 23 |
 | native | `tests/test_native_*.py` (4 files) | 51 |
-| DEX | `tests/test_androguard_dex.py` | 4 |
+| DEX | `tests/test_androguard_dex.py` | 12 |
 
-Scanner-related tests: 150 of the 321 collected. Hermetic fixture builders:
-`tests/elf_fixtures.py`, `tests/identity_fixtures.py`, `tests/arsc_fixtures.py`.
+Scanner-related tests: 158 of the 329 collected. Hermetic fixture builders:
+`tests/elf_fixtures.py`, `tests/identity_fixtures.py`, `tests/arsc_fixtures.py`,
+`tests/fixtures/dexfixture/` (real 1.8 KB APK + the smali sources it was built
+from, used by the code-model tests).
 
 --------------------------------------------------------------------------------
 ## 7. COMMIT LOG (scanner track, oldest first)
@@ -304,6 +371,7 @@ Scanner-related tests: 150 of the 321 collected. Hermetic fixture builders:
 | `25e54b4` | P2a: `resources.arsc` -> `resources.jsonl` |
 | `133cb45` | P2b: smali resource-id resolution + definition files + FactStore guard |
 | `4adb6a5` | P2c: FileProvider roots + layout/view inventory (P2 complete) |
+| *(uncommitted)* | P3: `class_model` / `method_model` / `string_class_index` / `reflection_sites`, `dex_class` on every edge, D4 fixed (+8 tests, real APK fixture) |
 
 Memory-only commits interleaved: `a7aa2af`, `eadf73d`, `45bec3e`, `cb52d53`,
 `9a2f8f1`.

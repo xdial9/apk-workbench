@@ -172,5 +172,7 @@ tempCodeRunnerFile.py
 /config/
 /state/
 *.apk
+# ...except the tiny test fixture the DEX code-model tests analyse.
+!tests/fixtures/dexfixture/dexfixture.apk
 *.part
 screenshot.jpg.odg

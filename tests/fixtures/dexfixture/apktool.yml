@@ -1,0 +1,9 @@
+version: 2.7.0
+apkFileName: dexfixture.apk
+isFrameworkApk: false
+sdkInfo:
+  minSdkVersion: '21'
+  targetSdkVersion: '34'
+usesFramework:
+  ids:
+    - 1
