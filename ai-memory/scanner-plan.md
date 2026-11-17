@@ -1,20 +1,23 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
-Current state (verified 2026-11-17): **P0-P7 DONE; M1 post-scan secret links
-and trace-chain refresh DONE; M2 native report visibility DONE; M3 real-run
-validation IN PROGRESS**. M3 used the real Simple Calculator v85 run
-`b8e85b99-a5f9-496d-b3a4-e15cb1deca73`: download verification passed for all
-4 APK components, reports were regenerated, all 4 evidence bundles froze and
-passed `verify-workspace`. A cross-APK JNI reconciliation fix now passes on a
-temporary staging copy of the real data: 7 exports mapped, 0 unmapped, and
-the HTML section agrees. The frozen report is still pre-fix and has the old
-7-mapped/7-unmapped inconsistency. No per-stage `status.json` writer exists;
-the original bundles contain none. M3 remains open until the status outputs
-exist and a post-fix full run/report is generated in a new workspace. Do not
-mutate the frozen evidence. The 758 MB JSON / 1.13 GB HTML report is also a
-scale constraint. P8 remains PARTIAL:
+Current state (verified 2026-11-17): **P0-P7 DONE; M0-M3 DONE WITH
+WARNINGS**. M3 used real Simple Calculator v85 evidence from run
+`b8e85b99-a5f9-496d-b3a4-e15cb1deca73`: all 4 APK components were verified;
+existing decoded and TruffleHog results were reused, then secret links and
+trace chains were refreshed. Per-artifact `status.json` files now cover
+download, verification, decompile, surface, and TruffleHog; run-level files
+cover discover, download, verification, decompile, surface, TruffleHog,
+report, reconciliation, freeze, and pipeline. A separate writable copy at
+`/home/dial9/APK-Workbench/workspace-m3-postfix-real` produced the post-fix
+report, froze all 4 bundles, and passed `verify-workspace` with zero
+mismatches, missing files, or extras. The fixed cross-APK JNI matcher mapped
+7 exports and left 0 unmapped; report and inventory agree. Reconciliation
+accounted for 4/4 (1 complete, 3 complete-with-warnings); 3 surface outcomes
+remain partial. The original frozen bundles were not modified. The report is
+758 MB JSON / 1.13 GB HTML and remains a scale constraint. No fresh download,
+decompile, or TruffleHog rescan was performed. P8 remains PARTIAL:
 handoff/freeze mechanics exist, but model dry-run, output-contract enforcement,
-and volume hierarchy are not validated. Full suite: **384 passed**. Current
+and volume hierarchy are not validated. Full suite: **385 passed**. Current
 open work is tracked in
 [PRODUCT-RESCUE-BOARD.md](../docs/engineering/PRODUCT-RESCUE-BOARD.md).
 The older 2026-11-16 status snapshots below are retained as history, not as the

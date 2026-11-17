@@ -50,6 +50,14 @@ def test_freeze_writes_manifest_and_handoff(tmp_path):
     bundle = _make_bundle(tmp_path / "workspace")
     database = WorkspaceDatabase(tmp_path / "workspace")
     try:
+        status_path = database.write_stage_status(
+            bundle / "stages" / "surface",
+            stage="surface",
+            status="partial",
+            counts={"artifacts": 1, "findings": 2},
+            coverage={"files": "partial"},
+            diagnostics=[{"code": "fixture_partial", "message": "Synthetic partial result."}],
+        )
         database.freeze_evidence(bundle)
         hashes_path = bundle / "hashes.sha256"
         handoff_path = bundle / "handoff.json"
@@ -67,8 +75,20 @@ def test_freeze_writes_manifest_and_handoff(tmp_path):
         assert "surface/location_map.json" in hashed
         assert "trufflehog/findings.json" in hashed
         assert "manifest/google-play-bundle.json" in hashed
+        assert "stages/surface/status.json" in hashed
         assert "handoff.json" in hashed
 
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        assert status == {
+            "schema_version": 1,
+            "stage": "surface",
+            "status": "partial",
+            "counts": {"artifacts": 1, "findings": 2},
+            "coverage": {"files": "partial"},
+            "diagnostics": [
+                {"code": "fixture_partial", "message": "Synthetic partial result."}
+            ],
+        }
         handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
         assert handoff["schema_version"] == 1
         assert handoff["bundle_id"] == bundle.name
@@ -76,6 +96,7 @@ def test_freeze_writes_manifest_and_handoff(tmp_path):
         assert "file_hashes" in handoff
         assert handoff.get("prompts"), "prompt hashes should be recorded"
         assert handoff["file_hashes"]["surface/static-analysis.json"]
+        assert not os.stat(bundle / "stages").st_mode & 0o222
     finally:
         _unfreeze(tmp_path / "workspace")
 

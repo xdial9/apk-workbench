@@ -4,19 +4,17 @@
 verifiable, useful per-app result. This is a delivery board, not a proposal to
 rewrite the scanner or add another detection catalog.
 
-**Snapshot:** 2026-11-17, M0, M1, and M2 are complete on `main`. M3's real-run
-validation has been exercised but is **blocked** by missing per-stage status
-files and the need to regenerate the frozen pre-fix report. Current full test
-suite: **384 passed**. The pre-existing untracked
+**Snapshot:** 2026-11-17, M0-M3 are complete on `main`; the real-app evidence
+is complete with three partial surface outcomes recorded as warnings. Current
+full test suite: **385 passed**. The pre-existing untracked
 `ai-memory/test.txt` remains untouched.
 
 **Evidence boundary:** the configured external workspace contains a real
 Simple Calculator v85 run (`b8e85b99-a5f9-496d-b3a4-e15cb1deca73`), but its
-frozen report predates the cross-APK JNI reconciliation fix. The fix now
-passes against a temporary staging copy of the real component data; the four
-original bundles remain frozen and verify. M3 is not accepted until
-per-stage `status.json` outputs are produced and a new end-to-end report is
-generated and verified.
+frozen original report predates the cross-APK JNI reconciliation fix. A
+separate writable copy was used to refresh links, regenerate the post-fix
+report, write stage statuses, freeze all four bundles, and verify them. The
+original bundles remain untouched.
 
 ## Bottom line
 
@@ -36,8 +34,9 @@ malformed output from a successful empty scan, and tests the resulting trace
 in the normal stage order. M2 adds a native-focused report view with
 per-library parse/load state, JNI mappings and unmapped reasons, symbol and
 string counts, citations, and native-related traces
-([final_run.py](../../src/apkworkbench/reporting/final_run.py)). The real-app
-quality of those results remains unverified.
+([final_run.py](../../src/apkworkbench/reporting/final_run.py)). M3 validates
+this integration against one real app; broader app coverage and runtime
+behavior remain unverified.
 
 This board deliberately does **not** call reports, native analysis, or bundle
 freezing nonexistent. Those features are present. It distinguishes “code
@@ -201,43 +200,40 @@ All acceptance criteria are exercised by
 
 **Priority:** P0 · **Estimate:** M · **Depends on:** M1 and M2
 
-**Status: IN PROGRESS — real-run validation found acceptance blockers.**
+**Status: COMPLETE WITH WARNINGS — real evidence regenerated and verified.**
 
 **Run evidence (2026-11-17):**
 - Real input: Simple Calculator v85, Google Play run
   `b8e85b99-a5f9-496d-b3a4-e15cb1deca73`; 4 APK components, independently
   verified; 32,997,496 bytes total.
-- Existing successful Apktool and TruffleHog results were reused rather than
-  rescanned. Post-scan refresh completed for all 4 components. The final JSON
-  retains 13 unverified TruffleHog findings and reports 0 verified findings.
+- Existing acquired APKs, decoded trees, and successful TruffleHog results were
+  reused; no download, decompile, or TruffleHog rescan was performed.
+  Post-scan link refresh completed for all 4 components.
+- Per-artifact `status.json` files now record download, verification,
+  decompile, surface, and TruffleHog outcomes in each bundle's
+  `stages/<stage>/` folder. Run-level status files record discover, download,
+  verification, decompile, surface, TruffleHog, report, reconciliation, freeze,
+  and pipeline outcomes under `results/runs/<run-id>/stages/<stage>/`. Bundle
+  stage files are included in `hashes.sha256` and made read-only with evidence.
+- The final JSON retains 13 unverified TruffleHog findings and reports 0
+  verified findings.
 - Surface analysis accounted for 4 components: 1 success, 3 partial, 0 failed;
-  2,074 static indicators. Reconciliation accounted for 4/4: 1 `complete`,
-  3 `complete_with_warnings`. The CLI exits nonzero for the warning outcomes;
-  it does not report an unaccounted component.
-- Reports were regenerated:
-  `workspace/reports/runs/b8e85b99-a5f9-496d-b3a4-e15cb1deca73/final-report.json`
-  and `final-report.html`. They contain 471 endpoint candidates, 15 routes,
+  2,067 static indicators in the regenerated report. Reconciliation accounted
+  for 4/4: 1 `complete`, 3 `complete_with_warnings`; the run-level status is
+  `partial` rather than hiding these warnings.
+- The post-fix report was regenerated in the isolated
+  `/home/dial9/APK-Workbench/workspace-m3-postfix-real` copy:
+  `reports/runs/b8e85b99-a5f9-496d-b3a4-e15cb1deca73/final-report.json`
+  and `final-report.html`. The report contains 471 endpoint candidates, 15 routes,
   2,160 Smali API call sites, 8,339 external DEX method references, 3,786 DEX
   API/config strings, 28 permission/API groups, and 201 rate-limit/retry clues.
   Their sizes are about 758 MB JSON and 1.13 GB HTML.
-- The frozen pre-fix report for the native split has 3 ELF libraries and 7 JNI
-  exports. It says 7 mapped and 7 unmapped (total 7), while the component's
-  JNI inventory has 0 mapped entries and 7 unmapped entries; its run-level
-  consistency flag is false.
-- Fixed `cross_apk_native_jni_match` to reconcile mapped facts, inventory,
-  unmapped records/findings, per-library counts, and metrics. A regression test
-  covers mapping, removal of stale unmapped records, and idempotent reruns.
-  Running the fixed matcher against a temporary staging copy of the real run
-  matched all 7 exports, emitted 0 unmapped records, and rendered
-  `7 mapped, 0 unmapped` in the native HTML section. The frozen originals were
-  not modified; the published final JSON/HTML still show the pre-fix data.
-- No stage `status.json` files were found in the four component bundles (stage
-  status is present in the processing database and final report instead), and
-  no writer for `status.json` exists in the current pipeline code.
-- All 4 component bundles were frozen after report generation;
-  `verify-workspace` passed for each with 0 mismatches, missing files, or extra
-  files. Keep these bundles immutable; produce the post-fix run and status
-  artifacts in a new output workspace/run.
+- The corrected cross-APK matcher mapped all 7 JNI exports with 0 unmapped.
+  Native report metrics and the component inventory agree; the native HTML
+  section also shows `7 mapped, 0 unmapped`.
+- All 4 copied component bundles were frozen after status and report
+  generation. `verify-workspace` passed for each with 0 mismatches, missing
+  files, or extras. The original frozen bundles were not modified.
 
 Run one small, representative app through the normal workflow. Prefer a
 previously acquired local APK bundle. If none is available, use an operator-
@@ -267,10 +263,11 @@ validation. Avoid a large corpus.
   licensing and data sensitivity permit. Do not commit APKs, credentials, or
   raw secrets.
 
-**Known boundary:** no representative result bundle was found in the repository
-tree. The external workspace was inspected as described above; M3 remains
-open until per-stage status outputs are implemented and a post-fix full report
-passes the acceptance checks.
+**Known boundary:** this validates integration and reporting against existing
+real scan evidence; it does not prove runtime behavior or substitute for a
+fresh acquisition/decompile/scan run. The report remains large and three
+surface components remain partial, with explicit status and reconciliation
+warnings.
 
 ### M4 — Re-audit determinism, unresolved scanner defects, and scale behavior
 
@@ -334,10 +331,9 @@ commands/report match that contract.
 
 ## Immediate next ticket
 
-Finish **M3**: emit per-stage `status.json` outputs, run the corrected pipeline
-in a new output workspace, regenerate JSON/HTML, and freeze/verify the result.
-The JNI reconciliation fix is tested, including against staged real data; do
-not start M4 until the new full run passes.
+M3 is complete with warnings. Do not start M4 until its scope is selected:
+first address the 758 MB JSON / 1.13 GB HTML scale constraint and decide
+whether report generation should shard or stream the full evidence views.
 
 Do not begin with more detection rules, a broad architecture rewrite, a
 large-scale acquisition, or a new reporting framework.

@@ -49,20 +49,24 @@ DURING: register risks/hallucination doubts as VERIFY notes immediately.
 END: update STATE (phase item moved? decisions? VERIFYs resolved?) + tick
 surface.txt/plan.txt checkboxes if applicable.
 
-## STATE (current as of 2026-11-17; M3 validation in progress)
-- Current verified snapshot: M0/M1/M2 are complete; `.venv/bin/python -m
-  pytest -q` reports **384 passed**. P0-P7 are implemented; bundle freeze,
+## STATE (current as of 2026-11-17; M3 complete with warnings)
+- Current verified snapshot: M0-M3 are complete; `.venv/bin/python -m
+  pytest -q` reports **385 passed**. P0-P7 are implemented; bundle freeze,
   `handoff.json`, `hashes.sha256`, and `verify-workspace` are implemented and
-  fixture-tested. A real Simple Calculator v85 run
-  (`b8e85b99-a5f9-496d-b3a4-e15cb1deca73`) was independently verified,
-  refreshed after TruffleHog, reported, frozen, and verified component by
-  component. Reconciliation accounted for 4/4 components (1 complete, 3 with
-  warnings). The JNI reconciliation fix passed on a temporary staging copy
-  of the real data (7 mapped, 0 unmapped); the frozen final report remains
-  pre-fix. No per-stage `status.json` writer exists and none are in the
-  bundles, so M3 is **not accepted** until those files and a post-fix full
-  report are produced in a new workspace. The report is about 758 MB JSON /
-  1.13 GB HTML. Preserve the frozen run. P8 remains PARTIAL:
+  fixture-tested. Real Simple Calculator v85 run
+  (`b8e85b99-a5f9-496d-b3a4-e15cb1deca73`) has 4 independently verified APK
+  components. Existing decoded and TruffleHog outputs were reused; links were
+  refreshed and a post-fix report was regenerated in the isolated
+  `/home/dial9/APK-Workbench/workspace-m3-postfix-real` copy. New stage
+  statuses cover per-bundle download, verification, decompile, surface, and
+  TruffleHog, plus run-level discover, report, reconciliation, freeze, and
+  pipeline state. The 7 JNI exports now reconcile as 7 mapped / 0 unmapped.
+  Reconciliation accounts for 4/4 (1 complete, 3 complete-with-warnings);
+  the 3 partial surface results are explicit. All 4 copied bundles froze and
+  passed `verify-workspace` with zero mismatches, missing files, or extras.
+  Original frozen evidence was not modified. No fresh download, decompile, or
+  TruffleHog rescan was performed. The final report is about 758 MB JSON /
+  1.13 GB HTML. P8 remains PARTIAL:
   no model dry-run, enforced AI output contract, location-map volume
   hierarchy, or split-component bundle aggregation has been demonstrated.
   The active delivery board is `docs/engineering/PRODUCT-RESCUE-BOARD.md`.
@@ -70,11 +74,10 @@ surface.txt/plan.txt checkboxes if applicable.
   snapshots. Those are historical evidence, not current work queues; use the
   current state above and the dated status in the canonical phase files.
 - Product rescue board M0 (current-state reconciliation), M1 (post-scan
-  secret links and trace chains), and M2 (native report visibility) are
-  complete. M3's real-app validation has produced evidence; cross-APK JNI
-  inventory reconciliation is fixed and tested, but the frozen report has
-  not been regenerated and stage `status.json` outputs are missing. Do not
-  claim M3 complete yet.
+  secret links and trace chains), M2 (native report visibility), and M3
+  (real-app report, statuses, freeze, and verification) are complete. Treat
+  M3 as complete with warnings, not as proof of runtime behavior or a fresh
+  acquisition/decompile/scan.
 
 ### Historical scanner snapshot (2026-11-16; retained for audit trail)
 - SCANNER TRACK 2026-11-16 (canonical file: ai-memory/scanner-plan.md).

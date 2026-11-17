@@ -758,6 +758,77 @@ class WorkspaceDatabase:
         )
         return target
 
+    def write_stage_status(
+        self,
+        stage_dir: Path,
+        *,
+        stage: str,
+        status: str,
+        counts: Mapping[str, int],
+        coverage: Mapping[str, str],
+        diagnostics: Iterable[Mapping[str, object] | str] = (),
+    ) -> Path:
+        """Atomically write a bounded, machine-readable stage outcome."""
+        stage_dir = Path(stage_dir).expanduser()
+        try:
+            resolved_dir = stage_dir.resolve(strict=False)
+            resolved_dir.relative_to(self.root)
+        except (OSError, ValueError) as exc:
+            raise DatabaseError(
+                f"Stage status directory must remain inside the workspace: {stage_dir}"
+            ) from exc
+
+        cursor = stage_dir.absolute()
+        while cursor != self.root and self.root in cursor.parents:
+            if cursor.is_symlink():
+                raise DatabaseError(
+                    f"Refusing symlinked stage status directory: {cursor}"
+                )
+            cursor = cursor.parent
+        if stage_dir.is_symlink():
+            raise DatabaseError(
+                f"Refusing symlinked stage status directory: {stage_dir}"
+            )
+
+        payload = {
+            "schema_version": 1,
+            "stage": stage,
+            "status": status,
+            "counts": dict(counts),
+            "coverage": dict(coverage),
+            "diagnostics": list(diagnostics),
+        }
+        try:
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            target = stage_dir / "status.json"
+            if target.is_symlink():
+                raise DatabaseError(f"Refusing symlinked stage status file: {target}")
+            fd, temporary_name = tempfile.mkstemp(
+                prefix=".status.", suffix=".tmp", dir=stage_dir
+            )
+            temporary = Path(temporary_name)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+                    handle.write("\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.chmod(temporary, 0o600)
+                os.replace(temporary, target)
+                directory_fd = os.open(stage_dir, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
+        except OSError as exc:
+            raise DatabaseError(
+                f"Cannot atomically write {stage} stage status: {exc}"
+            ) from exc
+        return target
+
     def freeze_evidence(self, bundle_dir: Path) -> None:
         """Make evidence directories read-only and write a sha256 manifest.
 
@@ -810,6 +881,7 @@ class WorkspaceDatabase:
             bundle_dir / "surface",
             bundle_dir / "trufflehog",
             bundle_dir / "manifest",
+            bundle_dir / "stages",
         ]
         for ev_dir in evidence_dirs:
             if ev_dir.is_dir():

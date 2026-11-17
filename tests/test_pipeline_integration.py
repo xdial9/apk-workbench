@@ -12,6 +12,11 @@ from apkworkbench.analysis.apk_surface import (
     run_static_surface_analysis,
 )
 from apkworkbench.analysis.trufflehog import TruffleHogScanner
+from apkworkbench.cli.main import (
+    _trufflehog_stage_outcome,
+    _write_bundle_stage_statuses,
+    _write_run_stage_statuses,
+)
 from apkworkbench.database.workspace import WorkspaceDatabase
 from apkworkbench.decompilation.runner import DecompilationRunner
 from apkworkbench.reporting.generator import ReportGenerator
@@ -21,6 +26,37 @@ def write_executable(path: Path, source: str) -> Path:
     path.write_text(source, encoding="utf-8")
     path.chmod(0o755)
     return path
+
+
+def test_trufflehog_success_requires_complete_counted_outputs(tmp_path):
+    bundle = tmp_path / "bundle"
+    output = bundle / "trufflehog"
+    output.mkdir(parents=True)
+
+    status, counts, diagnostic = _trufflehog_stage_outcome(
+        bundle, {"scan_status": "success"}
+    )
+    assert status == "partial"
+    assert counts == {"total_seen": 0, "verified": 0, "unverified": 0}
+    assert "summary or complete split outputs" in diagnostic
+
+    (output / "scan.json").write_text(
+        json.dumps({"total_seen": 1, "verified": 1, "unverified": 0}),
+        encoding="utf-8",
+    )
+    (output / "findings.json").write_text(
+        json.dumps([{"Verified": True}]), encoding="utf-8"
+    )
+    (output / "findings-verified.json").write_text(
+        json.dumps([{"Verified": True}]), encoding="utf-8"
+    )
+    (output / "findings-unverified.json").write_text("[]", encoding="utf-8")
+    status, counts, diagnostic = _trufflehog_stage_outcome(
+        bundle, {"scan_status": "success"}
+    )
+    assert status == "success"
+    assert counts == {"total_seen": 1, "verified": 1, "unverified": 0}
+    assert diagnostic == ""
 
 
 def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypatch, tmp_path):
@@ -320,6 +356,14 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
     assert reconciliation["complete"] == 1
     assert reconciliation["counts"] == {"complete": 1}
 
+    status_result = _write_bundle_stage_statuses(database, workspace, run_id)
+    assert status_result == {
+        "bundles": 1,
+        "statuses_written": 5,
+        "frozen_skipped": 0,
+        "missing": 0,
+    }
+
     # Freeze the artifact bundle: handoff.json + hashes.sha256 + read-only
     # evidence so verify-workspace can prove it was not tampered with.
     bundle_dir = workspace / "results/org.example.integration/1" / digest
@@ -329,6 +373,7 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
     hashes = (bundle_dir / "hashes.sha256").read_text(encoding="utf-8")
     assert "surface/static-analysis.json" in hashes
     assert "trufflehog/findings.json" in hashes
+    assert "stages/surface/status.json" in hashes
     assert "handoff.json" in hashes
     handoff = json.loads((bundle_dir / "handoff.json").read_text(encoding="utf-8"))
     assert handoff["schema_version"] == 1
@@ -341,6 +386,41 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
     assert verify["mismatches"] == []
     assert verify["missing"] == []
     assert verify["extra"] == []
+    _write_run_stage_statuses(
+        database,
+        workspace,
+        run_id,
+        reconciliation=reconciliation,
+        frozen=1,
+        pipeline_issues=["report"],
+    )
+    run_status = json.loads(
+        (
+            workspace / "results/runs" / run_id / "stages/pipeline/status.json"
+        ).read_text(encoding="utf-8")
+    )
+    run_stage_dirs = {
+        path.parent.name
+        for path in (workspace / "results/runs" / run_id / "stages").glob(
+            "*/status.json"
+        )
+    }
+    assert run_stage_dirs == {
+        "discover",
+        "download",
+        "verification",
+        "decompile",
+        "surface",
+        "trufflehog",
+        "report",
+        "reconciliation",
+        "freeze",
+        "pipeline",
+    }
+    assert run_status["status"] == "partial"
+    assert run_status["diagnostics"][0]["message"].startswith(
+        "report; Stages not fully successful:"
+    )
     frozen_linkage = refresh_secret_links(database, workspace, run_id=run_id)
     assert frozen_linkage["frozen"] == 1
     assert database.verify_workspace(bundle_dir)["status"] == "ok"

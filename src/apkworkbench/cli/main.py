@@ -184,6 +184,439 @@ def _plan_digest(plan) -> str:
     ).hexdigest()
 
 
+def _read_json_object(path: Path) -> dict:
+    if path.is_symlink():
+        raise DatabaseError(f"Refusing symlinked stage evidence: {path}")
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise DatabaseError(f"Cannot read stage evidence {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise DatabaseError(f"Stage evidence must contain a JSON object: {path}")
+    return value
+
+
+def _object_rows(value: object, *, label: str) -> list[dict]:
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise DatabaseError(f"{label} must contain a list of JSON objects.")
+    return value
+
+
+def _stage_diagnostics(message: str, code: str) -> list[dict[str, str]]:
+    return [{"code": code, "message": message}] if message else []
+
+
+def _status_message(stage: str, status: str, message: str) -> str:
+    if message:
+        return message
+    return {
+        "failed": f"{stage} stage failed without a specific error.",
+        "partial": f"{stage} stage completed with partial coverage.",
+        "running": f"{stage} stage did not reach a terminal outcome.",
+        "not_run": f"{stage} stage was not run.",
+        "skipped": f"{stage} stage was skipped.",
+    }.get(status, "")
+
+
+def _trufflehog_stage_outcome(
+    bundle: Path,
+    processing: dict[str, str],
+) -> tuple[str, dict[str, int], str]:
+    status = processing.get("scan_status") or "not_run"
+    scan = _read_json_object(bundle / "trufflehog" / "scan.json")
+    counts = {
+        key: scan.get(key, 0)
+        for key in ("total_seen", "verified", "unverified")
+    }
+    if status != "success":
+        return status, {
+            key: value if type(value) is int and value >= 0 else 0
+            for key, value in counts.items()
+        }, processing.get("error", "") if status == "failed" else ""
+
+    required_files = (
+        "findings.json",
+        "findings-verified.json",
+        "findings-unverified.json",
+    )
+    complete_files = all(
+        (bundle / "trufflehog" / name).is_file()
+        and not (bundle / "trufflehog" / name).is_symlink()
+        for name in required_files
+    )
+    valid_counts = all(type(value) is int and value >= 0 for value in counts.values())
+    counts_consistent = (
+        valid_counts
+        and counts["total_seen"] == counts["verified"] + counts["unverified"]
+    )
+    if not scan or not complete_files or not counts_consistent:
+        return (
+            "partial",
+            {
+                key: value if type(value) is int and value >= 0 else 0
+                for key, value in counts.items()
+            },
+            "TruffleHog is marked successful but its summary or complete split outputs are missing or inconsistent.",
+        )
+    return "success", counts, ""
+
+
+def _write_bundle_stage_statuses(
+    database: WorkspaceDatabase,
+    workspace: str | Path,
+    run_id: str,
+    *,
+    pipeline_issues: list[str] | None = None,
+) -> dict[str, int]:
+    """Persist per-artifact outcomes outside decoded APK content."""
+    root = Path(workspace).expanduser().resolve()
+    results_root = root / "results"
+    manifest = database.read_manifest(run_id)
+    history = database.read_download_history()
+    history_by_hash = {
+        row.get("sha256", "").lower(): row for row in history if row.get("sha256")
+    }
+    processing = database.read_processing_status()
+    issue_set = set(pipeline_issues or [])
+    verification = _read_json_object(
+        root / "reports" / f"phase_one_verification_{run_id}.json"
+    )
+    verified_components: set[tuple[str, str, str]] = set()
+    for item in _object_rows(
+        verification.get("bundles", []), label="Verification bundles"
+    ):
+        component_hashes = item.get("sha256")
+        if not isinstance(component_hashes, list) or not all(
+            isinstance(value, str) for value in component_hashes
+        ):
+            raise DatabaseError("Verification bundle SHA-256 values are malformed.")
+        verified_components.update(
+            (
+                str(item.get("package_id", "")),
+                str(item.get("version_code", "")),
+                value.lower(),
+            )
+            for value in component_hashes
+        )
+    surface_run = _read_json_object(
+        results_root / "runs" / run_id / "static-analysis-run.json"
+    )
+    surface_by_digest = {
+        str(item.get("sha256", "")).lower(): item
+        for item in _object_rows(
+            surface_run.get("artifacts", []), label="Surface artifacts"
+        )
+    }
+    counts = {"bundles": 0, "statuses_written": 0, "frozen_skipped": 0, "missing": 0}
+    for selected in manifest:
+        package_id = selected["package_id"]
+        version_code = str(selected["version_code"])
+        digest = selected["sha256"].lower()
+        bundle = results_root / package_id / version_code / digest
+        if not bundle.is_dir():
+            counts["missing"] += 1
+            continue
+        counts["bundles"] += 1
+        if (bundle / "hashes.sha256").is_file():
+            counts["frozen_skipped"] += 1
+            continue
+
+        acquired = history_by_hash.get(digest, {})
+        downloaded = (
+            acquired.get("run_id") == run_id
+            and acquired.get("package_id") == package_id
+            and str(acquired.get("version_code", "")) == version_code
+        )
+        verification_ok = (
+            verification.get("status") == "verified"
+            and (package_id, version_code, digest) in verified_components
+        )
+        verification_status = (
+            "success" if verification_ok
+            else "failed" if "download_verification" in issue_set or verification
+            else "not_run"
+        )
+        process = processing.get(digest, {})
+        surface = surface_by_digest.get(digest, {})
+        surface_status = {
+            "success": "success",
+            "partial": "partial",
+            "failed": "failed",
+            "skipped_reused": "success",
+        }.get(surface.get("status"), "not_run")
+        if "surface" in issue_set and surface_status == "running":
+            surface_status = "failed"
+        if "surface" in issue_set and surface_status == "not_run":
+            surface_status = "failed"
+        trufflehog_status, trufflehog_counts, trufflehog_diagnostic = (
+            _trufflehog_stage_outcome(bundle, process)
+        )
+        for stage, status, stage_counts, diagnostic in (
+            (
+                "download",
+                "success" if downloaded else "failed",
+                {"apk_components": 1 if downloaded else 0},
+                "" if downloaded else "No matching acquisition record for this run.",
+            ),
+            (
+                "verification",
+                verification_status,
+                {"verified_components": int(verification_ok)},
+                "" if verification_ok else (
+                    "Run verification failed."
+                    if verification_status == "failed"
+                    else "APK component was not verified in this run."
+                ),
+            ),
+            (
+                "decompile",
+                process.get("apktool_status") or "not_run",
+                {"artifacts": 1},
+                process.get("error", ""),
+            ),
+            (
+                "surface",
+                surface_status,
+                {
+                    "findings": int(surface.get("finding_count", 0) or 0),
+                    "artifacts": 1 if surface else 0,
+                },
+                surface.get("error", ""),
+            ),
+            (
+                "trufflehog",
+                trufflehog_status,
+                trufflehog_counts,
+                trufflehog_diagnostic,
+            ),
+        ):
+            diagnostic = _status_message(stage, str(status), str(diagnostic))
+            diagnostics = _stage_diagnostics(
+                diagnostic,
+                f"{stage}_incomplete" if status != "success" else "",
+            )
+            database.write_stage_status(
+                bundle / "stages" / stage,
+                stage=stage,
+                status=str(status),
+                counts=stage_counts,
+                coverage={"artifacts": "complete" if status == "success" else str(status)},
+                diagnostics=diagnostics,
+            )
+            counts["statuses_written"] += 1
+    return counts
+
+
+def _write_run_stage_statuses(
+    database: WorkspaceDatabase,
+    workspace: str | Path,
+    run_id: str,
+    *,
+    reconciliation: dict | None,
+    reconciliation_error: str = "",
+    frozen: int = 0,
+    freeze_issues: int = 0,
+    pipeline_issues: list[str] | None = None,
+) -> None:
+    root = Path(workspace).expanduser().resolve()
+    manifest = database.read_manifest(run_id)
+    issue_set = set(pipeline_issues or [])
+    processing = database.read_processing_status()
+    marker = _read_json_object(
+        root / "results" / "runs" / run_id / "static-analysis-run.json"
+    )
+    verification = _read_json_object(
+        root / "reports" / f"phase_one_verification_{run_id}.json"
+    )
+    report_dir = root / "reports" / "runs" / run_id
+    report_ready = all(
+        (report_dir / name).is_file() and not (report_dir / name).is_symlink()
+        for name in ("final-report.json", "final-report.html")
+    )
+    statuses = [processing.get(row["sha256"].lower(), {}) for row in manifest]
+    decompile_counts = {
+        state: sum(row.get("apktool_status") == state for row in statuses)
+        for state in ("success", "partial", "failed", "running")
+    }
+    scan_outcomes = [
+        _trufflehog_stage_outcome(
+            root / "results" / row["package_id"] / str(row["version_code"])
+            / row["sha256"].lower(),
+            state,
+        )[0]
+        for row, state in zip(manifest, statuses, strict=True)
+    ]
+    scan_counts = {
+        state: sum(outcome == state for outcome in scan_outcomes)
+        for state in ("success", "partial", "failed", "running", "not_run")
+    }
+    surface_total = sum(
+        int(marker.get(key, 0) or 0)
+        for key in ("completed", "partial", "failed", "skipped")
+    )
+    reconciliation_ok = (
+        reconciliation is not None
+        and int(reconciliation.get("complete", 0)) == int(reconciliation.get("total", -1))
+    )
+    reconciliation_warnings = (
+        int(reconciliation.get("counts", {}).get("complete_with_warnings", 0) or 0)
+        if reconciliation
+        else 0
+    )
+    reconciliation_status = (
+        "partial" if reconciliation_ok and reconciliation_warnings
+        else "success" if reconciliation_ok
+        else "failed"
+    )
+    download_status = (
+        "partial" if "download" in issue_set and manifest
+        else "failed" if "download" in issue_set or not manifest
+        else "success"
+    )
+    verification_status = (
+        "failed" if "download_verification" in issue_set
+        else "success" if verification.get("status") == "verified"
+        else "not_run"
+    )
+    surface_status = str(marker.get("status", "not_run"))
+    if "surface" in issue_set and surface_status in {"running", "not_run"}:
+        surface_status = "failed"
+    if "no_usable_apktool_output" in issue_set:
+        trufflehog_status = "skipped"
+    elif scan_counts["success"] == len(manifest) and manifest:
+        trufflehog_status = "success"
+    elif not any(scan_counts.values()):
+        trufflehog_status = "not_run"
+    else:
+        trufflehog_status = "partial"
+    report_status = (
+        "success" if report_ready
+        else "failed" if "report" in issue_set
+        else "not_run"
+    )
+    stages = [
+        (
+            "discover",
+            "skipped",
+            {"catalogs": 0},
+            {"catalog": "not_run"},
+            "The run command consumes the saved discovery catalog.",
+        ),
+        (
+            "download",
+            download_status,
+            {"manifest_entries": len(manifest)},
+            {"manifest": "complete" if download_status == "success" else str(download_status)},
+            "" if download_status == "success" else "Download did not complete successfully.",
+        ),
+        (
+            "verification",
+            verification_status,
+            {
+                "verified_bundles": int(verification.get("verified_bundles", 0) or 0),
+                "apk_components": int(verification.get("apk_components", 0) or 0),
+            },
+            {"apk_components": "complete" if verification_status == "success" else str(verification_status)},
+            "" if verification_status == "success" else "Run verification did not complete successfully.",
+        ),
+        (
+            "decompile",
+            "success" if decompile_counts["success"] == len(manifest) and manifest else "partial",
+            decompile_counts,
+            {"artifacts": "complete" if decompile_counts["success"] == len(manifest) else "partial"},
+            "",
+        ),
+        (
+            "surface",
+            surface_status,
+            {
+                "eligible": int(marker.get("eligible", 0) or 0),
+                "completed": int(marker.get("completed", 0) or 0),
+                "partial": int(marker.get("partial", 0) or 0),
+                "failed": int(marker.get("failed", 0) or 0),
+                "skipped": int(marker.get("skipped", 0) or 0),
+                "findings": int(marker.get("finding_count", 0) or 0),
+            },
+            {"artifacts": "complete" if surface_total >= len(manifest) else "partial"},
+            "",
+        ),
+        (
+            "trufflehog",
+            trufflehog_status,
+            scan_counts,
+            {"artifacts": "complete" if trufflehog_status == "success" else str(trufflehog_status)},
+            "TruffleHog was skipped because no usable Apktool output was available."
+            if trufflehog_status == "skipped"
+            else "",
+        ),
+        (
+            "report",
+            report_status,
+            {"files": 2 if report_ready else 0, "artifacts": len(manifest)},
+            {"report_files": "complete" if report_ready else str(report_status)},
+            "" if report_ready else "Final JSON and HTML report were not both generated.",
+        ),
+        (
+            "reconciliation",
+            reconciliation_status,
+            {
+                "total": int(reconciliation.get("total", 0) or 0) if reconciliation else 0,
+                "complete": int(reconciliation.get("complete", 0) or 0) if reconciliation else 0,
+                "warnings": reconciliation_warnings,
+            },
+            {
+                "artifacts": "complete_with_warnings" if reconciliation_warnings
+                else "complete" if reconciliation_ok
+                else "partial"
+            },
+            reconciliation_error or (
+                f"Run reconciliation completed with {reconciliation_warnings} warning(s)."
+                if reconciliation_warnings
+                else "" if reconciliation_ok
+                else "Run reconciliation did not account for every manifest item."
+            ),
+        ),
+        (
+            "freeze",
+            "success" if freeze_issues == 0 and frozen == len(manifest) else "partial",
+            {"frozen": frozen, "issues": freeze_issues, "manifest_entries": len(manifest)},
+            {"bundles": "complete" if freeze_issues == 0 and frozen == len(manifest) else "partial"},
+            "",
+        ),
+    ]
+    incomplete_stages = [
+        stage for stage, status, *_ in stages
+        if stage != "discover" and status != "success"
+    ]
+    pipeline_messages = list(pipeline_issues or [])
+    if incomplete_stages:
+        pipeline_messages.append(
+            "Stages not fully successful: " + ", ".join(incomplete_stages)
+        )
+    pipeline_status = "partial" if pipeline_messages else "success"
+    stages.append(
+        (
+            "pipeline",
+            pipeline_status,
+            {"issues": len(pipeline_messages), "manifest_entries": len(manifest)},
+            {"stages": "complete" if pipeline_status == "success" else "partial"},
+            "; ".join(pipeline_messages),
+        )
+    )
+    for stage, status, counts, coverage, message in stages:
+        message = _status_message(stage, status, message)
+        database.write_stage_status(
+            root / "results" / "runs" / run_id / "stages" / stage,
+            stage=stage,
+            status=status,
+            counts=counts,
+            coverage=coverage,
+            diagnostics=_stage_diagnostics(message, f"{stage}_incomplete"),
+        )
+
+
 
 def _count_usable_apktool_outputs(workspace: str | Path, run_id: str) -> int:
     """Count run-scoped success or partial Apktool outputs safe for TruffleHog."""
@@ -963,6 +1396,8 @@ def run(
     context = click.get_current_context()
     context.meta["apkworkbench_run_id"] = ""
     stages_with_issues: list[str] = []
+    reconciliation: dict | None = None
+    reconciliation_error = ""
     click.echo(BANNER)
     click.echo("FULL SEQUENTIAL PIPELINE")
 
@@ -1090,6 +1525,7 @@ def run(
         try:
             reconciliation = WorkspaceDatabase(Config().get("workspace")).reconcile_run(run_id)
         except DatabaseError as exc:
+            reconciliation_error = str(exc)
             click.echo(f"RUN RECONCILIATION FAILED: {exc}", err=True)
             stages_with_issues.append("reconciliation")
         else:
@@ -1106,6 +1542,27 @@ def run(
                 )
             if complete != total:
                 stages_with_issues.append("reconciliation")
+
+    if run_id:
+        try:
+            stage_status_counts = _write_bundle_stage_statuses(
+                WorkspaceDatabase(Config().get("workspace")),
+                Config().get("workspace"),
+                run_id,
+                pipeline_issues=stages_with_issues,
+            )
+        except (DatabaseError, OSError, ValueError) as exc:
+            stage_status_counts = {}
+            click.echo(f"Per-artifact stage status write failed: {exc}", err=True)
+            stages_with_issues.append("bundle_stage_status")
+        if stage_status_counts.get("frozen_skipped", 0):
+            click.echo(
+                f"Preserved {stage_status_counts['frozen_skipped']} already-frozen "
+                "bundle(s); per-artifact status files were not added."
+            )
+            stages_with_issues.append("bundle_stage_status_frozen")
+        if stage_status_counts.get("missing", 0):
+            stages_with_issues.append("bundle_stage_status_missing")
 
     # Freeze every fully-processed artifact bundle: handoff.json +
     # hashes.sha256 + read-only evidence so verify-workspace can prove it.
@@ -1146,6 +1603,20 @@ def run(
         if freeze_issues:
             stages_with_issues.append("freeze")
         click.echo(f"  Frozen {frozen} artifact bundle(s).")
+        try:
+            _write_run_stage_statuses(
+                database,
+                workspace,
+                run_id,
+                reconciliation=reconciliation,
+                reconciliation_error=reconciliation_error,
+                frozen=frozen,
+                freeze_issues=freeze_issues,
+                pipeline_issues=stages_with_issues,
+            )
+        except (DatabaseError, OSError, ValueError) as exc:
+            click.echo(f"Run-level stage status write failed: {exc}", err=True)
+            stages_with_issues.append("run_stage_status")
 
     click.echo("\nFULL PIPELINE SUMMARY")
     if stages_with_issues:
