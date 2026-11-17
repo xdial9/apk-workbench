@@ -5,8 +5,8 @@ verifiable, useful per-app result. This is a delivery board, not a proposal to
 rewrite the scanner or add another detection catalog.
 
 **Snapshot:** 2026-11-17, M0-M3 are complete on `main`; the real-app evidence
-is complete with three partial surface outcomes recorded as warnings. Current
-full test suite: **385 passed**. The pre-existing untracked
+accounts for all 4 APK components with no partial surface outcomes. Current
+full test suite: **386 passed**. The pre-existing untracked
 `ai-memory/test.txt` remains untouched.
 
 **Evidence boundary:** the configured external workspace contains a real
@@ -200,7 +200,7 @@ All acceptance criteria are exercised by
 
 **Priority:** P0 · **Estimate:** M · **Depends on:** M1 and M2
 
-**Status: COMPLETE WITH WARNINGS — real evidence regenerated and verified.**
+**Status: COMPLETE — real evidence regenerated and verified.**
 
 **Run evidence (2026-11-17):**
 - Real input: Simple Calculator v85, Google Play run
@@ -217,10 +217,21 @@ All acceptance criteria are exercised by
   stage files are included in `hashes.sha256` and made read-only with evidence.
 - The final JSON retains 13 unverified TruffleHog findings and reports 0
   verified findings.
-- Surface analysis accounted for 4 components: 1 success, 3 partial, 0 failed;
-  2,067 static indicators in the regenerated report. Reconciliation accounted
-  for 4/4: 1 `complete`, 3 `complete_with_warnings`; the run-level status is
-  `partial` rather than hiding these warnings.
+- The initial partial statuses were a status-mapping bug: Androguard correctly
+  returned `not_applicable` for the three split APKs with no `classes*.dex`,
+  while the surface driver treated every non-`success` value as partial. These
+  are config/ABI splits; no DEX in those component APKs is an expected
+  absence, not failed DEX analysis. The driver now preserves
+  `dex_semantic_analysis: not_applicable` and the explanatory `dex_not_found`
+  diagnostic without downgrading the component surface status. A cached,
+  previously successful surface result also no longer makes the run marker
+  partial merely because it was reused.
+- Reprocessed the three affected components using the already-acquired APKs
+  and decoded outputs. Surface status is now success for all 4 components;
+  DEX coverage is `not_applicable` for the three splits and `success` for
+  base. Reconciliation accounts for 4/4 as `complete`; run-level surface,
+  reconciliation, and pipeline statuses are all `success`. The report retains
+  2,067 static indicators.
 - The post-fix report was regenerated in the isolated
   `/home/dial9/APK-Workbench/workspace-m3-postfix-real` copy:
   `reports/runs/b8e85b99-a5f9-496d-b3a4-e15cb1deca73/final-report.json`
@@ -265,9 +276,9 @@ validation. Avoid a large corpus.
 
 **Known boundary:** this validates integration and reporting against existing
 real scan evidence; it does not prove runtime behavior or substitute for a
-fresh acquisition/decompile/scan run. The report remains large and three
-surface components remain partial, with explicit status and reconciliation
-warnings.
+fresh acquisition/decompile/scan run. The report remains large. Component
+absence of DEX is explicitly not applicable; it is not presented as DEX
+analysis performed.
 
 ### M4 — Re-audit determinism, unresolved scanner defects, and scale behavior
 
@@ -331,7 +342,7 @@ commands/report match that contract.
 
 ## Immediate next ticket
 
-M3 is complete with warnings. Do not start M4 until its scope is selected:
+M3 is complete. Do not start M4 until its scope is selected:
 first address the 758 MB JSON / 1.13 GB HTML scale constraint and decide
 whether report generation should shard or stream the full evidence views.
 

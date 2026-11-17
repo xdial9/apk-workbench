@@ -2222,9 +2222,11 @@ def run_static_surface_analysis(
                 progress=progress,
             )
             result["dex_analysis"] = dex_result
-            result["coverage"]["dex_semantic_analysis"] = dex_result.get("status", "failed")
-            if dex_result.get("status") != "success":
+            dex_status = str(dex_result.get("status") or "failed")
+            result["coverage"]["dex_semantic_analysis"] = dex_status
+            if dex_status not in {"success", "not_applicable"}:
                 result["status"] = "partial"
+            if dex_status != "success":
                 result.setdefault("diagnostics", []).extend(dex_result.get("diagnostics", []))
                 result.setdefault("limitations", []).extend(dex_result.get("limitations", []))
             # S5: dex-grounded deduction — requested-but-unused sensitive
@@ -2413,9 +2415,14 @@ def run_static_surface_analysis(
                 except (OSError, ValueError):
                     pass
     if marker_path is not None:
+        reused = sum(
+            artifact.get("status") == "skipped_reused"
+            for artifact in summary["artifacts"]
+        )
+        unaccounted_skips = max(0, summary["skipped"] - reused)
         marker_status = (
             "failed" if summary["failed"]
-            else "partial" if summary["skipped"] or summary["partial"]
+            else "partial" if unaccounted_skips or summary["partial"]
             else "success"
         )
         marker_refresh(

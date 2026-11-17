@@ -223,6 +223,18 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
     static_payload = __import__("json").loads(static_path.read_text(encoding="utf-8"))
     assert static_payload["dex_analysis"]["metrics"]["external_methods_referenced"] == 3
 
+    reused_surface = run_static_surface_analysis(
+        database, workspace, run_id=run_id
+    )
+    assert reused_surface["skipped"] == 1
+    assert reused_surface["artifacts"][0]["status"] == "skipped_reused"
+    marker = json.loads(
+        (
+            workspace / "results/runs" / run_id / "static-analysis-run.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert marker["status"] == "success"
+
     analysis = TruffleHogScanner(
         database,
         workspace=workspace,

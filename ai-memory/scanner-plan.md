@@ -1,7 +1,7 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
-Current state (verified 2026-11-17): **P0-P7 DONE; M0-M3 DONE WITH
-WARNINGS**. M3 used real Simple Calculator v85 evidence from run
+Current state (verified 2026-11-17): **P0-P7 DONE; M0-M3 DONE**. M3 used real
+Simple Calculator v85 evidence from run
 `b8e85b99-a5f9-496d-b3a4-e15cb1deca73`: all 4 APK components were verified;
 existing decoded and TruffleHog results were reused, then secret links and
 trace chains were refreshed. Per-artifact `status.json` files now cover
@@ -11,13 +11,19 @@ report, reconciliation, freeze, and pipeline. A separate writable copy at
 `/home/dial9/APK-Workbench/workspace-m3-postfix-real` produced the post-fix
 report, froze all 4 bundles, and passed `verify-workspace` with zero
 mismatches, missing files, or extras. The fixed cross-APK JNI matcher mapped
-7 exports and left 0 unmapped; report and inventory agree. Reconciliation
-accounted for 4/4 (1 complete, 3 complete-with-warnings); 3 surface outcomes
-remain partial. The original frozen bundles were not modified. The report is
-758 MB JSON / 1.13 GB HTML and remains a scale constraint. No fresh download,
-decompile, or TruffleHog rescan was performed. P8 remains PARTIAL:
+7 exports and left 0 unmapped; report and inventory agree. The three
+non-base splits have no DEX payload; Androguard correctly returns
+`not_applicable`, but the surface driver incorrectly marked any non-success
+DEX result as a partial analysis. The driver now preserves the not-applicable
+coverage and does not downgrade surface status. Cached successful reuse also
+no longer makes the run status partial. All four surface results now report
+success; DEX coverage is `success` for base and `not_applicable` for the
+three splits. Reconciliation accounts for 4/4 as complete. The original
+frozen bundles were not modified. The report is 758 MB JSON / 1.13 GB HTML
+and remains a scale constraint. No fresh download, decompile, or TruffleHog
+rescan was performed. P8 remains PARTIAL:
 handoff/freeze mechanics exist, but model dry-run, output-contract enforcement,
-and volume hierarchy are not validated. Full suite: **385 passed**. Current
+and volume hierarchy are not validated. Full suite: **386 passed**. Current
 open work is tracked in
 [PRODUCT-RESCUE-BOARD.md](../docs/engineering/PRODUCT-RESCUE-BOARD.md).
 The older 2026-11-16 status snapshots below are retained as history, not as the

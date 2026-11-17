@@ -284,6 +284,79 @@ def test_driver_emits_handoff_files_beside_static_analysis(tmp_path, monkeypatch
     )
 
 
+def test_driver_does_not_mark_dex_not_applicable_as_partial(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws"
+    downloads = workspace / "downloads" / "com.example.app-1"
+    downloads.mkdir(parents=True)
+    apk_path = downloads / "config.apk"
+    with zipfile.ZipFile(apk_path, "w") as archive:
+        archive.writestr(
+            "AndroidManifest.xml",
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+            'package="com.example.app"><application/></manifest>',
+        )
+    digest = hashlib.sha256(apk_path.read_bytes()).hexdigest()
+
+    artifact_root = workspace / "results" / "com.example.app" / "1" / digest
+    decoded = artifact_root / "apktool"
+    decoded.mkdir(parents=True)
+    (decoded / "AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+        'package="com.example.app"><application/></manifest>',
+        encoding="utf-8",
+    )
+
+    row = {
+        "run_id": "run-1",
+        "package_id": "com.example.app",
+        "version_code": "1",
+        "source": "google_play",
+        "local_path": str(apk_path),
+        "size": str(apk_path.stat().st_size),
+        "sha256": digest,
+    }
+
+    class StubDatabase:
+        def read_download_history(self):
+            return [row]
+
+        def read_processing_status(self):
+            return {digest: {"apktool_status": "success"}}
+
+        def read_manifest(self, run_id):
+            return [row]
+
+    monkeypatch.setattr(
+        apk_surface,
+        "analyze_apk_dex",
+        lambda *args, **kwargs: {
+            "status": "not_applicable",
+            "coverage": {"code_model": "not_applicable"},
+            "diagnostics": [
+                {"code": "dex_not_found", "message": "APK contains no DEX payload."}
+            ],
+            "limitations": ["No DEX code was available."],
+            "metrics": {"dex_files": 0},
+            "permission_api_usage": [],
+        },
+    )
+
+    summary = apk_surface.run_static_surface_analysis(
+        StubDatabase(), workspace, run_id="run-1"
+    )
+    static_payload = json.loads(
+        (
+            artifact_root / "surface" / "static-analysis.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert summary["completed"] == 1
+    assert summary["partial"] == 0
+    assert static_payload["status"] == "success"
+    assert static_payload["coverage"]["dex_semantic_analysis"] == "not_applicable"
+    assert any(item["code"] == "dex_not_found" for item in static_payload["diagnostics"])
+
+
 def test_native_byte_offset_citation_round_trips_and_line_cites_are_unchanged():
     """N4: native evidence is byte-addressed; text evidence keeps path:line."""
     from apkworkbench.analysis.surface.handoff import render_location

@@ -49,9 +49,9 @@ DURING: register risks/hallucination doubts as VERIFY notes immediately.
 END: update STATE (phase item moved? decisions? VERIFYs resolved?) + tick
 surface.txt/plan.txt checkboxes if applicable.
 
-## STATE (current as of 2026-11-17; M3 complete with warnings)
+## STATE (current as of 2026-11-17; M3 complete)
 - Current verified snapshot: M0-M3 are complete; `.venv/bin/python -m
-  pytest -q` reports **385 passed**. P0-P7 are implemented; bundle freeze,
+  pytest -q` reports **386 passed**. P0-P7 are implemented; bundle freeze,
   `handoff.json`, `hashes.sha256`, and `verify-workspace` are implemented and
   fixture-tested. Real Simple Calculator v85 run
   (`b8e85b99-a5f9-496d-b3a4-e15cb1deca73`) has 4 independently verified APK
@@ -61,9 +61,14 @@ surface.txt/plan.txt checkboxes if applicable.
   statuses cover per-bundle download, verification, decompile, surface, and
   TruffleHog, plus run-level discover, report, reconciliation, freeze, and
   pipeline state. The 7 JNI exports now reconcile as 7 mapped / 0 unmapped.
-  Reconciliation accounts for 4/4 (1 complete, 3 complete-with-warnings);
-  the 3 partial surface results are explicit. All 4 copied bundles froze and
-  passed `verify-workspace` with zero mismatches, missing files, or extras.
+  The three splits have no DEX payload, so Androguard reports DEX coverage as
+  `not_applicable`; a driver bug incorrectly downgraded that to partial. The
+  driver now preserves not-applicable status without marking the surface
+  incomplete. Reprocessed these components: surface status is success for
+  all 4; DEX coverage is success for base and not_applicable for the splits.
+  Reconciliation accounts for 4/4 as complete. Cached successful surface
+  reuse also no longer makes the run marker partial. All 4 copied bundles
+  froze and passed `verify-workspace` with zero mismatches, missing files, or extras.
   Original frozen evidence was not modified. No fresh download, decompile, or
   TruffleHog rescan was performed. The final report is about 758 MB JSON /
   1.13 GB HTML. P8 remains PARTIAL:
@@ -75,8 +80,8 @@ surface.txt/plan.txt checkboxes if applicable.
   current state above and the dated status in the canonical phase files.
 - Product rescue board M0 (current-state reconciliation), M1 (post-scan
   secret links and trace chains), M2 (native report visibility), and M3
-  (real-app report, statuses, freeze, and verification) are complete. Treat
-  M3 as complete with warnings, not as proof of runtime behavior or a fresh
+  (real-app report, statuses, freeze, and verification) are complete. This
+  validates static-analysis outputs, not runtime behavior or a fresh
   acquisition/decompile/scan.
 
 ### Historical scanner snapshot (2026-11-16; retained for audit trail)
