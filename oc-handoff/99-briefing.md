@@ -1,8 +1,8 @@
 # APK Workbench — Current Engineering Brief
 
 **Verified:** 2026-11-17
-**Repository:** `main`; M0-M3 complete with warnings; M3 changes are pending
-local commit
+**Repository:** `main`; M0-M3 complete with warnings; M3 status implementation
+committed as `4fa3e40`
 **Tests:** `.venv/bin/python -m pytest -q` — 385 passed
 **Next:** stop at M3; M4 needs a separately selected scope
 
