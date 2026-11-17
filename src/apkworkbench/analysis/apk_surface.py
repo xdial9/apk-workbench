@@ -1557,9 +1557,10 @@ def cross_apk_native_jni_match(
     When .so files live in split APKs but smali `native` declarations live
     in the base APK (or another split), per-APK analysis cannot match them
     because `native_method_index` is built from that APK's smali only.
-    This pass collects all native exports and all smali `native` declarations
-    from every APK in the run, matches them across APK boundaries, and writes
-    `native_jni_entry` facts back to each APK's surface/static-analysis.json.
+    This pass parses every .so file directly via parse_elf to find Java_*
+    JNI exports, collects all smali `native` declarations from every APK,
+    matches them across APK boundaries, and writes native_jni_entry facts
+    back to each APK's surface/static-analysis.json.
 
     Returns a dict with matched/unmatched counts and per-artifact results.
     """
@@ -1569,6 +1570,7 @@ def cross_apk_native_jni_match(
         demangle_jni_symbol,
         _map_jni_symbol,
     )
+    from apkworkbench.analysis.surface.native_elf import parse_elf
 
     # ---- Phase 1: Build combined NativeMethodIndex from ALL APKs' smali ----
     combined_index = NativeMethodIndex()
@@ -1592,35 +1594,31 @@ def cross_apk_native_jni_match(
     if smali_files == 0:
         return {"matched": 0, "unmatched": 0, "smali_files": 0, "artifacts_updated": []}
 
-    # ---- Phase 2: Collect all native_export facts from ALL APKs ----
+    # ---- Phase 2: Collect Java_* exports by parsing .so files directly ----
+    # native_export facts written by apk_surface/_analyze_targets only carry
+    # C++ mangled names; Java_* JNI exports are present in parsed.exports but
+    # not always written as native_export facts. Parse .so files directly.
     exports: list[tuple[str, str, int, str]] = []  # library, symbol, offset, digest
     for row in eligible_rows:
         package_id = row.get("package_id", "")
         version_code = str(row.get("version_code", ""))
         digest = row.get("sha256", "").lower()
-        target = results_root / package_id / version_code / digest / "surface" / "static-analysis.json"
-        if not target.is_file():
+        decoded = results_root / package_id / version_code / digest / "apktool"
+        if not decoded.is_dir():
             continue
-        try:
-            result = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        for fact in result.get("facts", []):
-            if not isinstance(fact, dict) or fact.get("kind") != "native_export":
+        for so_file in decoded.rglob("*.so"):
+            try:
+                parsed = parse_elf(so_file)
+            except (OSError, ValueError):
                 continue
-            extra = fact.get("extra", {})
-            library = extra.get("library", "")
-            symbol = extra.get("symbol", "")
-            evidence = fact.get("evidence", {})
-            offset = 0
-            if isinstance(evidence, dict):
-                offset = evidence.get("offset", 0)
-            elif isinstance(evidence, list) and len(evidence) > 0:
-                first = evidence[0]
-                if isinstance(first, dict):
-                    offset = first.get("offset", 0)
-            if library and symbol and symbol.startswith("Java_"):
-                exports.append((library, symbol, offset, digest))
+            if not parsed or not parsed.ok or not parsed.exports:
+                continue
+            lib_rel = f"apktool/{so_file.relative_to(decoded).as_posix()}"
+            for symbol in parsed.exports:
+                sym_name = symbol.name or ""
+                if not sym_name.startswith("Java_"):
+                    continue
+                exports.append((lib_rel, sym_name, symbol.file_offset, digest))
 
     if not exports:
         return {"matched": 0, "unmatched": 0, "smali_files": smali_files, "artifacts_updated": []}
