@@ -699,10 +699,14 @@ def analyze_apk_surface(
         "native_container_unreadable", "native_container_member_limit",
         "native_embedded_byte_limit", "native_embedded_library_limit",
         "native_container_member_unreadable",
+        "code_container_unreadable", "code_container_member_limit",
+        "code_container_depth_limit", "code_embedded_byte_limit",
+        "code_container_member_unreadable",
     }
     if symlink_count or any(item["code"] in partial_diagnostics for item in diagnostics):
-        for area in ("endpoints_and_domains", "smali_security_indicators", "dependency_fingerprints"):
-            if coverage[area] == "success":
+        for area in ("endpoints_and_domains", "smali_security_indicators",
+                     "dependency_fingerprints", "dex_semantic_analysis"):
+            if coverage.get(area) == "success":
                 coverage[area] = "partial"
 
     # D9: findings-layer rollup. One finding per endpoint PATTERN (identifier
@@ -1176,14 +1180,37 @@ def analyze_apk_surface(
             dex_result.setdefault("limitations", []).extend(
                 embedded_result.get("limitations", [])
             )
+            # Keep dex_analysis status consistent: if either top-level or
+            # embedded analysis had issues, mark as partial.
+            if embedded_result.get("status") not in (None, "success"):
+                dex_result["status"] = embedded_result["status"]
+            elif dex_result.get("status") not in (None, "success"):
+                # embedded was success but top-level wasn't; keep top-level's
+                # non-success status.
+                pass
+            else:
+                dex_result["status"] = "success"
             if embedded_result.get("status") != "success":
                 result["status"] = "partial"
-            result["coverage"]["dex_semantic_analysis"] = dex_result.get("status", "failed")
+            # Combine coverage: embedded DEX analysis only adds to what the
+            # top-level APK analysis already established; never downgrade an
+            # existing "success" to "not_applicable" just because no containers
+            # were found. When both exist, the worse status wins.
+            existing_coverage = result["coverage"].get("dex_semantic_analysis")
+            embedded_status = embedded_result.get("status", "failed")
+            if existing_coverage in (None, "not_run", "not_applicable") or (
+                existing_coverage == "success" and embedded_status != "success"
+            ):
+                result["coverage"]["dex_semantic_analysis"] = embedded_status
         elif code_containers:
             # Containers exist but no extractable .dex members (all skipped by
-            # caps). Coverage is partial, not a bare success.
-            result["coverage"]["dex_semantic_analysis"] = "partial"
-        else:
+            # caps). Coverage is partial, not a bare success — the container
+            # scan produced a gap even if the top-level APK DEX was fine.
+            existing = result["coverage"].get("dex_semantic_analysis")
+            if existing in (None, "not_run", "not_applicable", "success"):
+                result["coverage"]["dex_semantic_analysis"] = "partial"
+        elif result["coverage"].get("dex_semantic_analysis") in (None, "not_run", "not_applicable"):
+            # No containers at all: no embedded DEX to analyze.
             result["coverage"]["dex_semantic_analysis"] = "not_applicable"
     finally:
         for path in temp_paths:
