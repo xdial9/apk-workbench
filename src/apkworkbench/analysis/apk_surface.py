@@ -1980,8 +1980,20 @@ def run_static_surface_analysis(
             try:
                 link_coverage: dict[str, str] = {}
                 link_diagnostics: list[dict[str, str]] = []
+
+                # Load TruffleHog findings for secret linkage
+                trufflehog_dir = output_root / "trufflehog"
+                trufflehog_findings: list[dict[str, Any]] | None = None
+                findings_path = trufflehog_dir / "findings.json"
+                if findings_path.is_file():
+                    try:
+                        trufflehog_findings = json.loads(findings_path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        trufflehog_findings = None
+
                 link_edges = build_link_graph(
                     result, dex_result,
+                    trufflehog_findings=trufflehog_findings,
                     tree_root=citation_root,
                     coverage=link_coverage,
                     diagnostics=link_diagnostics,
