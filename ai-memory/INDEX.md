@@ -91,7 +91,7 @@ surface.txt/plan.txt checkboxes if applicable.
   facts (view_count/views/ids/custom_views) and `custom_view` facts. New
   coverage keys file_provider_paths + layout_inventory; metrics
   file_provider_root_count / layout_count / custom_view_count.
-  STATE: 370 tests green, P2/P3/P4/P5 COMMITTED, P6 DONE (2026-11-17, worktree).
+  STATE: 372 tests green, P2/P3/P4/P5/P6 COMMITTED, P7 DONE (2026-11-17, worktree).
   P6: extract_embedded_code in surface/native.py generalises the
   extract_embedded_libraries cap/diagnostic structure to .dex/.jar/.apk
   members, parameterized on suffix with MAX_CONTAINER_DEPTH=3 (depth-limit

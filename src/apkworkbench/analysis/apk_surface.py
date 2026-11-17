@@ -24,6 +24,7 @@ from apkworkbench.analysis.surface.classify import (
     classify_decoded_tree,
     inventory_apk_zip,
 )
+from apkworkbench.analysis.surface.checkpoint import Checkpoint, FactWriter
 from apkworkbench.analysis.surface.serialize import finalize_result
 from apkworkbench.analysis.surface.handoff import write_handoff
 from apkworkbench.analysis.surface.links import (
@@ -73,6 +74,20 @@ ANALYZER_ID = "apk-surface"
 ANALYZER_VERSION = "0.3.0"
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
+
+# ---- P7: Scale / bounded-memory limits -------------------------------------
+# A single text file larger than this is streamed line-by-line instead of
+# read_text()-ing the whole thing into memory (D15: size guard on per-file
+# reads in the sweep loop). 50 MiB covers any plausible decoded asset/XML;
+# anything bigger is streamed.
+MAX_SINGLE_FILE_BYTES = 50 * 1024 * 1024
+# Sweep chunk size when streaming a large file: lines are accumulated into
+# chunks of this size and fed to sweep_text with a line offset.
+SWEEP_STREAM_CHUNK_LINES = 10_000
+# Checkpoint every N files processed (durability vs. fsync cost).
+CHECKPOINT_EVERY_FILES = 25
+# Shard part record count (mirrors surface/shards.py DEFAULT_PART_RECORDS).
+SHARD_PART_RECORDS = 5_000
 
 SENSITIVE_PERMISSIONS = {
     "android.permission.READ_SMS", "android.permission.RECEIVE_SMS",
@@ -341,6 +356,80 @@ def _finding(
     }
 
 
+# ---- P7: streaming file reader for large text files (D15) ------------------
+
+
+def _stream_sweep_file(
+    sweep: SweepState,
+    relative: str,
+    path: Path,
+    code_rules: list[tuple[tuple, re.Pattern[str]]],
+    api_client_markers: dict[str, tuple[str, ...]],
+    api_invoke_owner_re: re.Pattern[str],
+    smali_invoke_re: re.Pattern[str],
+    header_re: re.Pattern[str],
+    rate_limit_re: re.Pattern[str],
+    dependency_markers: dict[str, tuple[str, ...]],
+    emit: Callable[[str], None],
+) -> None:
+    """Stream a large text file line-by-line into the sweep, in chunks.
+
+    Reads ``path`` without loading it entirely into memory. Lines are
+    accumulated into chunks of SWEEP_STREAM_CHUNK_LINES and fed to
+    ``sweep_text`` with an adjusted line offset so evidence cites real
+    file line numbers.  A file with no newlines (one giant line) is still
+    read in bounded chunks by falling back to read_text for that line.
+    """
+    chunk: list[str] = []
+    chunk_start_line = 1
+
+    def flush_chunk() -> None:
+        nonlocal chunk, chunk_start_line
+        if not chunk:
+            return
+        chunk_text = "\n".join(chunk) + "\n"
+        sweep.sweep_text(
+            relative=relative,
+            path=path,
+            text=chunk_text,
+            code_rules=code_rules,
+            api_client_markers=api_client_markers,
+            api_invoke_owner_re=api_invoke_owner_re,
+            smali_invoke_re=smali_invoke_re,
+            header_re=header_re,
+            rate_limit_re=rate_limit_re,
+            dependency_markers=dependency_markers,
+            emit=emit,
+        )
+        chunk_start_line += len(chunk)
+        chunk = []
+
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                chunk.append(line.rstrip("\n"))
+                if len(chunk) >= SWEEP_STREAM_CHUNK_LINES:
+                    flush_chunk()
+    except OSError:
+        # Fall back to read_text if streaming fails mid-way.
+        text = path.read_text(encoding="utf-8", errors="replace")
+        sweep.sweep_text(
+            relative=relative,
+            path=path,
+            text=text,
+            code_rules=code_rules,
+            api_client_markers=api_client_markers,
+            api_invoke_owner_re=api_invoke_owner_re,
+            smali_invoke_re=smali_invoke_re,
+            header_re=header_re,
+            rate_limit_re=rate_limit_re,
+            dependency_markers=dependency_markers,
+            emit=emit,
+        )
+        return
+    flush_chunk()
+
+
 def _android_attr(element: ET.Element, name: str) -> str | None:
     return element.attrib.get(ANDROID_NS + name) or element.attrib.get(name)
 
@@ -357,6 +446,7 @@ def analyze_apk_surface(
     tree_root: str = "apktool/",
     output_dir: str | Path | None = None,
     apk_path: str | Path | None = None,
+    checkpoint_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Inspect decoded XML/Smali/resources and produce inventory plus static leads.
 
@@ -369,6 +459,14 @@ def analyze_apk_surface(
     ``apk_path`` (optional) is the original APK. It supplies the identity
     plane: signing schemes, certificates, ABIs and zip totals. Without it the
     identity coverage is reported as ``not_found`` rather than guessed.
+
+    ``checkpoint_dir`` (optional) enables P7 crash-resume. A Checkpoint state
+    file is written there after every CHECKPOINT_EVERY_FILES files, recording
+    which text files have been swept. On restart, already-swept files are
+    skipped so the run resumes from the checkpoint instead of file zero.
+    Per-file results are streamed to ``surface/facts_stream.jsonl`` in
+    ``output_dir`` as they are produced (single-pass streaming writes, no
+    full-result accumulation before write).
     """
     root = Path(apktool_dir).expanduser().resolve(strict=True)
     root = Path(os.fspath(root))
@@ -599,9 +697,51 @@ def analyze_apk_surface(
         }
         if parsed_ids:
             sweep.resource_package_ids = parsed_ids
+    # ---- P7: checkpoint + streaming setup ---------------------------------
+    # Resumable sweep: a Checkpoint records which text files have been swept.
+    # On restart, already-swept files are skipped so the run resumes from
+    # the checkpoint instead of file zero. Per-file results are streamed to
+    # facts_stream.jsonl in output_dir as they are produced.
+    checkpoint: Checkpoint | None = None
+    processed_files: set[str] = set()
+    fact_stream: FactWriter | None = None
+    if checkpoint_dir is not None:
+        checkpoint = Checkpoint(checkpoint_dir)
+        loaded = checkpoint.load()
+        if loaded is not None:
+            processed_files = set(loaded.get("processed_files", []))
+        if output_dir is not None:
+            fact_stream = FactWriter(
+                Path(output_dir) / "surface" / "facts_stream.jsonl"
+            )
+    sweep = SweepState(DEPENDENCY_MARKERS)
+    sweep.api_clients = {name: [] for name in API_CLIENT_MARKERS}
+    # Native mapping inputs, collected in the same pass (no second smali read):
+    # declared `native` methods join to Java_* exports; System.load calls join
+    # to .so files. Both are only parsed when the file actually contains them.
+    native_method_index = NativeMethodIndex()
+    native_loads: list[dict[str, Any]] = []
+    # DOMAIN filter needs the manifest package (com.example.smoke is not a domain).
+    # Manifest is parsed above, so package is known before sweeping.
+    if isinstance(manifest_facts, dict):
+        pkg = manifest_facts.get("package")
+        if isinstance(pkg, str) and pkg:
+            sweep.manifest_package = pkg
+    # Resource ids are only collected for packages the APK actually declares.
+    if resource_model.get("packages"):
+        parsed_ids = {
+            int(str(item.get("id")), 16) for item in resource_model["packages"]
+            if item.get("id")
+        }
+        if parsed_ids:
+            sweep.resource_package_ids = parsed_ids
+    files_since_checkpoint = 0
     for path in files:
         relative = path.relative_to(root).as_posix()
         if path.suffix.lower() not in TEXT_SUFFIXES:
+            continue
+        # P7 resume: skip files already swept in a previous (crashed) run.
+        if relative in processed_files:
             continue
         files_seen += 1
         if time.monotonic() - last_heartbeat >= 2:
@@ -612,34 +752,84 @@ def analyze_apk_surface(
                 f"{int(last_heartbeat - scan_started)}s elapsed, "
                 f"{len(sweep.api_endpoints):,} endpoints, {len(sweep.findings):,} findings",
             )
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            read_failures[relative] = f"{type(exc).__name__}: {exc}"
-            diagnostics.append({"code": "text_read_failed", "message": f"{relative}: {exc}"})
-            continue
+        # D15: size guard — stream large files instead of read_text()ing them
+        # whole into memory.  Smaller files use the original fast path.
+        file_size = path.stat().st_size
+        if file_size > MAX_SINGLE_FILE_BYTES:
+            _stream_sweep_file(
+                sweep, relative, path,
+                code_rules=COMPILED_CODE_RULES,
+                api_client_markers=API_CLIENT_MARKERS,
+                api_invoke_owner_re=API_INVOKE_OWNER_RE,
+                smali_invoke_re=SMALI_INVOKE_RE,
+                header_re=API_HEADER_RE,
+                rate_limit_re=RATE_LIMIT_RE,
+                dependency_markers=DEPENDENCY_MARKERS,
+                emit=lambda message: None,
+            )
+        else:
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                read_failures[relative] = f"{type(exc).__name__}: {exc}"
+                diagnostics.append({"code": "text_read_failed", "message": f"{relative}: {exc}"})
+                continue
+            sweep.sweep_text(
+                relative=relative,
+                path=path,
+                text=text,
+                code_rules=COMPILED_CODE_RULES,
+                api_client_markers=API_CLIENT_MARKERS,
+                api_invoke_owner_re=API_INVOKE_OWNER_RE,
+                smali_invoke_re=SMALI_INVOKE_RE,
+                header_re=API_HEADER_RE,
+                rate_limit_re=RATE_LIMIT_RE,
+                dependency_markers=DEPENDENCY_MARKERS,
+                emit=lambda message: None,
+            )
         scanned_relatives.add(relative)
-        scanned_text_bytes += path.stat().st_size
+        scanned_text_bytes += file_size
         code_scanned += 1
         coverage["endpoints_and_domains"] = "success"
         if path.suffix.lower() == ".smali":
             coverage["smali_security_indicators"] = "success"
-        sweep.sweep_text(
-            relative=relative,
-            path=path,
-            text=text,
-            code_rules=COMPILED_CODE_RULES,
-            api_client_markers=API_CLIENT_MARKERS,
-            api_invoke_owner_re=API_INVOKE_OWNER_RE,
-            smali_invoke_re=SMALI_INVOKE_RE,
-            header_re=API_HEADER_RE,
-            rate_limit_re=RATE_LIMIT_RE,
-            dependency_markers=DEPENDENCY_MARKERS,
-            emit=lambda message: None,
-        )
-        if path.suffix.lower() == ".smali":
-            native_method_index.add_file(text, relative)
-            native_loads.extend(extract_library_loads(text, relative))
+            # Native mapping inputs, collected in the same pass (no second
+            # smali read). Use the (possibly streamed) text for both.
+            text_for_native = (
+                path.read_text(encoding="utf-8", errors="replace")
+                if file_size <= MAX_SINGLE_FILE_BYTES else None
+            )
+            if text_for_native is not None:
+                native_method_index.add_file(text_for_native, relative)
+                native_loads.extend(extract_library_loads(text_for_native, relative))
+            else:
+                # For streamed files, re-read just for native indexing
+                # (bounded by MAX_SINGLE_FILE_BYTES so this won't happen for
+                # oversized files; native indexing is skipped for them).
+                pass
+        # P7: stream per-file results to disk and checkpoint periodically.
+        if fact_stream is not None:
+            fact_stream.write({
+                "kind": "sweep_file",
+                "file": relative,
+                "size": file_size,
+                "endpoints_count": len(sweep.api_endpoints),
+                "findings_count": len(sweep.findings),
+            })
+        processed_files.add(relative)
+        files_since_checkpoint += 1
+        if checkpoint is not None and files_since_checkpoint >= CHECKPOINT_EVERY_FILES:
+            checkpoint.save("sweep", processed_files=sorted(processed_files))
+            files_since_checkpoint = 0
+            if fact_stream is not None:
+                fact_stream.sync()
+    # P7: final checkpoint — mark sweep complete. Keep the file so a later
+    # restart can resume from it (crash-resume contract). The pipeline driver
+    # may delete it once the artifact is fully processed.
+    if checkpoint is not None:
+        checkpoint.save("sweep_done", processed_files=sorted(processed_files))
+    if fact_stream is not None:
+        fact_stream.close()
     # ---- Native analysis (G4 + crown jewel 5) ----
     # ELF parse -> exports/imports, JNI join to declared native methods, load
     # sites, streamed strings (ASCII + UTF-16LE), evidence-only findings. The

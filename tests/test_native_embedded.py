@@ -187,3 +187,46 @@ def test_loose_library_still_works_alongside_embedded(tmp_path):
     }
     assert result["metrics"]["native_files_found"] == 2  # 1 loose + 1 embedded
     assert MANIFEST  # shared fixture constant remains importable
+
+
+# ---- D7: load-site map keyed on full relative path, not basename -----------
+
+def test_two_same_named_libraries_in_dirs_stay_distinct(tmp_path):
+    """D7: two .so files with the same basename in different directories
+    must not collide in the load-site map. Each is keyed by its full
+    relative path."""
+    root = make_tree(tmp_path)
+    # Two libraries with the same basename in different directories.
+    write_elf(root / "lib" / "arm64-v8a" / "libfoo.so",
+              symbols=(symbol("foo_export_a"),))
+    write_elf(root / "lib" / "x86_64" / "libfoo.so",
+              symbols=(symbol("foo_export_b"),))
+    # Smali that loads "libfoo.so" - ambiguous which one, but both should
+    # appear distinctly in the inventory.
+    smali_dir = root / "smali" / "com" / "example"
+    smali_dir.mkdir(parents=True, exist_ok=True)
+    (smali_dir / "Loader.smali").write_text(
+        '.class public Lcom/example/Loader;\n'
+        '.method public static load()V\n'
+        '    const-string v0, "libfoo.so"\n'
+        '    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n'
+        '    return-void\n'
+        '.end method\n',
+        encoding="utf-8",
+    )
+
+    result = analyze_apk_surface(root)
+
+    states = {item["path"]: item["state"] for item in result["inventory"]["native_analysis"]}
+    # Both libraries appear, keyed by full relative path (not basename).
+    assert "lib/arm64-v8a/libfoo.so" in states, states
+    assert "lib/x86_64/libfoo.so" in states, states
+    assert states["lib/arm64-v8a/libfoo.so"] == "parsed"
+    assert states["lib/x86_64/libfoo.so"] == "parsed"
+    # Both exports are present.
+    exports = {
+        fact["value"] for fact in result["facts"]
+        if fact["kind"] == "native_export"
+    }
+    assert "lib/arm64-v8a/libfoo.so::foo_export_a" in exports, exports
+    assert "lib/x86_64/libfoo.so::foo_export_b" in exports, exports

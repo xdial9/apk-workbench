@@ -810,7 +810,15 @@ def _analyze_targets(
         analysis.metrics = _empty_metrics()
         return
 
-    known_names = {citation.rsplit("/", 1)[-1]: citation for citation, _path in targets}
+    known_names = {citation: citation for citation, _path in targets}
+    # Basename -> full citation for resolving load values (which carry only the
+    # filename, e.g. "libfoo.so"). Two libraries with the same basename in
+    # different directories no longer collide: each citation is keyed by its
+    # full relative path (D7 fix).
+    basename_to_citation: dict[str, str] = {}
+    for citation, _path in targets:
+        basename = citation.rsplit("/", 1)[-1]
+        basename_to_citation.setdefault(basename, citation)
     loads_by_library: dict[str, list[dict[str, Any]]] = {}
     unresolved_loads: list[dict[str, Any]] = []
     for load in library_loads:
@@ -818,10 +826,13 @@ def _analyze_targets(
         if resolved is None:
             unresolved_loads.append({**load, "reason": "no_library_literal"})
             continue
-        if resolved not in known_names:
+        # Match by full path first (exact), then by basename (load values only
+        # carry the filename). The full path is the canonical key (D7).
+        citation = known_names.get(resolved) or basename_to_citation.get(resolved)
+        if citation is None:
             unresolved_loads.append({**load, "reason": "no_matching_library", "library": resolved})
             continue
-        loads_by_library.setdefault(known_names[resolved], []).append(load)
+        loads_by_library.setdefault(citation, []).append(load)
 
     reports: list[NativeLibraryReport] = []
     string_fact_count = 0
@@ -1115,7 +1126,11 @@ def _analyze_targets(
     # load-site facts (the caller half of the crown jewel)
     for load in analysis.load_sites:
         resolved = library_from_load_value(load.get("value"))
-        relative = known_names.get(resolved or "") if resolved else None
+        # known_names is keyed by full citation path (D7); match by basename
+        # fallback when the load value carries only a filename.
+        relative = known_names.get(resolved or "")
+        if relative is None and resolved:
+            relative = basename_to_citation.get(resolved)
         if relative is None:
             continue
         analysis.facts.append({

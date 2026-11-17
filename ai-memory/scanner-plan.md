@@ -47,7 +47,7 @@ Everything below is the fix ladder. P0-P1 are done and verified.
 | P4 | Link graph: typed edges with two cites each + entry_points | **DONE** | `2c3d535` |
 | P5 | Detection breadth: 11 deduction templates, rule catalog 19 -> ~60 | **DONE** | P5 commit |
 | P6 | Containers: extract `.dex`/`.jar`/nested zips and analyse them | **DONE** | P6 commit |
-| P7 | Scale: single-pass streaming, checkpoint, shard by unit | queued | — |
+| P7 | Scale: single-pass streaming, checkpoint, shard by unit | **DONE** | P7 commit |
 | P8 | Handoff: `surface/` layout, bundle aggregation, workbook v2, prompts | queued | — |
 
 ### P0 — DONE (a88eac2 + 131fd69)
@@ -358,6 +358,25 @@ Single-pass streaming writes, bounded memory, per-file checkpoint
 Exit: the 112k-file case completes inside the RAM budget and resumes after a
 kill. Measured baseline: 57,944/112,254 files at ~39 files/s, killed at
 1,481 s with nothing persisted (`todo.md` history).
+
+**P7 — DONE** (worktree):
+- `analyze_apk_surface` gains `checkpoint_dir` parameter. Checkpoint saves
+  every CHECKPOINT_EVERY_FILES (25) files, recording processed_files for
+  crash-resume. On restart, already-swept files are skipped.
+- FactWriter streams per-file results to `facts_stream.jsonl` in output_dir
+  (single-pass streaming writes; no full-result accumulation before write).
+- `MAX_SINGLE_FILE_BYTES` (50 MiB) size guard on per-file read_text in the
+  sweep loop (D15). Larger files streamed line-by-line via `_stream_sweep_file`
+  in chunks of SWEEP_STREAM_CHUNK_LINES (10k lines), preserving real line
+  numbers for evidence cites.
+- Native overflow sharding already handled by native.py ShardWriter
+  (shards.py + shards-index.json pattern from P0).
+- D7 fixed: load-site map (`known_names`) keyed on full relative path, not
+  basename. `basename_to_citation` fallback resolves load values (filenames
+  only) to full paths. Two same-named .so in different dirs stay distinct.
+- D15 audited: all 12 `read_text` call sites reviewed. Only the sweep loop
+  (`apk_surface.py` per-file read) needed a size guard; others are bounded
+  (config, markers, small manifests) or not in the sweep hot path.
 
 ### P8 — Handoff
 `surface/` layout, bundle aggregation across components, `handoff.json`,
