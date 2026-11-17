@@ -1080,6 +1080,46 @@ def run(
             if complete != total:
                 stages_with_issues.append("reconciliation")
 
+    # Freeze every fully-processed artifact bundle: handoff.json +
+    # hashes.sha256 + read-only evidence so verify-workspace can prove it.
+    if run_id:
+        click.echo("\n=== FREEZE EVIDENCE ===")
+        workspace = Path(Config().get("workspace")).expanduser()
+        results_root = workspace / "results"
+        database = WorkspaceDatabase(workspace)
+        try:
+            manifest = database.read_manifest(run_id)
+        except DatabaseError:
+            manifest = []
+        frozen = 0
+        freeze_issues = 0
+        for selected in manifest:
+            digest = selected["sha256"].lower()
+            package_id = selected.get("package_id", "")
+            version_code = str(selected.get("version_code", ""))
+            bundle_dir = results_root / package_id / version_code / digest
+            if not bundle_dir.is_dir():
+                continue
+            # Already frozen bundles keep their immutable manifest.
+            if (bundle_dir / "hashes.sha256").is_file():
+                frozen += 1
+                continue
+            try:
+                database.freeze_evidence(bundle_dir)
+                frozen += 1
+                click.echo(
+                    f"  Frozen: {package_id} {version_code} [{digest[:12]}]"
+                )
+            except (DatabaseError, OSError) as exc:
+                freeze_issues += 1
+                click.echo(
+                    f"  Freeze failed for {package_id} {version_code}: {exc}",
+                    err=True,
+                )
+        if freeze_issues:
+            stages_with_issues.append("freeze")
+        click.echo(f"  Frozen {frozen} artifact bundle(s).")
+
     click.echo("\nFULL PIPELINE SUMMARY")
     if stages_with_issues:
         click.echo("Stages requiring attention: " + ", ".join(stages_with_issues))

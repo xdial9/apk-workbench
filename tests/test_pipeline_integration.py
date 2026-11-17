@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import textwrap
 from pathlib import Path
 
@@ -184,3 +185,25 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
     assert reconciliation["total"] == 1
     assert reconciliation["complete"] == 1
     assert reconciliation["counts"] == {"complete": 1}
+
+    # Freeze the artifact bundle: handoff.json + hashes.sha256 + read-only
+    # evidence so verify-workspace can prove it was not tampered with.
+    bundle_dir = workspace / "results/org.example.integration/1" / digest
+    database.freeze_evidence(bundle_dir)
+    assert (bundle_dir / "handoff.json").is_file()
+    assert (bundle_dir / "hashes.sha256").is_file()
+    hashes = (bundle_dir / "hashes.sha256").read_text(encoding="utf-8")
+    assert "surface/static-analysis.json" in hashes
+    assert "trufflehog/findings.json" in hashes
+    assert "handoff.json" in hashes
+    handoff = json.loads((bundle_dir / "handoff.json").read_text(encoding="utf-8"))
+    assert handoff["schema_version"] == 1
+    assert handoff["bundle_id"] == bundle_dir.name
+    assert handoff["analyzer"]["id"] == "apk-surface"
+    assert handoff["file_hashes"]["surface/static-analysis.json"]
+    # verify-workspace should pass on the frozen bundle.
+    verify = database.verify_workspace(bundle_dir)
+    assert verify["status"] == "ok"
+    assert verify["mismatches"] == []
+    assert verify["missing"] == []
+    assert verify["extra"] == []

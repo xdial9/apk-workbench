@@ -203,7 +203,7 @@ def _analyze_dex_payloads(
 
     if not dex_payloads:
         return {
-            "status": "partial",
+            "status": "not_applicable",
             "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
             "apk": {
                 "package": None,
@@ -548,7 +548,7 @@ def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
     dex_payloads = list(apk.get_all_dex())
     if not dex_payloads:
         return {
-            "status": "partial",
+            "status": "not_applicable",
             "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
             "apk": {
                 "package": apk.get_package(),
