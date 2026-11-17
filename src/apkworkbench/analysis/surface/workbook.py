@@ -171,7 +171,12 @@ def _flagged_fact_leads(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "kind", "value", "fingerprint", "count", "evidence",
             "evidence_truncated",
         }}
-        flags = extra.pop("flags", None) or []
+        flags = extra.pop("flags", None)
+        # ``flags`` should be a collection of flag strings (e.g. ["userinfo"]),
+        # but upstream may emit a non-iterable (e.g. an int count).  Coerce to
+        # a list so the membership check below never raises TypeError.
+        if not isinstance(flags, (list, tuple, set)):
+            flags = []
         interesting = (
             "userinfo" in flags
             or extra.get("host_class") in {"private", "idn", "reserved"}

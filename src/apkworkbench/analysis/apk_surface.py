@@ -968,7 +968,9 @@ def analyze_apk_surface(
         group["evidence"].extend(metadata["evidence"])
         if group["first"] is None:
             group["first"] = metadata["evidence"][0] if metadata["evidence"] else {}
-    for (method, pattern), group in sorted(route_groups.items()):
+    for (method, pattern), group in sorted(
+        route_groups.items(), key=lambda kv: (kv[0][0] or "", kv[0][1])
+    ):
         first = group["first"] or {}
         evidence = group["evidence"]
         sample = evidence[:_CITATION_SAMPLE_LIMIT]
