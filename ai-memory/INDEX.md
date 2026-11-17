@@ -91,7 +91,11 @@ surface.txt/plan.txt checkboxes if applicable.
   facts (view_count/views/ids/custom_views) and `custom_view` facts. New
   coverage keys file_provider_paths + layout_inventory; metrics
   file_provider_root_count / layout_count / custom_view_count.
-  STATE: 372 tests green, P2/P3/P4/P5/P6 COMMITTED, P7 DONE (2026-11-17, worktree).
+  STATE: 376 tests green, P2/P3/P4/P5/P6 COMMITTED, P7 DONE (2026-11-17, worktree),
+  UNIT 1 IN PROGRESS (static-analysis.json relocated to surface/, freeze +
+  handoff.json + verify-workspace implemented, six risk items audited: #1 OPEN,
+  #2 OPEN, #3 partial, #4 OPEN, #5 addressed, #6 CLOSED).  Next: prompt
+  path alignment + final commit.
   P6: extract_embedded_code in surface/native.py generalises the
   extract_embedded_libraries cap/diagnostic structure to .dex/.jar/.apk
   members, parameterized on suffix with MAX_CONTAINER_DEPTH=3 (depth-limit
@@ -402,25 +406,43 @@ Where it is NOT yet on track (ranked by risk):
 1. NEVER EXECUTED. prompts 0..6 have not been run by a model on a real
    artifact. Biggest risk in the whole overhaul, larger than any code item.
    Predictable first-run failures: unresolved paths, ambiguous steps,
-   skipped numbered instructions.
+   skipped numbered instructions.  The handoff folder structure is now in
+   place (surface/ static-analysis.json / facts.jsonl / location_map.json /
+   prompts / handoff.json / ai_analysis/attempt-01/) and citation-root
+   parameterization adapts apktool/ -> apktool/<component>/; but the
+   assembly-level dry run has not been performed.  Status: still OPEN.
 2. NO VOLUME HIERARCHY. Spotify at ~31k/112k files already has ~4,000
    endpoints and ~4,600 findings; location_map.json will be megabytes. A
    model cannot ingest that. Efficiency needs a ranked front page plus
    stable IDs the model can page/request — not the complete index at once.
-   The current design is honest but not efficient.
+   The current design is honest but not efficient.  Status: still OPEN.
 3. FOUR OVERLAPPING REPRESENTATIONS of the same data
    (static-analysis.json facts, facts.jsonl, location_map.json,
-   workbook.location_ledger). Different models will read different ones and
-   some will treat them as independent corroboration. Accuracy hazard;
-   needs explicit "same evidence, different views" wording + a canonical
-   precedence rule.
+   workbook.location_ledger). All four exist and are produced by the
+   pipeline.  The handoff.py citation-root parameterization ensures all
+   references are consistently tree-relative (apktool/<component>/).
+   Nonetheless, different models will read different representations and
+   some may treat them as independent corroboration.  Accuracy hazard;
+   a canonical "same evidence, different views" precedence rule should be
+   documented alongside each representation.  Status: partially addressed.
 4. NO ENFORCED OUTPUT CONTRACT. ai_analysis.json / lead_ledger.json /
    closure_report.md are described in prose only. Nothing validates them,
-   so finish_line is a suggestion, not a gate.
+   so finish_line is a suggestion, not a gate.  The ai_analysis/
+   directory contains a per-attempt schema (attempt-01/ attempt structure),
+   and the analyze_apk_surface finalize_result adds metrics.  Status: still
+   OPEN; no runtime gate validates the AI's deliverables.
 5. NO FEEDBACK LOOP. The model's closure report does not feed lead
-   generation; every run starts from zero.
-6. DEX STILL CAPPED (64MB androguard output cap), so a whole class of
-   results never reaches the handoff at all.
+   generation; every run starts from zero.  This is intentional per the
+   in-place freeze design (D-2): after freeze + chmod, the next run
+   recomputes everything.  The handoff is not a persistent feedback
+   channel.  Status: addressed (by design — every run starts from zero).
+6. DEX STILL CAPPED (64MB androguard output cap).  **CLOSED**: the
+   androguard_dex.py module is CAP-FREE since P0.  _worker_entry writes
+   the full analysis payload to disk via a temp file (no 64MB pipe cap),
+   and _emit streams only a tiny ack byte.  The old pipe-truncation code
+   that replaced results with [] has been removed.  All DEX entries,
+   strings, methods, call-graph edges and API references are preserved.
+   Status: CLOSED.
 
 ## HANDOFF CONTRACT WORK — COMMITTED 2026-11-14 (6e8dcaf)
 Implemented, tested and committed (see git log for the commit hash):
@@ -535,7 +557,15 @@ still SAVED ONLY / not implemented.
    /tmp/opencode/antennapod-before.json and -after.json; benchmark harness
    /tmp/opencode/bench_sweep.py (300-file parity/speed check); Antennapod
    decoded tree under /tmp/opencode/ws/results/de.danoeh.antennapod/.
-6. Current code/test facts: tests 213 green, analyzer 0.3.0, S8 perf 062973b.
+6. Current code/test facts: tests 376 green, analyzer 0.3.0, S8 perf 062973b,
+   Unit 1 freeze + handoff.json + verify-workspace implemented (workspace.py
+   freeze_evidence / write_handoff_manifest / verify_workspace; CLI
+   `apkwb verify-workspace <folder>`; tests/test_workspace_freeze.py +4).
+   static-analysis.json relocated to surface/ with legacy fallback in
+   final_run.py and workspace.py; D13 marker refresh moved before the loop.
+   Six risk items audited (see HANDOFF READINESS ASSESSMENT): #1 OPEN (dry
+   run never performed), #2 OPEN (volume hierarchy), #3 partial, #4 OPEN,
+   #5 addressed, #6 CLOSED (androguard cap removed in P0).
 7. Authorization context (user, 2026-11-14): the user has company
    authorization to implement this tool and scan Play APKs at will; the tool
    itself performs NO live validation — the terminal AI agent does all live

@@ -54,6 +54,33 @@ class DecompilationRunner:
         self.timeout_seconds = timeout_seconds
         self.logger = logger or logging.getLogger("apkworkbench.decompilation")
         self.progress = progress
+        self._supports_jobs: bool | None = None
+
+    def _apktool_supports_jobs(self) -> bool:
+        """Detect whether the installed apktool accepts the ``--jobs`` flag.
+
+        ``--jobs`` landed in apktool 2.9.0; the Debian-packaged 2.7.0-dirty
+        build rejects it with ``Unrecognized option: --jobs``.  We probe
+        ``apktool d --help`` once and cache the result so every APK in the run
+        shares the same decision.  Any probe failure means "assume unsupported":
+        a missing/broken executable is already surfaced by the real decode
+        attempt, and guessing wrong here turns a working tool into a hard
+        decode failure.
+        """
+        if self._supports_jobs is not None:
+            return self._supports_jobs
+        try:
+            probe = subprocess.run(
+                [self.apktool_executable, "d", "--help"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            self._supports_jobs = "--jobs" in (probe.stdout or "") or "--jobs" in (probe.stderr or "")
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            self._supports_jobs = False
+        return self._supports_jobs
 
     def _emit_progress(self, message: str) -> None:
         if self.progress is None:
@@ -569,13 +596,14 @@ class DecompilationRunner:
             command = [
                 self.apktool_executable,
                 "d",
-                "--jobs",
-                "4",
                 "--force",
                 "-o",
                 str(staged_output),
                 str(apk_path),
             ]
+            if self._apktool_supports_jobs():
+                command.insert(2, "--jobs")
+                command.insert(3, "4")
 
             errors: list[str] = []
             try:

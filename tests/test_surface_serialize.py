@@ -146,7 +146,7 @@ def test_driver_writes_workbook_and_rejects_stale_reuse(monkeypatch, tmp_path):
 
     target = (
         workspace / "results" / "com.example.s6" / "1" / ctx["digest"]
-        / "static-analysis.json"
+        / "surface" / "static-analysis.json"
     )
     stored = json.loads(target.read_text(encoding="utf-8"))
     assert stored["analyzer"]["version"] == "0.3.0"

@@ -370,8 +370,24 @@ def generate_final_run_report(
         bundle_metadata = _read_json(bundle_path, root) if bundle_path else None
 
         artifact_root = results_root / package_id / version_code / digest
-        static_path = artifact_root / "static-analysis.json"
-        static_analysis = _read_json(static_path, results_root)
+        # D-3: try the new surface/ path first; fall back to legacy root for backward
+        # compatibility. A test validates BOTH paths resolve correctly.
+        surface_dir = artifact_root / "surface"
+        static_path = surface_dir / "static-analysis.json"
+        legacy_static_path = artifact_root / "static-analysis.json"
+        static_analysis = _read_json(static_path, results_root) or _read_json(legacy_static_path, results_root)
+        if static_analysis is None:
+            # Surface analysis only runs against decoded Apktool output. When
+            # decompilation produced no usable output, the artifact is legitimately
+            # skipped (no ``apktool/`` directory to sweep), so a missing
+            # static-analysis.json is expected rather than a fatal inconsistency.
+            # A genuine "successful analysis without a result" still raises.
+            apktool_state = status.get("apktool_status", "not_run")
+            if apktool_state in {"success", "partial"}:
+                raise FinalRunReportError(
+                    f"Surface analysis succeeded for {package_id} but the expected "
+                    f"static-analysis.json is missing from either {static_path} or {legacy_static_path}."
+                )
         trufflehog_dir = artifact_root / "trufflehog"
         trufflehog_path = trufflehog_dir / "findings.json"
         trufflehog_unverified_count = 0
@@ -621,7 +637,7 @@ def generate_final_run_report(
                 "failed": trufflehog_failed,
                 "verified_findings": verified_findings,
                 "unverified_findings_retained": unverified_findings_retained,
-                "selection": "--results=all (verified reported; unverified preserved in trufflehog/ for the AI handoff)",
+                "selection": "--results=<complete set> (verified reported; unverified preserved in trufflehog/ for the AI handoff)",
                 "verified_text_reports": [
                     item["findings"]["trufflehog_verified_text"]
                     for item in artifacts

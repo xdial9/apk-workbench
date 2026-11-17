@@ -460,6 +460,37 @@ def test_scanner_rejects_results_root_symlink_escape(tmp_path):
 
 
 
+def test_scanner_resolves_results_enum_for_trufflehog_399(monkeypatch, tmp_path):
+    # TruffleHog 3.99.x dropped the legacy ``--results=all`` token and replaced it
+    # with an explicit enum. The scanner must derive the complete set from the
+    # help text so every finding is kept without the binary rejecting the value.
+    database, digest = make_workspace(tmp_path)
+    help_text = (
+        "filesystem command help --results=RESULTS --no-update --json "
+        "--concurrency --fail-on-scan-errors\n"
+        "Specifies which type(s) of results to output:\n"
+        "verified (confirmed valid by API), empty means empty\n"
+        "unknown (verification failed due to error),\n"
+        "unverified (detected but not verified),\n"
+        "filtered_unverified (unverified but would have been filtered out).\n"
+        "Defaults to verified,unverified,unknown."
+    )
+    calls, _process = install_fakes(monkeypatch, b"", help_text=help_text)
+    scanner = TruffleHogScanner(database, workspace=tmp_path, executable="trufflehog")
+
+    summary = scanner.run()
+
+    assert summary.scanned == 1
+    assert summary.failed == 0
+    scan_command = next(entry[1] for entry in calls if entry[0] == "scan")
+    results_arg = next(a for a in scan_command if a.startswith("--results="))
+    assert results_arg == "--results=filtered_unverified,unknown,unverified,verified"
+    scan_json = json.loads(
+        (tmp_path / "results/org.example.app/7" / digest / "trufflehog/scan.json").read_text(encoding="utf-8")
+    )
+    assert scan_json["results_flag"] == "filtered_unverified,unknown,unverified,verified"
+
+
 def test_scanner_accepts_kong_style_results_flag_syntax(monkeypatch, tmp_path):
     database, _digest = make_workspace(tmp_path)
     calls, _process = install_fakes(

@@ -287,7 +287,6 @@ class AnalyzerExecutor:
 
         deadline = started + profile.timeout_seconds
         ack: bytes | None = None
-        payload_bytes: bytes | None = None
         terminal_status: str | None = None
         terminal_message = ""
         try:

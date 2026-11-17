@@ -5,7 +5,7 @@ import hashlib
 import textwrap
 from pathlib import Path
 
-import apkworkbench.analysis.apk_surface as apk_surface
+from apkworkbench.analysis import apk_surface
 from apkworkbench.analysis.apk_surface import run_static_surface_analysis
 from apkworkbench.analysis.trufflehog import TruffleHogScanner
 from apkworkbench.database.workspace import WorkspaceDatabase
@@ -148,7 +148,7 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
     surface = run_static_surface_analysis(database, workspace, run_id=run_id)
     assert surface["completed"] == 1
     assert surface["failed"] == 0
-    static_path = workspace / "results/org.example.integration/1" / digest / "static-analysis.json"
+    static_path = workspace / "results/org.example.integration/1" / digest / "surface" / "static-analysis.json"
     assert static_path.is_file()
     static_payload = __import__("json").loads(static_path.read_text(encoding="utf-8"))
     assert static_payload["dex_analysis"]["metrics"]["external_methods_referenced"] == 3

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -12,6 +13,16 @@ from contextlib import contextmanager
 from threading import local
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+
+def _sha256_file(path: Path) -> str:
+    """SHA-256 hex digest of a regular file, chunked over 1 MiB reads."""
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1_048_576), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 class DatabaseError(RuntimeError):
@@ -322,7 +333,14 @@ class WorkspaceDatabase:
             else:
                 apktool = state.get("apktool_status", "pending")
                 scan = state.get("scan_status", "pending")
-                static_path = (
+                # D-3: static-analysis.json lives under surface/ in the new layout;
+                # fall back to the legacy root path so old artifacts still resolve.
+                surface_dir = (
+                    self.root / "results" / selected["package_id"]
+                    / str(selected["version_code"]) / digest / "surface"
+                )
+                static_path = surface_dir / "static-analysis.json"
+                legacy_static_path = (
                     self.root / "results" / selected["package_id"]
                     / str(selected["version_code"]) / digest / "static-analysis.json"
                 )
@@ -333,6 +351,7 @@ class WorkspaceDatabase:
                     / str(selected["version_code"]),
                     self.root / "results" / selected["package_id"]
                     / str(selected["version_code"]) / digest,
+                    surface_dir,
                     static_path,
                 )
                 static_status = (
@@ -343,9 +362,10 @@ class WorkspaceDatabase:
                 if any(part.is_symlink() for part in static_components):
                     static_status = "failed"
                     detail = "Static-analysis evidence path contains a symlink."
-                elif static_path.is_file():
+                elif static_path.is_file() or legacy_static_path.is_file():
+                    effective_path = static_path if static_path.is_file() else legacy_static_path
                     try:
-                        static_payload = json.loads(static_path.read_text(encoding="utf-8"))
+                        static_payload = json.loads(effective_path.read_text(encoding="utf-8"))
                     except (OSError, json.JSONDecodeError):
                         static_status = "failed"
                         detail = "Static-analysis result is missing, unreadable, or malformed."
@@ -355,7 +375,7 @@ class WorkspaceDatabase:
                         else:
                             static_status = "failed"
                             detail = "Static-analysis result does not contain a successful terminal status."
-                elif static_path.exists():
+                elif static_path.exists() or legacy_static_path.exists():
                     static_status = "failed"
                     detail = "Static-analysis result path is not a regular file."
                 elif surface_run_status in {"success", "partial"}:
@@ -667,3 +687,227 @@ class WorkspaceDatabase:
 
             rows.sort(key=lambda row: int(row["selection_order"]))
             return rows
+
+    def write_handoff_manifest(
+        self,
+        folder: Path,
+        *,
+        bundle_id: str | None = None,
+        analyzer: dict[str, str] | None = None,
+    ) -> Path:
+        """Write ``handoff.json`` at the bundle root.
+
+        Content per Unit 1 / D-3: schema/tool/prompt versions + hashes of key
+        files + analyzer version + bundle_id.  The model is handed only this
+        folder; the file answers "which shape + tool versions + which files
+        are frozen" without re-reading the whole evidence tree.
+        """
+        folder = Path(folder)
+        file_hashes: dict[str, str] = {}
+        hash_path = folder / "hashes.sha256"
+        if hash_path.is_file():
+            for line in hash_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split("  ", 1)
+                if len(parts) == 2 and not parts[1].startswith(("ai_analysis/", "database")):
+                    file_hashes[parts[1]] = parts[0]
+
+        # Fall back to hashing the key handoff files directly if the hash
+        # manifest was not written yet.
+        if not file_hashes:
+            key_rels = (
+                "surface/static-analysis.json",
+                "surface/facts.jsonl",
+                "surface/location_map.json",
+            )
+            for rel in key_rels:
+                candidate = folder / rel
+                if candidate.is_file():
+                    file_hashes[rel] = _sha256_file(candidate)
+
+        repo_root = Path(__file__).resolve().parents[3]
+        prompts_dir = repo_root / "prompts"
+        prompts: dict[str, dict[str, str]] = {}
+        for index in range(7):
+            prompt_file = prompts_dir / f"{index}.txt"
+            if prompt_file.is_file():
+                prompts[f"{index}.txt"] = {"sha256": _sha256_file(prompt_file)}
+
+        manifest = {
+            "schema_version": 1,
+            "bundle_id": bundle_id or folder.name,
+            "analyzer": analyzer or {"id": "apk-surface", "version": "unknown"},
+            "schema_versions": {
+                "facts_jsonl": 1,
+                "location_map": 1,
+                "static_analysis": 1,
+                "workbook": 1,
+            },
+            "tools": {
+                "androguard_dex": "4.1.4",
+            },
+            "prompts": prompts,
+            "file_hashes": dict(sorted(file_hashes.items())),
+        }
+        target = folder / "handoff.json"
+        target.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return target
+
+    def freeze_evidence(self, bundle_dir: Path) -> None:
+        """Make evidence directories read-only and write a sha256 manifest.
+
+        Under D-2 (in-place freeze) the decoded APK and all generated artifacts
+        become read-only after a successful run so tampering is detected by
+        verify-workspace.  Every file under the bundle gets its SHA-256 recorded
+        in a ``hashes.sha256`` file at the bundle root.  The caller may then
+        chmod the evidence subdirectories read-only.
+        """
+        bundle_dir = Path(bundle_dir)
+        hash_path = bundle_dir / "hashes.sha256"
+
+        # 1. Write handoff.json BEFORE hashing so it is part of the manifest.
+        self.write_handoff_manifest(bundle_dir)
+
+        # 2. Collect every regular file in the bundle (skip writable areas and
+        #    the hash file itself), sorted for deterministic output.
+        files: list[Path] = []
+        for root, dirs, filenames in os.walk(bundle_dir):
+            rel_root = Path(root).relative_to(bundle_dir)
+            parts = rel_root.parts
+            # Skip the writable AI-analysis scratch area.
+            if parts and parts[0] == "ai_analysis":
+                dirs[:] = []
+                continue
+            if parts and parts[0] == "database":
+                dirs[:] = []
+                continue
+            for fname in filenames:
+                fpath = Path(root) / fname
+                if fpath.is_symlink() or not fpath.is_file():
+                    continue
+                if fpath.name == "hashes.sha256" and len(parts) == 1:
+                    continue
+                if fpath.name.startswith("."):
+                    continue
+                files.append(fpath)
+        files.sort()
+
+        hashes: list[str] = []
+        for fpath in files:
+            fhash = _sha256_file(fpath)
+            hashes.append(f"{fhash}  {fpath.relative_to(bundle_dir).as_posix()}")
+        hash_path.write_text("\n".join(hashes) + "\n", encoding="utf-8")
+
+        # 3. chmod evidence read-only (dirs need r+x to be traversed; files
+        #    become read-only too).
+        evidence_dirs = [
+            bundle_dir / "apktool",
+            bundle_dir / "surface",
+            bundle_dir / "trufflehog",
+            bundle_dir / "manifest",
+        ]
+        for ev_dir in evidence_dirs:
+            if ev_dir.is_dir():
+                os.chmod(ev_dir, 0o555)
+        for fpath in files:
+            try:
+                os.chmod(fpath, 0o444)
+            except OSError:
+                pass
+        if bundle_dir.is_dir():
+            for child in bundle_dir.iterdir():
+                if child.is_dir() and child.name.startswith("apktool"):
+                    os.chmod(child, 0o555)
+
+    def verify_workspace(self, folder: Path) -> dict[str, Any]:
+        """Verify a frozen workspace bundle has not been tampered with.
+
+        Reads hashes.sha256 from the bundle root and recomputes SHA-256 for
+        every file listed.  Exits non-zero on any mismatch, missing file, or
+        extra file.  NEVER writes into the folder being verified — the
+        verification is read-only.
+
+        Returns a dict with verification results even when the exit code would
+        be non-zero, so callers can inspect the details programmatically.
+        """
+        folder = Path(folder).resolve()
+        hash_path = folder / "hashes.sha256"
+
+        if not hash_path.is_file():
+            return {
+                "status": "error",
+                "reason": f"hashes.sha256 not found at {hash_path}",
+                "mismatches": [],
+                "missing": [],
+                "extra": [],
+            }
+
+        expected: dict[str, str] = {}
+        with hash_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                # sha256 format: <hash>  <relative_path>
+                parts = line.split("  ", 1)
+                if len(parts) != 2:
+                    continue
+                expected[parts[1]] = parts[0]
+
+        actual: dict[str, str] = {}
+        for rel_path, expected_hash in expected.items():
+            full_path = (folder / rel_path).resolve()
+            if not full_path.is_file():
+                continue  # will be reported as missing
+            actual[rel_path] = _sha256_file(full_path)
+
+        mismatches: list[dict[str, str]] = []
+        for rel_path, expected_hash in expected.items():
+            full_path = (folder / rel_path).resolve()
+            if not full_path.is_file():
+                mismatches.append({"rel_path": rel_path, "reason": "missing"})
+                continue
+            if actual.get(rel_path) != expected_hash:
+                mismatches.append({
+                    "rel_path": rel_path,
+                    "reason": f"hash_mismatch: expected {expected_hash[:8]}... got {actual.get(rel_path, '')[:8]}...",
+                })
+
+        expected_keys = set(expected.keys())
+        missing = sorted(expected_keys - set(actual.keys()))
+
+        # Detect files added to the frozen folder after freeze. The writable
+        # ai_analysis/ area and the hash file itself are allowed to change.
+        extra: list[str] = []
+        for root, dirs, filenames in os.walk(folder):
+            rel_root = Path(root).relative_to(folder)
+            parts = rel_root.parts
+            if parts and parts[0] in {"ai_analysis", "database"}:
+                dirs[:] = []
+                continue
+            for fname in filenames:
+                fpath = Path(root) / fname
+                if fpath.is_symlink() or not fpath.is_file():
+                    continue
+                rel = fpath.relative_to(folder).as_posix()
+                if rel == "hashes.sha256":
+                    continue
+                if rel not in expected_keys:
+                    extra.append(rel)
+        extra.sort()
+
+        result = {
+            "status": "ok" if not mismatches and not missing and not extra else "failed",
+            "mismatches": mismatches,
+            "missing": missing,
+            "extra": extra,
+            "hash_file": str(hash_path),
+        }
+
+        # Do NOT write into the folder; only read.
+        return result

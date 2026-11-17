@@ -1,70 +1,81 @@
-# OC-Handoff Briefing — P7 Scale (DONE)
+# OC-Handoff Briefing — Unit 1 (Per-Bundle Workspace + Freeze) Complete
 
 NOTE: AGENTS.md requests this file at `/home/user/oc-handoff/99-briefing.md`.
 That path is absent and unwritable in this environment (`/home/user` does not
 exist; session user is `dial9`). Written here instead so the promised path
 exists inside the bundle workspace.
 
-## State (as of 2026-11-17, P7 completion)
-- Branch: feat/native-elf-reader; main == origin/main as of 2026-11-16 push.
-- P0–P6 committed. P7 scale DONE in worktree (this phase, pending commit).
+## State (as of 2026-11-17, Unit 1 completion)
+- Branch: agent-work (based on feat/native-elf-reader); main == origin/main as of 2026-11-16 push.
+- P0–P7 committed. Unit 1 (P8 handoff freeze + workspace) DONE in worktree (this phase).
 
-## P7 deliverables (this phase)
+## Unit 1 deliverables
 
-### Checkpoint + streaming (src/apkworkbench/analysis/apk_surface.py)
-- `analyze_apk_surface` gains `checkpoint_dir` parameter. `Checkpoint` saves
-  every CHECKPOINT_EVERY_FILES (25) files, recording `processed_files` for
-  crash-resume. On restart, already-swept files are skipped (not re-read from
-  file zero).
-- `FactWriter` streams per-file results to `facts_stream.jsonl` in
-  `output_dir` (single-pass streaming writes; no full-result accumulation
-  before write).
-- `MAX_SINGLE_FILE_BYTES` (50 MiB) size guard on per-file `read_text` in the
-  sweep loop (D15 fix). Larger files streamed line-by-line via
-  `_stream_sweep_file` in chunks of `SWEEP_STREAM_CHUNK_LINES` (10k lines),
-  preserving real line numbers for evidence cites.
-- Native overflow sharding already handled by `native.py` `ShardWriter`
-  (shards.py + shards-index.json pattern from P0).
-- Final checkpoint saved with stage `sweep_done` (kept for resume; pipeline
-  driver may delete after artifact fully processed).
+### Static-analysis.json relocation to surface/ (D-3)
+- `analyze_apk_surface` now writes `static-analysis.json` to `output_root / "surface" / "static-analysis.json"`.
+- Legacy root path fallback retained for backward compatibility:
+  - `reporting/final_run.py` reads `surface/` first, falls back to root.
+  - `database/workspace.py` `reconcile_run` checks `surface/` first, falls back to root.
+- Tests updated: `test_surface_links.py`, `test_pipeline_integration.py`, `test_surface_serialize.py`.
 
-### D7 fix (src/apkworkbench/analysis/surface/native.py)
-- Load-site map (`known_names`) keyed on full relative path, not basename.
-  `basename_to_citation` fallback resolves load values (filenames only) to
-  full paths. Two same-named `.so` in different directories stay distinct.
+### D13: Eligible marker refresh
+- `marker_refresh("running", ...)` called **immediately** after computing the eligible artifact list, not after the first artifact completes. Fixes the "live run looks dead (eligible=0)" bug.
 
-### D15 audit (all `read_text` call sites)
-Audited all 12 `read_text` call sites in `src/`:
-1. `acquisition/verification.py:207` — bundle manifest JSON. Small, bounded. No change needed.
-2. `reporting/final_run.py:25` — single run result JSON. Reporting path, not sweep. No change needed.
-3. `reporting/generator.py:54` — findings JSON for report generation. Reporting path. No change needed.
-4. `core/config.py:75` — YAML config file. Small, bounded. No change needed.
-5. `database/workspace.py:270` — status marker JSON. Tiny. No change needed.
-6. `database/workspace.py:348` — static-analysis.json. Could be large but not in sweep hot path. No change needed for P7.
-7. `cli/main.py:346` — packages file. Small list. No change needed.
-8. `trufflehog.py:549,554,567,568,615` — trufflehog results. Could be large but not in sweep. No change needed.
-9. `apk_surface.py` per-file sweep loop — **FIXED**: `MAX_SINGLE_FILE_BYTES` guard + `_stream_sweep_file`.
-10. `apk_surface.py:1481` — prior result read for reuse check. Not in sweep. No change needed.
-11. `resources.py:99` — decoded res/values XML. Typically small. No change needed.
-12. `checkpoint.py:53` — checkpoint JSON read. Tiny. No change needed.
+### Freeze + hashes.sha256 (D-2 in-place freeze)
+- `WorkspaceDatabase.freeze_evidence(bundle_dir)`:
+  1. Writes `handoff.json` at bundle root (schema/tool/prompt versions + key file hashes + analyzer version + bundle_id).
+  2. Walks entire bundle (excluding `ai_analysis/`, `database/`, and `hashes.sha256` itself), hashes all regular files, writes deterministic `hashes.sha256`.
+  3. chmod evidence directories (`apktool/`, `surface/`, `trufflehog/`, `manifest/`) to **0o555** (read + execute for traversal); files to **0o444** (read-only). No copy, no hardlink, no symlink — the workspace IS the handoff folder.
 
-### Tests (+2)
-- `test_checkpoint_saves_processed_files_and_resume_skips` — checkpoint saves
-  after every file; restart skips already-processed files (P7 exit criterion).
-- `test_two_same_named_libraries_in_dirs_stay_distinct` — two same-named .so
-  in different dirs stay distinct (D7 fix).
+### verify-workspace CLI command (read-only)
+- `apkwb verify-workspace <folder>` added to `src/apkworkbench/cli/main.py`.
+- Reads `hashes.sha256`, recomputes SHA-256 for every listed file.
+- Reports mismatches, missing, extra (detects files added post-freeze, e.g., `surface/injected.txt`).
+- Exits non-zero on any failure. **Never writes** into the verified folder.
+- `WorkspaceDatabase.verify_workspace(folder)` returns dict with full details for programmatic use.
+
+### handoff.json at bundle root
+- `WorkspaceDatabase.write_handoff_manifest(folder, bundle_id, analyzer)` writes:
+  - `schema_version: 1`
+  - `bundle_id` (folder name / run manifest `index_sha256`)
+  - `analyzer` (id + version)
+  - `schema_versions` (facts_jsonl, location_map, static_analysis, workbook)
+  - `tools` (androguard_dex: "4.1.4")
+  - `prompts` (sha256 of each 0.txt..6.txt from repo `prompts/`)
+  - `file_hashes` (from `hashes.sha256` or computed directly for key files)
+
+### Six risk items audited (from INDEX.md HANDOFF READINESS ASSESSMENT)
+| # | Risk | Status | Evidence |
+|---|------|--------|----------|
+| 1 | NEVER EXECUTED — prompts 0..6 not run by a model | **OPEN** | Handoff structure exists; dry run pending (Unit 2) |
+| 2 | NO VOLUME HIERARCHY — location_map.json too large for model ingestion | **OPEN** | No sharding/indexing of location_map.json; deferred to Unit 3 |
+| 3 | FOUR OVERLAPPING REPRESENTATIONS — static-analysis/facts/location_map/workbook | **PARTIAL** | All four exist; citation-root parameterized; need canonical precedence doc |
+| 4 | NO ENFORCED OUTPUT CONTRACT — ai_analysis.json / lead_ledger / closure_report | **OPEN** | Prose-only schemas; no validation gate |
+| 5 | NO FEEDBACK LOOP — closure report doesn't feed lead generation | **ADDRESSED (by design)** | Every run starts from zero after freeze; intentional per D-2 |
+| 6 | DEX STILL CAPPED — 64MB androguard output cap | **CLOSED** | androguard_dex.py CAP-FREE since P0: _worker_entry writes full payload to disk |
 
 ## Test results
-- 372 passed, 0 failed (was 370 before P7, +2 new).
+- **376 passed, 0 failed** (was 372 before Unit 1, +4 new freeze tests).
 - ruff clean on all changed files.
 
-## Next step
-- P8 Handoff: `surface/` layout, bundle aggregation, workbook v2, prompts.
+## Commits (this worktree)
+- 68fd6d6 — scanner P7: scale - checkpoint + streaming, D7 fix, D15 size guard
+- c1854ea — scanner P6: fix coverage overwrite bug in embedded DEX wiring
+- a6c6826 — scanner P6: containers and packed code (+5 fixture tests)
+- 6ab63f5 — memory: P5 committed (detection breadth: 19 → 29 CODE_RULES)
+- 8b98a36 — memory: P4 committed
+- 2c3d535 — scanner P4: link graph + entry points (12 tests)
+- 3de13fe — scanner P3: DEX code model + D4 fix
+- ce766fe — memory: record main fast-forward to scanner tip
+- 9a2f8f1 — memory: fill in real commit hashes, test map and commit log
+- 4adb6a5 — scanner P2c: FileProvider roots + layout/view inventory (P2 complete)
 
-## Commits
-- P7 commit: <hash pending — commit after this briefing is written>.
+## Next step
+- **Unit 2 Dry Run**: Acquire + decode + analyze ONE single-APK app; freeze into Unit 1 layout; hand folder to a capable model with 0.txt. Record every deviation: unresolved path, ambiguous step, skipped stage, token blowout, invented file, uncited claim.
 
 ## Open decisions / unverified
-- D5/D6/D10/D12/D13/D14/D17/D19/D20/D21 remain open per ledger (D7, D15 now fixed).
-- /home/user/oc-handoff/99-briefing.md path unavailable in this environment
-  (noted above); this file is the substitute.
+- LAYOUT: `static-analysis.json / facts.jsonl / location_map.json` under `surface/` (prompts 0/2/workbook.py promise it); `google-play-bundle.json` stays at bundle root (3 consumers expect it; contradicts D-3's `manifest/` wording). **Recommendation: surface/ for analyzer outputs, root for google-play-bundle.json.**
+- Bundle-level aggregation of per-APK `static-analysis.json`: proposal `surface/artifacts/<sha256>/static-analysis.json` per APK + `surface/bundle.json` index. No silently merged JSON.
+- Migrate existing results trees, or apply new layout to new runs only? **Recommendation: new runs only; analyzer version gate forces re-analysis of stale artifacts.**
+- D5/D6/D10/D12/D13/D14/D17/D19/D20/D21 remain open per audit ledger (D7, D15 now fixed; D13 marker refresh DONE; D17 relocation DONE).
+- /home/user/oc-handoff/99-briefing.md path unavailable in this environment; this file is the substitute.

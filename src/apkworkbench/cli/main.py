@@ -678,6 +678,46 @@ def verify_downloads(run_id: str) -> None:
 
 
 @main.command()
+@click.argument(
+    "folder",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+)
+def verify_workspace(folder: Path) -> None:
+    """Recompute SHA-256 hashes for a frozen workspace bundle.
+
+    Reads hashes.sha256 from the bundle root and recomputes SHA-256 for
+    every file listed.  Exits non-zero on any mismatch, missing file, or
+    extra file.  NEVER writes into the folder being verified.
+    """
+    config = Config()
+    workspace = config.get("workspace")
+    click.echo(BANNER)
+    click.echo(f"Verifying workspace: {folder}")
+    database = WorkspaceDatabase(workspace)
+    try:
+        result = database.verify_workspace(folder)
+    except (DatabaseError, OSError, ValueError) as exc:
+        click.echo(f"Workspace verification failed: {exc}", err=True)
+        raise click.exceptions.Exit(1) from exc
+
+    click.echo("VERIFY-WORKSPACE")
+    click.echo(f"  Status: {result['status'].upper()}")
+    click.echo(f"  Hash file: {result['hash_file']}")
+    click.echo(f"  Mismatches: {len(result['mismatches'])}")
+    for m in result["mismatches"]:
+        click.echo(f"    - {m['rel_path']}: {m['reason']}")
+    click.echo(f"  Missing: {len(result['missing'])}")
+    for m in result["missing"]:
+        click.echo(f"    - {m}")
+    click.echo(f"  Extra: {len(result['extra'])}")
+    for m in result["extra"]:
+        click.echo(f"    - {m}")
+
+    if result["status"] != "ok":
+        raise click.exceptions.Exit(1)
+
+
+@main.command()
 @click.option(
     "--limit",
     type=click.IntRange(min=0),

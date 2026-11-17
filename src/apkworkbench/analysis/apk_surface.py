@@ -1626,6 +1626,15 @@ def run_static_surface_analysis(
         "finding_count": 0,
         "artifacts": [],
     }
+    # D13: refresh the marker IMMEDIATELY when eligible is computed, not after
+    # the first artifact completes. Without this a live run looks dead (eligible=0)
+    # until the first artifact finishes, which can take minutes on a large bundle.
+    marker_refresh(
+        "running",
+        summary["eligible"], summary["completed"], summary["failed"],
+        summary["skipped"], summary["partial"], summary["finding_count"],
+        summary["artifacts"],
+    )
     for index, row in enumerate(eligible, start=1):
         package_id = row.get("package_id", "")
         version_code = str(row.get("version_code", ""))
@@ -1647,12 +1656,16 @@ def run_static_surface_analysis(
             })
             continue
         output_root = results_root / package_id / version_code / digest
+        # Under D-1 per-bundle workspace: decoded lives under apktool/<component>/.
+        # citation_root is derived from the relative path so it adapts
+        # automatically: "apktool/" for single-APK, "apktool/<component>/" when
+        # component subtrees are present.
         decoded = output_root / "apktool"
-        # Citation root for the handoff: the decoded subtree relative to the
-        # artifact folder. A single-APK artifact resolves to "apktool/"; a
-        # per-bundle component resolves to "apktool/<component>/".
         citation_root = f"{decoded.relative_to(output_root).as_posix()}/"
-        target = output_root / "static-analysis.json"
+        # D-3: static-analysis.json moves under surface/ so it never collides
+        # with decoded output and is always co-located with facts.jsonl and
+        # location_map.json.
+        target = output_root / "surface" / "static-analysis.json"
         package_root = results_root / package_id
         version_root = package_root / version_code
         if any(path.is_symlink() for path in (package_root, version_root, output_root, decoded, target)):

@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from apkworkbench.database.workspace import WorkspaceDatabase
 from apkworkbench.reporting.final_run import generate_final_run_report
 
@@ -102,26 +104,7 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
             "native_jni_exports_mapped": 2,
             "native_jni_exports_unmapped": 1,
         },
-        "dex_analysis": {
-            "status": "success",
-            "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
-            "metrics": {"dex_files": 1, "classes": 12, "external_methods_referenced": 1},
-            "external_method_references": [{
-                "full_name": "Lokhttp3/Call; execute ()Lokhttp3/Response;",
-                "category": "network",
-                "call_sites": [{"caller": "Lcom/example/Main; load ()V", "offset": 24}],
-            }],
-            "dex_api_strings": [{
-                "value": "https://api.example.test/v1",
-                "urls": ["https://api.example.test/v1"],
-                "references": [{"caller": "Lcom/example/Main; load ()V", "offset": 12}],
-            }],
-            "permission_api_usage": [{
-                "api_method": "Landroid/location/LocationManager; getLastKnownLocation",
-                "permissions": ["android.permission.ACCESS_FINE_LOCATION"],
-                "call_sites": [],
-            }],
-        },
+
         "dex_analysis": {
             "status": "success",
             "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
@@ -224,8 +207,109 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
     assert payload["artifacts"][0]["findings"]["trufflehog_unverified_count"] == 1
     assert payload["summary"]["unverified_trufflehog_findings_retained"] == 1
     assert payload["stages"]["trufflehog_verified_secret_scan"]["unverified_findings_retained"] == 1
-    assert "results=all" in payload["stages"]["trufflehog_verified_secret_scan"]["selection"]
+    assert "results=<complete set>" in payload["stages"]["trufflehog_verified_secret_scan"]["selection"]
     assert "UNVERIFIED_DETECTOR" not in json.dumps(
         payload["artifacts"][0]["findings"]["trufflehog_verified_original_objects"]
     )
     assert Path(result["html_path"]).is_file()
+
+
+def test_final_run_report_skips_surface_evidence_when_decompile_failed(tmp_path):
+    # When decompilation produces no usable Apktool output, surface analysis is
+    # legitimately skipped and writes no static-analysis.json. The consolidated
+    # report must not treat that as a fatal "analysis succeeded without a
+    # result" inconsistency; it records the artifact as not-run and still
+    # produces a report.
+    workspace = tmp_path / "workspace"
+    database = WorkspaceDatabase(workspace)
+    database.ensure()
+    run_id = "decompile-failed-run"
+    package_id = "com.example.app"
+    version_code = "17"
+    apk_bytes = b"decompile failed fixture"
+    digest = hashlib.sha256(apk_bytes).hexdigest()
+    apk_path = workspace / "downloads" / package_id / "17" / digest / "base.apk"
+    apk_path.parent.mkdir(parents=True)
+    apk_path.write_bytes(apk_bytes)
+    row = {
+        "run_id": run_id,
+        "selection_order": 1,
+        "selected_at": "2026-11-10T12:00:00+00:00",
+        "package_id": package_id,
+        "app_name": "Example",
+        "version_code": version_code,
+        "version_name": "17.0",
+        "source": "google_play",
+        "download_url": "google-play://example/base.apk",
+        "sha256": digest,
+        "size": len(apk_bytes),
+        "signer_sha256": "a" * 64,
+        "local_path": str(apk_path),
+        "index_sha256": "b" * 64,
+    }
+    database.write_manifest(run_id, [row])
+    database.append_history({**row, "downloaded_at": "2026-11-10T12:01:00+00:00"})
+    # Decompilation failed -> no apktool dir, no surface output.
+    database.update_processing_status({
+        "sha256": digest,
+        "package_id": package_id,
+        "version_code": version_code,
+        "apktool_status": "failed",
+        "scan_status": "pending",
+    })
+    (workspace / "reports").mkdir(parents=True, exist_ok=True)
+
+    result = generate_final_run_report(database, workspace, run_id)
+
+    assert result["artifact_count"] == 1
+    payload = json.loads(Path(result["json_path"]).read_text(encoding="utf-8"))
+    artifact = payload["artifacts"][0]
+    assert artifact["static_analysis"]["status"] == "not_run"
+    assert artifact["processing"]["apktool_status"] == "failed"
+
+
+def test_final_run_report_still_fails_when_surface_succeeded_but_missing(tmp_path):
+    # The genuine inconsistency still stays fatal: apktool succeeded, so the
+    # surface analyzer was expected to run, but static-analysis.json is absent.
+    workspace = tmp_path / "workspace"
+    database = WorkspaceDatabase(workspace)
+    database.ensure()
+    run_id = "missing-surface-run"
+    package_id = "com.example.app"
+    version_code = "17"
+    apk_bytes = b"missing surface fixture"
+    digest = hashlib.sha256(apk_bytes).hexdigest()
+    apk_path = workspace / "downloads" / package_id / "17" / digest / "base.apk"
+    apk_path.parent.mkdir(parents=True)
+    apk_path.write_bytes(apk_bytes)
+    row = {
+        "run_id": run_id,
+        "selection_order": 1,
+        "selected_at": "2026-11-10T12:00:00+00:00",
+        "package_id": package_id,
+        "app_name": "Example",
+        "version_code": version_code,
+        "version_name": "17.0",
+        "source": "google_play",
+        "download_url": "google-play://example/base.apk",
+        "sha256": digest,
+        "size": len(apk_bytes),
+        "signer_sha256": "a" * 64,
+        "local_path": str(apk_path),
+        "index_sha256": "b" * 64,
+    }
+    database.write_manifest(run_id, [row])
+    database.append_history({**row, "downloaded_at": "2026-11-10T12:01:00+00:00"})
+    database.update_processing_status({
+        "sha256": digest,
+        "package_id": package_id,
+        "version_code": version_code,
+        "apktool_status": "success",
+        "scan_status": "success",
+    })
+    (workspace / "reports").mkdir(parents=True, exist_ok=True)
+
+    from apkworkbench.reporting.final_run import FinalRunReportError
+
+    with pytest.raises(FinalRunReportError, match="static-analysis.json is missing"):
+        generate_final_run_report(database, workspace, run_id)

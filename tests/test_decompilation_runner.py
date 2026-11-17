@@ -52,7 +52,7 @@ def output_path(command: list[str]) -> Path:
     return Path(command[command.index("-o") + 1])
 
 
-def make_runner(workspace: Path):
+def make_runner(workspace: Path, supports_jobs: bool = True):
     database = WorkspaceDatabase(workspace)
     database.ensure()
     digest, apk_path = add_download(database, workspace)
@@ -63,6 +63,9 @@ def make_runner(workspace: Path):
         timeout_seconds=30,
         logger=logging.getLogger("test-apktool"),
     )
+    # Pin the apktool capability so unit tests exercise the command-build logic
+    # deterministically without invoking a real ``apktool d --help`` probe.
+    runner._supports_jobs = supports_jobs
     return runner, database, digest, apk_path
 
 
@@ -110,6 +113,46 @@ def test_runs_only_apktool_and_preserves_jobs_parameter(monkeypatch, tmp_path):
     log = (tmp_path / "results/org.example.app/7" / digest / "apktool.log").read_bytes()
     assert b"STDOUT AND STDERR (combined)" in log
     assert b"RETURN CODE: 0" in log
+
+
+def test_jobs_flag_is_omitted_when_apktool_does_not_support_it(monkeypatch, tmp_path):
+    runner, database, digest, apk_path = make_runner(tmp_path, supports_jobs=False)
+    calls = install_fake_popen(monkeypatch, successful_tool)
+
+    summary = runner.run()
+
+    assert summary.examined == summary.completed == 1
+    command = calls[0]
+    assert command[0] == "apktool"
+    assert command[1:3] == ["d", "--force"]
+    assert "--jobs" not in command
+    assert command[-1] == str(apk_path)
+    state = database.read_processing_status()[digest]
+    assert state["apktool_status"] == "success"
+
+
+def test_jobs_flag_is_omitted_when_apktool_does_not_support_it_via_probe(monkeypatch, tmp_path):
+    # Exercise the real capability probe path: a help text without ``--jobs``
+    # must leave the flag out of the decode command.
+    runner, _database, _digest, _apk_path = make_runner(tmp_path)
+    runner._supports_jobs = None  # force a real probe
+
+    import subprocess as real_subprocess
+
+    class FakeProbeResult:
+        stdout = "usage: apktool d[ecode] [options] <file_apk>\n"
+        stderr = ""
+
+    monkeypatch.setattr(
+        real_subprocess, "run", lambda *a, **k: FakeProbeResult()
+    )
+    calls = install_fake_popen(monkeypatch, successful_tool)
+
+    summary = runner.run()
+
+    assert summary.completed == 1
+    command = calls[0]
+    assert "--jobs" not in command
 
 
 def test_successful_output_is_skipped_and_legacy_jadx_failure_is_ignored(monkeypatch, tmp_path):
@@ -412,6 +455,7 @@ def test_manifest_scope_limits_apktool_to_selected_artifact(monkeypatch, tmp_pat
     database.write_manifest("selected-run", [row])
 
     runner = DecompilationRunner(database, workspace=tmp_path)
+    runner._supports_jobs = True
     calls = []
 
     def spawn(command, **kwargs):

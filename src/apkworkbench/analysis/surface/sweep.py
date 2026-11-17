@@ -158,9 +158,7 @@ def is_non_domain_candidate(value: str, manifest_package: str | None = None) -> 
     # android.intent.action.view -> view not in set -> filtered.
     # api.example.com -> com in set -> kept.
     tld = lowered.rsplit(".", 1)[-1]
-    if tld not in KNOWN_DOMAIN_TLDS:
-        return True
-    return False
+    return tld not in KNOWN_DOMAIN_TLDS
 
 
 def _is_ipv4_literal(value: str) -> bool:

@@ -1,0 +1,410 @@
+prompt 1.  --
+-------------
+Read AGENTS.md, ai-memory/scanner-plan.md §P3, and
+src/apkworkbench/analysis/androguard_dex.py in full before writing anything.
+Confirm tests are green first: .venv/bin/python -m pytest -q — paste the
+result.
+
+CURRENT STATE (verified, cite this back to me if it has drifted):
+- androguard_dex.py:166-173 builds internal_call_graph as flat
+  {caller, callee, offset} dicts with no class model behind them.
+- androguard_dex.py:178-181: `callers = _safe_xrefs(method); if not callers:
+  continue` — this is defect D4. External methods with zero callers are
+  dropped entirely, and nothing in metrics (androguard_dex.py:294-303)
+  records how many were dropped this way. Fix: emit them anyway with
+  call_sites=[] and add a new metric
+  `external_methods_without_callers` so the drop is visible, not silent.
+- androguard_dex.py:276-277 already calls
+  `dx.get_internal_classes()` / `dx.get_external_classes()` but only uses
+  them for a len() count (metrics.classes / metrics.external_classes_referenced).
+  The actual ClassAnalysis objects are discarded immediately after counting.
+
+BEFORE WRITING CODE: in a throwaway script or REPL inside the real dev
+environment (this needs the real androguard install, not a guess), run:
+    from androguard.core.analysis.analysis import Analysis
+    from androguard.core.apk import APK
+    from androguard.core.dex import DEX
+    # load a small real APK, build Analysis as androguard_dex.py already does
+    cls = next(iter(dx.get_internal_classes()))
+    print([a for a in dir(cls) if not a.startswith('_')])
+    print([a for a in dir(cls.get_methods()[0]) if not a.startswith('_')] if cls.get_methods() else "no methods")
+Paste this introspection output in your response BEFORE you write the
+class-model code. Do not guess method names on ClassAnalysis / MethodAnalysis
+from memory or from what I've told you — confirm them against the real
+objects first, exactly like AGENTS.md's "re-read code before editing, never
+edit from memory" rule, applied to a third-party library instead of our own
+code.
+
+IMPLEMENT, inside androguard_dex.py (new section after the internal_methods
+loop, around line 161):
+1. `class_model: list[dict]` — one entry per internal class:
+   {dex_index, class_name, access_flags, superclass, interfaces (list),
+    source_file (if the DEX carries it), method_count, field_count,
+    annotations (list, empty if none)}.
+2. `method_model: list[dict]` — one entry per internal method:
+   {class_name, method_name, full_name, access_flags, descriptor,
+    annotations}. This must be joinable to internal_call_graph entries by
+   full_name — add a `dex_class` key to EVERY entry in internal_call_graph
+   (androguard_dex.py:168) and external_references (androguard_dex.py:186),
+   taken from the method's owning DEX index, since one Analysis can span
+   multiple DEX files (dx.add(vm) is called once per DEX at line 157) and
+   today nothing records which DEX a given edge came from.
+3. `string_class_index: dict[str, list[str]]` — string value -> list of
+   class_names that reference it. Build this from the same
+   `dx.get_strings()` loop that already exists at androguard_dex.py:206-250
+   — don't add a second pass over strings, extend the existing one.
+4. `reflection_sites: list[dict]` — scan external_references (after the D4
+   fix, so callerless ones are included) for owner/method matching:
+   Ljava/lang/Class;->forName, ->getDeclaredMethod, ->getMethod,
+   ->getDeclaredField, ->getField; Ljava/lang/reflect/Method;->invoke.
+   For each hit, emit {caller, caller_class, api, offset,
+   argument_resolved: bool, resolved_target: str|None}. One-hop resolution:
+   if the preceding instructions in the same method reference a string
+   constant used as the Class.forName argument (cross-reference via
+   string_class_index / dex_api_strings), set argument_resolved=true and
+   resolved_target to that string; otherwise false with resolved_target=None
+   — never guess a target from a non-literal argument.
+
+ADD new top-level keys to the dict returned by _analyze_in_worker (same
+level as external_method_references, around line 314): class_model,
+method_model, string_class_index, reflection_sites. Add corresponding
+metrics (class_model_count, method_model_count, reflection_site_count,
+external_methods_without_callers) and a coverage key `code_model` with
+values success/partial/not_applicable, same pattern as the existing
+coverage dict at androguard_dex.py:304-313.
+
+EXIT CRITERIA (scanner-plan.md Definition of Done #4): class_model count ==
+metrics.classes (the DEX class count already computed at line 296). Every
+entry in method_model and internal_call_graph must be resolvable back to an
+entry in class_model by class_name — write a test that asserts this join
+holds on a real small fixture APK, not just that counts are non-zero.
+
+Tests to add in tests/test_androguard_dex.py (currently 4 tests — check
+what fixtures it uses before adding, reuse them):
+- class_model entry shape and class-count-matches-metric assertion.
+- D4 regression: a method with zero callers still appears in
+  external_method_references with call_sites=[], and
+  external_methods_without_callers > 0 in that fixture.
+- reflection_sites: one fixture with a literal Class.forName argument
+  (argument_resolved=true) and one with a variable argument
+  (argument_resolved=false) — both must appear, neither silently dropped.
+- dex_class key present on every internal_call_graph and
+  external_method_references entry.
+
+Do not touch P4-P8 scope. Do not modify apk_surface.py in this phase unless
+a key you added needs wiring through — if so, make that the smallest
+possible diff and say so explicitly in the PASTE-BACK.
+
+End with the PASTE-BACK block.
+
+prompt 2.  --
+-------------
+Read ai-memory/scanner-plan.md §P4. P3 must be merged and green first —
+confirm with git log --oneline -5 and pytest -q, paste both.
+
+Read src/apkworkbench/analysis/contracts.py in full — EvidenceLocation
+and Finding are the two dataclasses whose shape you must reuse rather than
+invent a third representation. An edge's two citations should each be an
+EvidenceLocation (or the minimal subset of its fields that applies —
+evidence_kind, container_path or source_path, line_start/dex_class/
+method_signature as appropriate), not a fresh ad-hoc dict shape.
+
+Also read src/apkworkbench/analysis/surface/facts.py's FactStore.add() —
+note the RESERVED_FACT_KEYS guard (kind/value/fingerprint/count/evidence
+cannot be overwritten via `extra`). If links.jsonl entries get folded into
+the FactStore at any point (decide this explicitly, don't assume), the same
+guard must apply; don't bypass FactStore for links and then let them drift
+out of sync with facts.jsonl silently.
+
+BUILD surface/links.py (new file, next to surface/handoff.py):
+- `build_link_graph(surface_result, dex_result) -> list[dict]`. Input is
+  the existing static-analysis.json-shaped result plus the P3-enriched DEX
+  result (class_model, method_model, internal_call_graph,
+  external_method_references, reflection_sites).
+- Edge types and exactly how to derive each from EXISTING data (do not
+  invent new raw sources — every edge must be derivable from what P0-P3
+  already produce):
+  - component->class: from manifest_v2.py's parsed components (activities/
+    services/receivers/providers) joined to class_model by class_name.
+  - class->method: from method_model grouped by class_name — this one is
+    nearly free, it's class_model + method_model joined.
+  - method->method: internal_call_graph, already has caller/callee +
+    (after P3) dex_class.
+  - method->endpoint: dex_api_strings entries where url_matches or
+    route_candidate is true, joined via their `references` list (callers)
+    to method_model.
+  - endpoint->permission: from manifest_v2's permission facts +
+    androguard_dex.py's permission_api_usage (androguard_dex.py:252-274) —
+    join on caller method name.
+  - method->native: from native.py's JNI mapping (already exists per
+    scanner-plan.md's "DONE (N1-N13)" line — find the function that
+    produces JNI-to-Java mappings in native.py and reuse it, don't
+    reimplement).
+  - native->secret: from trufflehog findings whose file path matches a .so
+    already modeled in native.py's inventory.
+  - asset->reader: from classify.py's DecodedTree entries (asset files) and
+    whichever code path opens them — if this one has no provable source
+    yet, emit it as `coverage.link_type_asset_reader = "not_applicable"`
+    with a diagnostic explaining why, rather than inventing a guess. Do not
+    force every edge type to exist if the data genuinely isn't there —
+    that violates "deduce from data, never guess."
+- Every edge: {edge_type, from, to, citations: [EvidenceLocation-shaped,
+  EvidenceLocation-shaped]}. Exactly two. If you can only prove one side,
+  that is not a link-graph edge — it belongs in the existing facts/findings
+  plane instead, not here as a half-edge.
+- entry_points.jsonl: every manifest component with exported=true or an
+  intent-filter that makes it externally reachable (deep link data scheme,
+  action android.intent.action.MAIN with category LAUNCHER, etc.), plus the
+  Application class from the manifest's android:name.
+
+WRITE links.jsonl and entry_points.jsonl via the same atomic
+temp+fsync+replace pattern resources.py already uses for resources.jsonl —
+check surface/resources.py for that exact pattern before reimplementing it.
+
+EXIT CRITERIA — write one small integration test per question, each
+querying links.jsonl + entry_points.jsonl only (no other file), proving:
+  1. Which component is exported, which class implements it, what can
+     invoke it?
+  2. Which endpoint is called by which method, from which entry point?
+  3. Which permission gates that path, and is it requested?
+If any of these three can't be answered from a real fixture, the phase is
+not done — say so in the PASTE-BACK rather than declaring it complete.
+
+End with the PASTE-BACK block.
+
+prompt3. --
+-----------
+Read ai-memory/scanner-plan.md §P5 and ai-memory/appdev.txt §12 (11
+templates, 5 exist — identify exactly which 5 by grepping CODE_RULES before
+writing anything new, so you don't duplicate an existing rule under a new
+name).
+
+grep -n "CODE_RULES" src/apkworkbench/analysis/surface/*.py to find where
+the rule catalog actually lives, then read that file's existing rule shape
+in full (how a rule is structured: pattern, severity, rule_id) and match it
+exactly for every new rule — do not introduce a second rule schema
+alongside the first.
+
+New rules to add (verify each isn't already one of the 5 existing ones
+before adding): certificate pinning presence/bypass patterns, keystore/
+credential handling, SQL string concatenation, path traversal, intent
+redirection, exported-provider risk (note: file_provider_exported already
+exists per scanner-plan.md P2c — don't duplicate it, this rule is broader,
+covering any exported provider with a query/insert path, not just
+FileProvider roots), task hijacking (taskAffinity/launchMode manifest
+patterns), overlay (TYPE_APPLICATION_OVERLAY / SYSTEM_ALERT_WINDOW),
+clipboard access, accessibility-service abuse, root/emulator detection
+strings, dynamic dex loading (DexClassLoader/PathClassLoader instantiation
+— cross-reference with P3's reflection_sites if the loaded path is a
+resolved literal), native code execution (Runtime.exec/ProcessBuilder).
+
+Also, while editing this area, close these two ledger items with evidence,
+not just removal:
+- D2: find the packed_indicator deduction (grep -n "packed_indicator").
+  It fires with no evidence attached. Either attach the specific fact(s)
+  that triggered it as citations, or remove it if no defensible evidence
+  exists — do not leave it firing with nothing behind it either way.
+- D3: same treatment for obfuscation_metric (grep -n "obfuscation_metric").
+
+D9 (endpoint noise): today one finding is emitted per endpoint occurrence.
+Implement a rollup: one finding per endpoint PATTERN (same URL/route after
+normalizing path parameters) with `occurrence_count` and a bounded sample
+of citations (e.g. first 10 + total count), while facts.jsonl / the
+underlying endpoint facts keep EVERY occurrence — this is a findings-layer
+noise reduction only, never a data-layer loss. Add a test proving the
+underlying fact count is unchanged while the finding count drops.
+
+Every new rule needs: a positive fixture (fires), a negative fixture
+(adjacent-but-safe code that must NOT fire — this is the test that actually
+proves the rule isn't just a keyword match), and an entry in a new
+docs/rules.md: rule_id, what it detects, severity rationale, known
+false-positive conditions in plain language a non-author can read.
+
+End with the PASTE-BACK block.
+
+prompt 4. --
+------------
+Read ai-memory/scanner-plan.md §P6. Then read
+src/apkworkbench/analysis/surface/native.py lines 363-470
+(extract_embedded_libraries) in full — this is the EXACT pattern to
+generalize, not a model to redesign from scratch. It already:
+- takes a `containers` list (nested zip/jar/apk paths, capped at
+  MAX_CONTAINERS=64, native.py:378)
+- filters container members by suffix (native.py:393, currently only
+  EMBEDDED_MEMBER_SUFFIX=".so")
+- caps members per container (MAX_MEMBERS_PER_CONTAINER=16, native.py:396)
+- caps per-library and total extracted bytes (MAX_EMBEDDED_LIBRARY_BYTES,
+  MAX_EMBEDDED_BYTES_TOTAL, MAX_EMBEDDED_LIBRARIES, native.py:406-417),
+  with a diagnostic on every cap hit, never a silent drop — this is the
+  COMPLETENESS LAW from AGENTS.md already correctly implemented once; copy
+  it, don't reinvent it worse.
+
+Also read src/apkworkbench/analysis/surface/classify.py's
+inventory_apk_zip() (specifically the `nested_archives` list it already
+builds, and ARCHIVE_KINDS = {zip, zip_empty, gzip, dex, java_class}) — this
+is your discovery source for which members are containers. Do not write a
+second nested-archive detector; call this one.
+
+IMPLEMENT a generalized extract_embedded_code(containers, member_suffixes=
+(".dex", ".jar", ".apk"), ...) following the exact cap/diagnostic structure
+of extract_embedded_libraries, parameterized on suffix instead of
+hardcoded ".so". A nested zip whose own contents include ANOTHER nested zip
+is a real case (confirm with a test) — decide and document a MAX_CONTAINER_
+DEPTH, enforced the same evidence-not-silent-drop way as every other cap
+here.
+
+WIRE each extracted .dex member into analyze_apk_dex's P3 code model (not
+as a fresh top-level APK — androguard_dex.py's _analyze_in_worker expects
+an APK path at the moment; check whether androguard's DEX() class can load
+raw extracted bytes directly, the way androguard_dex.py:156 already does
+`DEX(dex_bytes, using_api=target_sdk)` for the top-level case — if so,
+reuse that exact call, just add the dex_bytes from the extracted member
+instead of apk.get_all_dex()). WIRE each extracted .jar/.apk the same way,
+recursively, up to the depth limit.
+
+CITATION SCHEME: every finding/fact that originates inside a nested member
+must cite "container_relative_path!member_path:line_or_offset" — e.g.
+"assets/plugin.zip!classes2.dex:method_name" — not just the member path
+alone, or a human reading location_map.json can't tell the finding came
+from inside a container at all.
+
+Tests (adversarial, matching the existing native.py cap tests' style —
+check tests/test_native_embedded.py for the pattern already used for .so
+extraction and mirror it):
+- a zip containing a .dex: that .dex's classes appear in class_model with
+  the container! citation prefix.
+- a container nested inside a container: resolves up to the depth limit,
+  and the depth-limit hit produces a diagnostic, not a silent stop.
+- a member exceeding MAX_EMBEDDED_LIBRARY_BYTES: diagnostic present,
+  coverage says something other than a bare "success", nothing OOMs.
+
+End with the PASTE-BACK block.
+
+prompt 5. --
+------------
+Read ai-memory/scanner-plan.md §P7 and the measured baseline in
+ai-memory/todo.md (57,944/112,254 files at ~39 files/s, killed at 1,481s,
+nothing persisted — reproduce this number's context, don't just take it on
+faith, by finding where sweep.py's per-file loop lives and estimating
+memory growth per file from the actual data structures it builds).
+
+Read src/apkworkbench/analysis/surface/checkpoint.py in full — it exists
+and scanner-plan.md states explicitly it is UNUSED. Your job is to wire it
+in, not redesign it; if reading it reveals it's inadequate for the real
+need, say so explicitly before replacing it, don't silently rewrite it.
+
+Implement single-pass streaming writes (the sweep must not accumulate the
+full result in memory before writing — check whether it already does this
+per-file or batches; if it batches, that's the specific thing to fix) with
+periodic checkpointing via checkpoint.py, and shard by the existing shard
+pattern from P0 (surface/shards.py + shards-index.json) — do not invent a
+second sharding scheme.
+
+Also fix while you're in this code:
+- D7: load-site map keyed on basename only (grep for the load-site map in
+  native.py — likely near library_from_load_value/extract_library_loads
+  around native.py:315-363). Two libraries with the same filename in
+  different directories currently collide. Key on the full relative path
+  instead; add a test with two same-named libraries in different dirs that
+  proves they stay distinct.
+- D15: grep -rn "read_text" src/ and audit every call added since P0. Any
+  read_text on a file that could plausibly be large (a minified/obfuscated
+  XML or JSON asset, a large string table) needs a size guard and a
+  streaming alternative. List every call site you found and what you did
+  with each one in the PASTE-BACK — "audited, no change needed" is an
+  acceptable answer for a call site that's provably bounded, but say so
+  explicitly rather than skipping it silently.
+
+EXIT CRITERION, proven by an actual test, not a description: start a sweep
+on a large fixture, kill -9 the process partway through, restart it
+pointed at the same checkpoint, and assert it resumes from the checkpoint
+rather than restarting from file zero. If you can't build a fixture large
+enough to meaningfully test this, say so and propose the smallest fixture
+that still exercises the checkpoint-and-resume code path honestly (it
+doesn't need to be 112k files to prove the mechanism works).
+
+End with the PASTE-BACK block.
+
+prompt 6. --
+------------
+Read ai-memory/todo.md in full (this is UNIT 1, not part of the P-numbered
+scanner track — it's P8's dependency). Read INDEX.md "CANONICAL DESIGN
+DECISIONS" D-1 through D-9 — binding, agreed with the user already, do not
+re-litigate.
+
+Before coding, get my one-line answer on the three open decisions todo.md
+lists:
+1. Does static-analysis.json / facts.jsonl / location_map.json move under a
+   real surface/ subdirectory? (todo.md recommends yes.)
+2. Per-APK static-analysis.json aggregation at bundle level — proposal is
+   surface/artifacts/<sha256>/static-analysis.json per APK plus a
+   surface/bundle.json index. A silently merged JSON is explicitly NOT
+   approved.
+3. Migrate existing results/ trees, or new runs only? (recommended: new
+   runs only — the analyzer version gate already forces stale artifacts to
+   re-analyze; confirm that gate still exists before relying on it, grep
+   for "analyzer_version" or similar).
+
+grep -n "citation_root\|tree_root" src/apkworkbench/analysis/apk_surface.py
+first — the citation-root parameterization is ALREADY DONE (todo.md
+confirms this), so component subtrees should slot in with no further
+handoff.py/workbook.py edits. If you find yourself editing handoff.py's
+citation logic again, stop — that's a sign you're redoing finished work,
+re-read todo.md's "already done" list before proceeding.
+
+Implement:
+- Driver writes apktool/<component>/ subtrees (one per base/split).
+- static-analysis.json moves under surface/, with a fallback read path in
+  reporting/final_run.py:368 and database/workspace.py:327 — write a test
+  for BOTH the new-path case and the legacy-fallback case; a fallback with
+  no test for the fallback path itself isn't verified, it's assumed.
+- D13: find where the run marker's `eligible` field is set (grep -n
+  "eligible"). It currently stays 0 until an artifact completes. Refresh it
+  immediately when it's computed, not after. Add a test that asserts the
+  marker is non-zero mid-run, not just at completion.
+- Freeze: chmod evidence directories (apktool/, surface/, trufflehog/,
+  manifest/) read-only; write hashes.sha256 over every frozen file.
+- New CLI command `apkwb verify-workspace <folder>`: recompute hashes,
+  report mismatch/missing/extra, exit non-zero on tampering, NEVER write
+  into the folder it's verifying (test this explicitly — assert no mtime
+  change on any file in the folder after running verify-workspace).
+
+Exit criteria is the bulleted checklist at the end of todo.md's UNIT 1
+SPEC — copy it verbatim into your PASTE-BACK and mark each item with the
+specific test that proves it, not just done/not-done.
+
+End with the PASTE-BACK block.
+
+prompt 7. (only after unit 1 lands)--
+------------
+Read ai-memory/scanner-plan.md §P8 and INDEX.md's full "HANDOFF READINESS
+ASSESSMENT" section — six numbered risk items from a prior session's
+self-critique, written before Unit 1 existed. For each of the six, state
+explicitly whether Unit 1 + P3-P7 closed it, and if not, what's still open.
+Do not assume they're all closed just because later phases landed — check
+each one against what actually exists now.
+
+Implement:
+- Confirm facts.jsonl/location_map.json live under surface/ per the Unit 1
+  decision; confirm prompts/0.txt..6.txt reference real current paths (grep
+  each prompt file for "ai_handoff" — INDEX.md flagged that as stale naming
+  that needs fixing here).
+- handoff.json at bundle root: schema/tool/prompt versions, hashes of key
+  files (reuse the hashing already built for freeze in Unit 1, don't add a
+  second hash mechanism), analyzer version, bundle_id.
+- Workbook v2: pick ONE real fixture and manually trace, end to end:
+  URL -> method -> caller chain -> entry point -> permission -> native call
+  -> secret, using only links.jsonl + entry_points.jsonl + the workbook.
+  Paste the actual trace in your PASTE-BACK as proof, not a claim that it's
+  "traceable."
+- THE DRY RUN (INDEX.md risk #1 — "never executed," called the single
+  biggest risk in the whole project, larger than any code item): hand a
+  frozen bundle folder plus 0.txt to a real model session with zero other
+  context. Record every deviation verbatim — unresolved path, ambiguous
+  step, skipped numbered instruction, invented file, uncited claim. This is
+  not optional polish; do not mark P8 done without having actually run it.
+- Produce a short, scoped follow-up list from whatever the dry run finds.
+  Do not fix everything it surfaces in this same phase — that violates ONE
+  PHASE AT A TIME, hand the list to me instead.
+
+End with the PASTE-BACK block.

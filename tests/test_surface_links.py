@@ -477,7 +477,7 @@ def test_pipeline_writes_links_and_entry_points(tmp_path):
     assert entry_path.is_file()
 
     payload_json = json.loads(
-        (bundle / "static-analysis.json").read_text(encoding="utf-8")
+        (bundle / "surface" / "static-analysis.json").read_text(encoding="utf-8")
     )
     assert payload_json["status"] == "success", payload_json["diagnostics"]
     metrics = payload_json["metrics"]

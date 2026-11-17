@@ -1,6 +1,6 @@
 """Sequential local TruffleHog scanning - hand AI EVERYTHING.
 
-One pass, --results=all, split verified + unverified. Never drop unverified.
+One pass, complete --results set, split verified + unverified. Never drop unverified.
 AI is the final tool, it decides what matters.
 """
 from __future__ import annotations
@@ -73,6 +73,13 @@ No dropping. Unverified is signal for AI, not noise.
         self.logger = logger or logging.getLogger("apkworkbench.analysis")
         self.progress = progress
         self._help_checked = False
+        # The --results value is resolved once from ``filesystem --help`` so we
+        # emit a value the installed binary actually accepts.  Older TruffleHog
+        # accepted ``--results=all``; 3.99.x replaced it with an explicit enum
+        # (verified, unknown, unverified, filtered_unverified) and rejects any
+        # other token.  The scanner still keeps every finding, never dropping
+        # unverified, so the resolved value must name the complete set.
+        self._results_flag = "all"
 
     def _emit_progress(self, message: str) -> None:
         if self.progress is None:
@@ -110,6 +117,16 @@ No dropping. Unverified is signal for AI, not noise.
                 "Installed TruffleHog filesystem command does not advertise required safe "
                 "flags: " + ", ".join(missing) + ". No scan was started."
             )
+        # Resolve the --results enum.  ``all`` is the legacy token; 3.99.x lists
+        # the individual categories instead.  A comma-separated superset of every
+        # advertised category is equivalent to the legacy ``all`` and keeps every
+        # finding (the scanner splits verified/unverified afterward, never drops).
+        advertised = {
+            token for token in ("verified", "unknown", "unverified", "filtered_unverified")
+            if token in help_text
+        }
+        if advertised:
+            self._results_flag = ",".join(sorted(advertised))
         self._help_checked = True
 
     @staticmethod
@@ -299,7 +316,7 @@ No dropping. Unverified is signal for AI, not noise.
             "filesystem",
             "--concurrency=1",
             "--no-update",
-            "--results=all",
+            f"--results={self._results_flag}",
             "--json",
             "--fail-on-scan-errors",
             *(str(path) for path in directories),
@@ -486,7 +503,7 @@ No dropping. Unverified is signal for AI, not noise.
             "total_seen": len(findings),
             "verified": len(verified_findings),
             "unverified": len(unverified_findings),
-            "results_flag": "all",
+            "results_flag": self._results_flag,
             "package_id": package_id,
             "version_code": version_code,
             "sha256": digest,
@@ -515,7 +532,7 @@ No dropping. Unverified is signal for AI, not noise.
             f"UNVERIFIED FINDINGS: {len(unverified_findings)}\n"
             f"TOTAL_SEEN: {len(findings)}\n"
             "CREDENTIAL VERIFICATION: ENABLED, RESULTS NOT FILTERED\n"
-            "RESULT SELECTION: --results=all (verified + unverified)\n"
+            f"RESULT SELECTION: --results={self._results_flag} (verified + unverified)\n"
             "STDOUT EVIDENCE: stdout.jsonl\n"
             "STDERR EVIDENCE: stderr.log\n"
         )
@@ -559,9 +576,8 @@ No dropping. Unverified is signal for AI, not noise.
                 unverified_n = scan.get("unverified")
                 if total != len(findings):
                     return False
-                if verified_n is not None and unverified_n is not None:
-                    if verified_n + unverified_n != total:
-                        return False
+                if verified_n is not None and unverified_n is not None and verified_n + unverified_n != total:
+                    return False
                 # If split files exist, they must also match counts
                 if verified_path.is_file() and unverified_path.is_file():
                     v = json.loads(verified_path.read_text(encoding="utf-8"))
