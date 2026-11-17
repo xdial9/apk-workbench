@@ -197,6 +197,55 @@ No dropping. Unverified is signal for AI, not noise.
             ])
         return "\n".join(lines)
 
+    @classmethod
+    def _all_findings_text_report(
+        cls,
+        package_id: str,
+        version_code: str,
+        digest: str,
+        findings: list[dict[str, Any]],
+        verified_count: int,
+    ) -> str:
+        """Human-facing plain-text summary of EVERY TruffleHog finding.
+
+        Unlike the verified-only short read, this lists verified AND unverified
+        findings so a human can review the complete secret surface. The machine
+        plane (findings.json + the split files) keeps everything for the AI
+        handoff; this file is the human-readable companion.
+        """
+        unverified_count = len(findings) - verified_count
+        lines = [
+            "APK WORKBENCH — ALL TRUFFLEHOG FINDINGS",
+            "==========================================",
+            f"package_id  : {package_id}",
+            f"version_code: {version_code}",
+            f"apk_sha256  : {digest}",
+            f"verified    : {verified_count}",
+            f"unverified  : {unverified_count} (retained for the AI handoff)",
+            f"total       : {len(findings)}",
+            "",
+        ]
+        if not findings:
+            lines.append("No TruffleHog findings for this artifact.")
+            lines.append("")
+            return "\n".join(lines)
+        for index, item in enumerate(findings, start=1):
+            file_path, line_number = cls._filesystem_metadata(item)
+            verification = "VERIFIED" if item.get("Verified") is True else "UNVERIFIED"
+            lines.extend([
+                (
+                    f"[{index}] {item.get('DetectorName') or 'TruffleHog finding'}"
+                    f" (detector type {item.get('DetectorType', 'unknown')})"
+                ),
+                f"    decoder       : {item.get('DecoderName') or 'unknown'}",
+                f"    file          : {file_path or 'unknown'}",
+                f"    line          : {line_number if line_number is not None else 'unknown'}",
+                f"    verification  : {verification}",
+                f"    raw           : {item.get('Raw') or item.get('RawV2') or ''}",
+                "",
+            ])
+        return "\n".join(lines)
+
     def _atomic_json(self, path: Path, value: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary_name = tempfile.mkstemp(
@@ -516,6 +565,15 @@ No dropping. Unverified is signal for AI, not noise.
             output_dir / "findings-verified.txt",
             self._verified_text_report(
                 package_id, version_code, digest, verified_findings, len(unverified_findings)
+            ).encode("utf-8"),
+        )
+        # Human-facing complete summary: EVERY TruffleHog finding (verified +
+        # unverified), each with its verification status. This .txt is the
+        # single human-readable artifact for the secret surface.
+        self._atomic_bytes(
+            output_dir / "findings-all.txt",
+            self._all_findings_text_report(
+                package_id, version_code, digest, findings, len(verified_findings)
             ).encode("utf-8"),
         )
         if self.progress is not None:
