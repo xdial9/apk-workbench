@@ -3,7 +3,7 @@ APPDEV v2 — COGNITION BANK FOR THE APK SURFACE ANALYZER WORK
 (agent working memory; read first at every session start; update after every
 session and after every committed item; version-stamp every edit)
 ================================================================================
-VERSION: v2.0 | 2026-11-14 | branch: feature/goopdl-account-auth
+VERSION: v2.1 | 2026-11-17 | branch: main
 
 --------------------------------------------------------------------------------
 0. HOW TO USE THIS FILE (agent protocol; read me, obey me)
@@ -29,6 +29,21 @@ OUTPUT HONESTY: every factual claim in group A (factual technical claims
 --------------------------------------------------------------------------------
 1. STATE (keep current — agent, update me)
 --------------------------------------------------------------------------------
+CURRENT SNAPSHOT (verified 2026-11-17 at `5f7b465`): branch `main`, full
+pytest suite 381 passed. Scanner phases P0-P7 are implemented; bundle freeze,
+handoff manifest, and `verify-workspace` are implemented and covered by
+`tests/test_workspace_freeze.py`. Native ELF/JNI analysis, cross-APK JNI
+matching, typed links, and trace-chain generation are present. Commit
+`5f7b465` passes retained TruffleHog findings into `build_link_graph`, but
+post-scan integration still needs explicit failure-state handling and a full
+pipeline test. P8 is PARTIAL: a real model dry-run, output-contract gate,
+volume hierarchy, and bundle aggregation are not demonstrated. No
+representative report bundle was found in the repository; the external
+workspace has not been inspected. The current delivery board is
+`docs/engineering/PRODUCT-RESCUE-BOARD.md`.
+
+The following S8 state is a **historical snapshot from 2026-11-14**. Do not
+use its branch, test count, or next-step list as current instructions.
 Branch: feature/goopdl-account-auth; tests 211 green (S8 perf 062973b).
 Live account-mode validation succeeded earlier: discover, download
 de.danoeh.antennapod, verification pass 1f6f6be4.
@@ -68,7 +83,7 @@ PHASE S ITEM STATUS ([x] done, [~] in progress):
       57,944/112,254 files (1,481s, ~39 files/s, 6,227 endpoints, 4,890
       findings in memory only; nothing persisted; marker stale "running").
       Throughput number remains valid; completed-run evidence does not exist.
-NEXT (phase order; details in INDEX.md "RESUME HERE" + todo.md):
+Historical next-step list (superseded by current snapshot above):
   1. PER-BUNDLE WORKSPACE + FREEZE rework (NEXT UNIT). results/<pkg>/<ver>/
      <index_sha256>/ with apktool/<component>/ trees, surface/ + trufflehog/
      + manifest/ + prompts + handoff.json + ai_analysis/attempt-01/,
@@ -625,12 +640,12 @@ Deduction templates (each holds when ALL required facts exist):
     [verify each line against current source before relying at commit time]
 --------------------------------------------------------------------------------
 Consumers of static-analysis.json / driver outputs:
-- PLANNED RELOCATION (2026-11-14, not yet done): static-analysis.json moves
-  to <bundle workspace>/surface/static-analysis.json. Exactly two consumers
-  read the current root path — reporting/final_run.py:368 and
-  database/workspace.py:327 (reconcile). Both must read the new path FIRST
-  and fall back to the legacy root path so existing artifacts still work;
-  update tests in the same commit. Grep on 2026-11-14 found no other reader.
+- COMPLETED (implemented before the 2026-11-17 snapshot): new
+  static-analysis.json is written under the bundle's surface/ directory.
+  reporting/final_run.py and database/workspace.py reconciliation prefer the
+  surface/ path and retain a legacy root-path fallback. Tests cover current
+  pipeline output and legacy compatibility; re-verify these readers before
+  changing the contract.
 - cli/main.py run: calls run_static_surface_analysis(... dex_timeout_seconds
   from config key analysis.androguard_timeout_seconds (default hardcoded
   1800) — VERIFY main.py line numbers at edit time); uses summary keys:

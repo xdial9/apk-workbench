@@ -1,17 +1,19 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
-Status: **P0 DONE, P1 DONE, P2 DONE (a/b/c), P3 DONE (`3de13fe`),
-P4 DONE (`2c3d535`).** Verified 2026-11-16, **341 tests green**, P4 tree
-committed (only pre-phase user edits remain in `ai-memory/`). Briefing file
-`/home/user/oc-handoff/99-briefing.md` does not exist in this checkout
-(no `/home/user`); the memory duty for it is UNFULFILLED, recorded here
-instead of inventing a path.
+Current state (verified 2026-11-17): **P0-P7 DONE; bundle freeze and
+`verify-workspace` implemented; cross-APK JNI matching and trace-chain
+generation implemented. P8 is PARTIAL**: the handoff/freeze mechanics exist,
+but model dry-run, output-contract enforcement, and volume hierarchy are not
+validated. Full suite: **381 passed** at `5f7b465`. Current open work is tracked
+in [PRODUCT-RESCUE-BOARD.md](../docs/engineering/PRODUCT-RESCUE-BOARD.md).
+The older 2026-11-16 status snapshots below are retained as history, not as the
+current state.
 This file is the resume point for the scanner track. Read it after
 `ai-memory/INDEX.md` §STATE and before touching `analysis/`.
 
-Owner rule (agreed with the user 2026-11-16): **after every phase, update this
-file AND `/home/user/oc-handoff/99-briefing.md`, and commit.** No phase is
-"done" until both are written and the tree is clean.
+Owner rule: after every phase, update this file, `ai-memory/INDEX.md` §STATE,
+and the repository-local `oc-handoff/99-briefing.md`, then commit the phase.
+Do not rely on the unavailable `/home/user/oc-handoff/99-briefing.md` path.
 
 --------------------------------------------------------------------------------
 ## 0. WHY THIS TRACK EXISTS
@@ -45,10 +47,10 @@ Everything below is the fix ladder. P0-P1 are done and verified.
 | P2c | FileProvider `file_paths.xml` roots + layout/view inventory | **DONE** | `4adb6a5` |
 | P3 | Code model: class/method/field inventory, call graph v2, reflection sites | **DONE** | `3de13fe` |
 | P4 | Link graph: typed edges with two cites each + entry_points | **DONE** | `2c3d535` |
-| P5 | Detection breadth: 11 deduction templates, rule catalog 19 -> ~60 | **DONE** | P5 commit |
-| P6 | Containers: extract `.dex`/`.jar`/nested zips and analyse them | **DONE** | P6 commit |
-| P7 | Scale: single-pass streaming, checkpoint, shard by unit | **DONE** | P7 commit |
-| P8 | Handoff: `surface/` layout, bundle aggregation, workbook v2, prompts | queued | — |
+| P5 | Detection breadth: 29 evidence-backed rules, endpoint/route rollups | **DONE** | implementation + fixtures |
+| P6 | Containers: bounded embedded `.dex`/`.jar`/`.apk` analysis | **DONE** | `a6c6826`, `c1854ea` |
+| P7 | Scale: streaming, checkpoint, shard by unit | **DONE** | `68fd6d6` |
+| P8 | Handoff: layout, bundle freeze, verification, workbook/prompts | **PARTIAL** | `72f2d7d`; model dry-run pending |
 
 ### P0 — DONE (a88eac2 + 131fd69)
 - `surface/ledger.py`: one JSONL record per tree entry in `files.jsonl`
@@ -328,29 +330,29 @@ output is stable across processes: `PYTHONHASHSEED=0/1/12345` on the fixture
 all give `sha256=f2246ff3141d…`, 42 edges, 3 entry points. (D19 still makes
 the *upstream* `internal_call_graph` order vary; links does not inherit it.)
 
-**Observed, not done here**: the Application class is an entry point with its
-own `class_citation` but has no `component->class` edge (it is not in
-`manifest.components[]`); a walker starts from the entry point. TruffleHog
-findings are not yet passed into `build_link_graph` from the pipeline (the
-trufflehog stage runs after surface analysis), so `native->secret` is
-`not_applicable` in a normal run until P5/P8 joins the two stages.
-`caller_class`/`callee_class` on call-graph edges is still the P3 leftover.
-`assets` are inventoried but have no reader edge.
+**Remaining observations (rechecked 2026-11-17)**: the Application class is an
+entry point with its own `class_citation` but has no `component->class` edge
+(it is not in `manifest.components[]`); a walker starts from the entry point.
+Commit `5f7b465` now passes retained TruffleHog findings to `build_link_graph`,
+so the old statement that secrets are never supplied is superseded. The new
+read path treats file/JSON errors as absent findings; this is not yet a safe,
+distinguishable failure state and is an M1 acceptance gap. `caller_class` /
+`callee_class` and `asset->reader` relationships must be rechecked against
+current code before considering D20 or related gaps closed.
 
+### P5 — Detection breadth (implemented)
+`CODE_RULES` grew from 19 to 29 rules, with `docs/rules.md` and positive /
+negative fixtures. Endpoint and route findings are rolled up by normalized
+pattern while facts retain occurrences and citation samples. D2, D3, and D9
+are fixed. Do not treat this as comprehensive vulnerability detection; rules
+are static leads with evidence, not runtime verdicts.
 
-### P5 — Detection breadth
-Implement the 11 templates from `appdev.txt` §12 (5 exist); grow
-`CODE_RULES` from 19 to a catalog (reflection, pinning, keystore, SQL string
-building, path traversal, intent redirection, exported provider, task
-hijacking, overlay, clipboard, accessibility, root/emulator checks, dynamic
-dex, native exec); secret/entropy classification for DEX strings and binary
-blobs. Exit: positive + negative fixture per rule; `docs/rules.md`.
-
-### P6 — Containers and packed code
-Extract **all** code-bearing members (`.dex`, `.jar`, `.apk`, nested zips),
-streamed and bounded, feed them to the DEX analyzer with `container!member`
-citations. Today only `.so` members are extracted (`native.py:57`), so a
-packed app's real dex is invisible to both the sweep and Androguard.
+### P6 — Containers and packed code (implemented)
+`extract_embedded_code` streams bounded `.dex` / `.jar` / `.apk` members,
+recurses nested containers to a diagnosed depth limit, and feeds embedded DEX
+payloads to Androguard with `container!member` source citations. Container
+limits and unreadable/depth-limited members are diagnostics, not silent skips.
+This does not cover arbitrary non-zip encrypted/custom packers.
 
 ### P7 — Scale
 Single-pass streaming writes, bounded memory, per-file checkpoint
@@ -378,10 +380,17 @@ kill. Measured baseline: 57,944/112,254 files at ~39 files/s, killed at
   (`apk_surface.py` per-file read) needed a size guard; others are bounded
   (config, markers, small manifests) or not in the sweep hot path.
 
-### P8 — Handoff
-`surface/` layout, bundle aggregation across components, `handoff.json`,
-freeze + `hashes.sha256`, `verify-workspace`, workbook v2 with executable
-trace recipes, prompts 0..6 aligned with what exists.
+### P8 — Handoff (partial)
+Implemented: `static-analysis.json` under `surface/` with legacy reader
+fallbacks; `handoff.json`; `hashes.sha256`; read-only evidence freeze;
+`verify-workspace`; CLI verification tests and pipeline-freeze tests
+(`72f2d7d`, `tests/test_workspace_freeze.py`,
+`tests/test_pipeline_integration.py`).
+
+Not yet demonstrated: one representative real-app bundle successfully
+consumed by prompts 0..6; a canonical volume hierarchy for large location
+maps; enforced schemas for AI outputs; and bundle-level aggregation across
+split components. See `oc-handoff/99-briefing.md` and the product rescue board.
 
 --------------------------------------------------------------------------------
 ## 2. DEFINITION OF DONE (the scanner is "360-ready" when...)
@@ -408,23 +417,23 @@ An AI can answer these **from the bundle alone, with a citation**:
 | D2 | `packed_indicator` deduction has no evidence | **FIXED** P5 |
 | D3 | `obfuscation_metric` deduction has no evidence | **FIXED** P5 |
 | D4 | external methods without callers dropped, metric hides it | **FIXED** P3 (emitted with `call_sites=[]`, counted in `external_methods_without_callers`) |
-| D5 | DEX strings deduped by value, DEX-of-origin lost | open (P3 partial: `string_class_index` is keyed by value, same limit; document it) |
+| D5 | DEX strings deduped by value, DEX-of-origin lost | **OPEN** (recheck whether current `dex_source` handling closes this for all top-level DEX strings) |
 | D6 | stripped-section ELF yields no symbols despite `PT_DYNAMIC` | open (P3/native) |
-| D7 | load-site map keyed on basename only | open |
+| D7 | load-site map keyed on basename only | **FIXED** P7 (full relative path plus basename fallback) |
 | D8 | `text_file_limit` / `finding_limit` referenced, never emitted | **FIXED** P0 |
 | D9 | one finding per endpoint/route (inventory noise) | **FIXED** P5 (rollup: one finding per pattern + occurrence_count + citation sample; facts plane unchanged) |
 | D10 | `SENSITIVE_PERMISSIONS` dead duplicate in `apk_surface.py:53` | open |
 | D11 | unhardened `DOMAIN_RE` (ReDoS) x2 | **FIXED** P0c |
 | D12 | `manifest_v2.py` severity if/else identical | open |
-| D13 | run marker writes `eligible=0` before computing it | open (Unit 1) |
+| D13 | run marker writes `eligible=0` before computing it | **FIXED** (refresh immediately after eligible list is computed) |
 | D14 | `finalize_result` runs twice per artifact | open |
-| D15 | whole-file `read_text`, no size guard, no streaming | open (P7) |
+| D15 | whole-file `read_text`, no size guard, no streaming | **FIXED for sweep hot path** P7; remaining reads are bounded/outside sweep per audit |
 | D16 | no per-file status ledger | **FIXED** P0 |
-| D17 | facts/ledger written at artifact root, not `surface/` | open (P8) |
+| D17 | facts/ledger written at artifact root, not `surface/` | **FIXED** (surface outputs relocated; legacy root readers retained) |
 | D18 | only 3 driver-level tests | improved (301 total) |
 | D19 | `internal_call_graph` / `call_sites` / `dex_api_strings[].references` order comes from set iteration -> two runs are byte-different (content identical) | open (found in P3 verification, pre-existing at HEAD; P4 output is unaffected, it sorts edges) |
 | D20 | `asset->reader` has no provable derivation — assets are inventoried but no edge says who reads them | open (P5; P4 records `link_type_asset_reader=not_applicable` + diagnostic, never a guess) |
-| D21 | surface stage cannot see TruffleHog findings (trufflehog runs after surface), so `native->secret` is `not_applicable` in a pipeline run | open (P5/P8 stage join) |
+| D21 | surface stage cannot see TruffleHog findings (trufflehog runs after surface), so secret links are absent in a pipeline run | **PARTIAL** (`5f7b465` loads findings for link building; malformed/missing input handling and post-scan integration tests remain open) |
 
 Fixed outside the ledger:
 - `insecure_http` false positive on the Android XML namespace (`ec9419d`).

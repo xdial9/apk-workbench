@@ -49,7 +49,28 @@ DURING: register risks/hallucination doubts as VERIFY notes immediately.
 END: update STATE (phase item moved? decisions? VERIFYs resolved?) + tick
 surface.txt/plan.txt checkboxes if applicable.
 
-## STATE (as of 2026-11-16, updated by agent)
+## STATE (current as of 2026-11-17; `main` at 5f7b465)
+- Current verified snapshot: `main` at `5f7b465`; `.venv/bin/python -m pytest
+  -q` reports **381 passed in 5.71s**. P0-P7 are implemented; bundle freeze,
+  `handoff.json`, `hashes.sha256`, and `verify-workspace` are implemented and
+  fixture-tested. Native ELF/JNI analysis, cross-APK JNI matching, typed
+  evidence links, and trace-chain generation are present. Commit `5f7b465`
+  wires retained TruffleHog findings into `build_link_graph`; its failure
+  handling and full pipeline integration remain to be verified. P8 is PARTIAL:
+  no model dry-run, enforced AI output contract, location-map volume hierarchy,
+  or split-component bundle aggregation has been demonstrated. No
+  representative result bundle is in the repository; the external workspace
+  was not inspected. The active delivery board is
+  `docs/engineering/PRODUCT-RESCUE-BOARD.md`.
+- The detailed scanner/native history below includes older point-in-time
+  snapshots. Those are historical evidence, not current work queues; use the
+  current state above and the dated status in the canonical phase files.
+- Product rescue board M0 (current-state reconciliation) is complete in the
+  2026-11-17 documentation change. M1 (post-scan secret links) is next; the
+  current code wires findings into `build_link_graph`, but failure semantics
+  and complete pipeline behavior are not yet verified.
+
+### Historical scanner snapshot (2026-11-16; retained for audit trail)
 - SCANNER TRACK 2026-11-16 (canonical file: ai-memory/scanner-plan.md).
   A line-by-line audit found the scanner is NOT 360-ready: only 20 text
   suffixes were read, no per-file ledger, no class/method/resource model, no

@@ -1,9 +1,12 @@
 # NATIVE (JNI) SCANNER — DISCOVERY + MAPPING TO 100% (plan v1)
 
-Status: N1-N13 IMPLEMENTED on branch feat/native-elf-reader (271 tests green).
-N13-lite (NEEDED graph reasons) done; N13 container-embedded .so (plugin APKs,
-packed .so, jar/aar; cited as container!member) done in commit f1b921d.
-Not covered by N13: non-zip packers (custom encrypted blobs) - unverified/open.
+Current status (verified 2026-11-17): N1-N13 native analysis is implemented on
+`main`; the full suite reports 381 passed. The current pipeline also includes
+cross-APK JNI matching, typed native/secret link construction, and trace-chain
+generation. These are fixture-tested, but representative real-app native
+report quality remains unverified. Non-zip packers/custom encrypted blobs
+remain out of scope and unverified. Current delivery work is in
+`docs/engineering/PRODUCT-RESCUE-BOARD.md`.
 Canonical home for the native track (appdev.txt §4 keeps the domain knowledge;
 this file owns the plan and the step state).
 
@@ -15,9 +18,11 @@ WHY THIS FILE EXISTS
 --------------------------------------------------------------------------------
 AGENTS.md crown jewel 5: "Every native export must carry its JNI mapping to the
 Java method that calls it, or be marked unmapped_jni with a reason. Never leave
-it unmapped with no reason." Today the surface analyzer does strings-only
-(`apk_surface.py:432-465`), so crown jewel 5 is at ~15%: files are listed, bytes
-are scanned, nothing is mapped. This plan closes that gap in small steps.
+it unmapped with no reason." **Historical motivation (2026-11-16):** the
+surface analyzer was strings-only and crown jewel 5 was estimated at ~15%.
+N1-N13 subsequently implemented ELF parsing, JNI matching, load-site mapping,
+native facts/findings, coverage, and handoff citations. Cross-APK matching was
+added later; end-to-end report quality remains unverified.
 
 --------------------------------------------------------------------------------
 WHAT 100% MEANS (measurable; no adjectives)
@@ -36,7 +41,7 @@ reason from a closed set. "100%" still does not claim runtime truth (JNI can be
 registered dynamically); unprovable links are labelled, never invented.
 
 --------------------------------------------------------------------------------
-CURRENT STATE — line-by-line review (evidence, 2026-11-16)
+HISTORICAL BASELINE — line-by-line review (2026-11-16; superseded by N1-N13)
 --------------------------------------------------------------------------------
 - apk_surface.py:235  _NATIVE_STRING_RE = rb"[ -~]{4,}"  -> ASCII only, no
   UTF-16LE. JNI signatures (Ljava/lang/String;)V in UTF-16 are INVISIBLE.
@@ -64,7 +69,7 @@ CURRENT STATE — line-by-line review (evidence, 2026-11-16)
   content tests for native.
 
 --------------------------------------------------------------------------------
-STATE (verified 2026-11-16, branch feat/native-elf-reader)
+HISTORICAL MODULE SNAPSHOT (verified 2026-11-16, branch feat/native-elf-reader)
 --------------------------------------------------------------------------------
 Modules:
 - analysis/surface/native_elf.py  — header, program headers, sections, .dynamic,

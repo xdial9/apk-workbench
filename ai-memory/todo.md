@@ -1,11 +1,14 @@
-# RESUME FILE — APK-Workbench (pause point 2026-11-16)
+# RESUME FILE — APK-Workbench (current state 2026-11-17)
 
-ACTIVE TRACK IS NOT THIS FILE (2026-11-16): the scanner is being rebuilt to
-360° under `ai-memory/scanner-plan.md` (P0 and P1 done, P2 next). This file is
-UNIT 1 — the per-bundle workspace + freeze — which is still NOT started and is
-now the dependency of scanner phase P8. Read scanner-plan.md first if the
-task is about the analyzer; read this file if the task is about the bundle
-layout, freeze, or verify-workspace.
+**Current snapshot:** `main` at `5f7b465`; `.venv/bin/python -m pytest -q`
+reports 381 passed. Scanner P0-P7 are implemented. The per-bundle evidence
+freeze, handoff manifest, and `verify-workspace` are implemented and
+fixture-tested; Unit 1 is complete in code. The current delivery sequence is
+the product rescue board at `docs/engineering/PRODUCT-RESCUE-BOARD.md`.
+
+The original Unit 1 design and historical notes below are retained for context,
+but their old status/phase ordering is superseded by this current snapshot.
+Read `ai-memory/scanner-plan.md` and the rescue board before starting code.
 
 Read this first, then INDEX.md "CANONICAL DESIGN DECISIONS" (D-1..D-9),
 then appdev.txt §1 + §14 + §15. This file is the hands-on handoff; INDEX is
@@ -16,57 +19,49 @@ report. The user reviews before the next phase starts. Do not push unless
 asked.
 
 --------------------------------------------------------------------------------
-## CURRENT STATE
+## CURRENT STATE — verified 2026-11-17
 --------------------------------------------------------------------------------
-- VERIFIED 2026-11-16 (git + pytest): branch feat/native-elf-reader, tests 271
-  green, analyzer 0.3.0. Native track N1-N13 committed (N13 = f1b921d); main
-  and origin/main were fast-forwarded to it. The per-bundle workspace + freeze
-  unit below is STILL NOT STARTED in code (no verify-workspace command exists).
-  Older bullets below that say "213 green" / "feature/goopdl-account-auth"
-  were true when written and are kept as history.
-- Code: S8 perf 062973b. Handoff writers committed 2026-11-14 as 6e8dcaf
-  (facts.jsonl + location_map.json + citation-root prefix + driver emission
-  + workbook text + 6 tests). static-analysis.json untouched, S8 parity holds.
-- 2026-11-16 (DONE, committed+pushed): CITATION-ROOT PARAMETERIZATION, the
-  "apktool/" prefix is now a `tree_root` argument. Files: surface/handoff.py
-  (_folder_relative/_locations/*_entry/build_location_map/write_handoff),
-  surface/workbook.py (build_workbook), surface/serialize.py
-  (finalize_result), analysis/apk_surface.py (analyze_apk_surface +
-  driver). Driver derives
-  `citation_root = f"{decoded.relative_to(output_root).as_posix()}/"` so
-  "apktool/" today and "apktool/<component>/" automatically once component
-  subtrees land. 2 new tests; 213 green; ruff clean. Defaults keep output
-  byte-identical. Detail: INDEX.md "CITATION-ROOT PARAMETERIZATION".
-- Phase S is DONE through S8 except the heavy-case completed-run evidence:
-  the Spotify scan was STOPPED by the user at 57,944/112,254 files (1,481s,
-  ~39 files/s, 6,227 endpoints, 4,890 findings in memory only). Nothing was
-  persisted; the run marker still says "running" and is STALE. The
-  throughput figure is valid; a completed heavy-case artifact does not exist.
-- NEXT UNIT: per-bundle workspace + freeze rework (spec below), minus the
-  citation parameter (already done). Nothing else starts until the user
-  reviews it.
+- Branch/revision: `main` at `5f7b465` (main is ahead of `origin/main` by one
+  commit at this snapshot; do not push without explicit instruction).
+- P0-P7 are implemented. Unit 1 bundle freeze and `verify-workspace` are
+  implemented in code and covered by `tests/test_workspace_freeze.py` and
+  `tests/test_pipeline_integration.py`.
+- Native ELF/JNI analysis, cross-APK JNI matching, typed links, and trace
+  chains exist. Commit `5f7b465` passes retained TruffleHog findings into
+  `build_link_graph`; its failure-state handling and full pipeline behavior
+  still need targeted tests.
+- P8 is partial: a model dry-run, enforced output schemas, large-volume
+  hierarchy, and split-component bundle aggregation remain unverified.
+- No representative result bundle was found in the repository. The external
+  configured workspace has not been inspected; real-app report quality is
+  therefore unverified.
+- M0 current-state synchronization is complete in this change and will be
+  committed with the board and memory updates. Next: verify/fix the post-scan
+  secret-link integration (M1). Do not begin broader enhancements until that
+  gate is met.
 
 --------------------------------------------------------------------------------
-## PHASE ORDER (agreed; do not reorder without the user)
+## HISTORICAL PHASE ORDER — superseded by the product rescue board
 --------------------------------------------------------------------------------
 0. DONE  — commit the handoff writers (6e8dcaf).
 0b. DONE 2026-11-16 — citation-root parameter (D-1 step 2). Committed+pushed.
-1. NEXT  — PER-BUNDLE WORKSPACE + FREEZE (D-1/D-2/D-3/D-4). Spec below.
-           Remaining: layout move into surface/, freeze, verify-workspace,
-           static-analysis.json consumer fallbacks, prompts/README copy.
-2.       — DRY RUN prompts 0..6 on one real bundle. Single-APK app first.
-3.       — Fix ONLY what the dry run proved: expect volume hierarchy, evidence
+1. DONE  — PER-BUNDLE WORKSPACE + FREEZE (implementation present; see
+           `oc-handoff/99-briefing.md` and `tests/test_workspace_freeze.py`).
+2. NEXT  — Verify post-scan TruffleHog-to-link/trace integration (board M1).
+3.       — Make native evidence visible in final report (board M2).
+4.       — Produce and inspect one complete bundle/report (board M3).
+5.       — Fix ONLY what the dry run proves: expect volume hierarchy, evidence
            precedence, output schema gate.
-4.       — Phase A ceilings, done as STREAMING to disk (not deletion): box has
+6.       — Phase A ceilings, done as STREAMING to disk (not deletion): box has
            3.8GB RAM. Deleting the 64MB androguard cap converts truncation
            into OOM. Same for trufflehog's buffers. Keep heartbeats.
-5.       — Optional: single-pass trufflehog verified+unverified split (D-5).
-6.       — Phase D dossier -> Phase E corpus -> Phase F per-run isolation.
+7.       — Optional: single-pass trufflehog verified+unverified split (D-5).
+8.       — Phase D dossier -> Phase E corpus -> Phase F per-run isolation.
            Phase C rewrite is CANCELLED (D-6). Analyzer changes from here are
            measurement-led and targeted only.
 
 --------------------------------------------------------------------------------
-## UNIT 1 SPEC — PER-BUNDLE WORKSPACE + FREEZE
+## UNIT 1 SPEC — PER-BUNDLE WORKSPACE + FREEZE (implemented; historical spec)
 --------------------------------------------------------------------------------
 Goal: one app version bundle gets ONE self-contained, frozen, portable folder
 that matches what prompts 0..6 promise, without duplicating the decoded tree.
