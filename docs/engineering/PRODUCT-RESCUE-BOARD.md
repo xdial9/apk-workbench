@@ -4,9 +4,9 @@
 verifiable, useful per-app result. This is a delivery board, not a proposal to
 rewrite the scanner or add another detection catalog.
 
-**Snapshot:** 2026-11-17, `main` at `5f7b465`. Current full test suite:
-**381 passed in 5.71s**. M0 documentation synchronization is complete in this
-change; the pre-existing untracked `ai-memory/test.txt` remains untouched.
+**Snapshot:** 2026-11-17, M0 and M1 are complete on `main`. Current full test
+suite: **381 passed**. The pre-existing untracked `ai-memory/test.txt` remains
+untouched.
 
 **Evidence boundary:** no representative result bundle was found under the
 repository root. The configured external workspace was not inspected, so real
@@ -19,23 +19,21 @@ This is not currently just a TruffleHog wrapper. The repository contains a
 surface scanner, DEX analysis, a stdlib ELF/JNI analyzer, cross-APK JNI
 matching, typed evidence links, trace-chain generation, report generation, and
 bundle freezing/verification. For example, the scanner writes `links.jsonl`,
-`entry_points.jsonl`, and `trace_chains.jsonl`
-([apk_surface.py](../../src/apkworkbench/analysis/apk_surface.py), around
-lines 1960-2005); cross-APK JNI matching is wired into the analysis run
-(around lines 2090-2130); and `verify-workspace` exists in the CLI
-([main.py](../../src/apkworkbench/cli/main.py), around line 685).
+`entry_points.jsonl`, and `trace_chains.jsonl` in
+[`run_static_surface_analysis`](../../src/apkworkbench/analysis/apk_surface.py);
+cross-APK JNI matching is wired through
+[`cross_apk_native_jni_match`](../../src/apkworkbench/analysis/apk_surface.py);
+and `verify-workspace` exists in the CLI
+([main.py](../../src/apkworkbench/cli/main.py)).
 
 The user's experience is still understandable. The human-facing final report
 shows DEX details, coverage, static indicators, and verified TruffleHog
 findings, while its native summary is principally counts such as files and
-mapped/unmapped JNI exports ([final_run.py](../../src/apkworkbench/reporting/final_run.py),
-around lines 210-270 and 600-635). Commit `5f7b465` now loads retained
-TruffleHog findings before calling `build_link_graph`; however, file/JSON
-errors are treated as absent findings, and the normal pipeline still lacks an
-assertion that the post-scan secret links appear in the final trace output
-([links.py](../../src/apkworkbench/analysis/surface/links.py), around lines
-680-735, 760-930, 960-1020). That failure handling and the resulting
-human-readable native story are the first product gaps to prove or close.
+mapped/unmapped JNI exports ([final_run.py](../../src/apkworkbench/reporting/final_run.py)).
+M1 now refreshes secret links after the scan, distinguishes missing and
+malformed output from a successful empty scan, and tests the resulting trace
+in the normal stage order. Making the native evidence readable in the HTML
+report remains the next product gap.
 
 This board deliberately does **not** call reports, native analysis, or bundle
 freezing nonexistent. Those features are present. It distinguishes “code
@@ -108,18 +106,23 @@ Full suite remained green: 381 passed in 5.71s.
 ### M1 — Join post-scan secrets into evidence links and trace chains
 
 **Priority:** P0 · **Estimate:** M · **Depends on:** M0 ·
-**Status:** IMPLEMENTATION PRESENT; ACCEPTANCE OPEN
+**Status:** DONE
 
 This is the most direct bridge between the secret scanner and the rest of the
-analysis. The link builder accepts TruffleHog findings and contains
-`native->secret`, `method->secret`, and `permission->secret` edge logic. The
-surface analysis builds links and trace chains during its pass. Commit
-`5f7b465` now loads `trufflehog/findings.json` before the link build and passes
-those records to `build_link_graph`. This closes the missing-argument gap, but
-does not yet meet this item's acceptance: file read/JSON errors are caught and
-treated as absent findings, and there is no end-to-end assertion that the
-normal post-TruffleHog run writes secret edges and matching trace chains.
-Harden and test these semantics before marking M1 done.
+analysis. The initial surface pass no longer reads a possibly stale
+TruffleHog file. After scanning, `analyze` rebuilds typed links, entry points,
+trace chains, static output, and handoff files using the artifact's recorded
+scan status. A successful empty scan is represented as `success` with
+`finding_count: 0`; failed, missing/malformed, not-run, and running scans have
+distinct linkage statuses and do not reuse old secret edges. The refresh runs
+before reporting and the pipeline's evidence freeze. Existing frozen bundles
+are left unchanged and surfaced as an explicit refresh failure instead of
+being written through their read-only evidence contract.
+
+The integration test proves one mapped and one unmapped finding, the complete
+entry-point-to-method-to-secret trace for the mapped result, zero findings,
+not-run, failed scan, and missing findings output. Focused link/pipeline tests
+passed (13); the full suite passed (381).
 
 **Likely files**
 - `src/apkworkbench/cli/main.py` — stage ordering and post-scan integration
@@ -141,6 +144,9 @@ Harden and test these semantics before marking M1 done.
   intended data is assembled before freeze, or the workflow has a deliberate,
   tested lifecycle for updating and re-freezing.
 - Tests cover mapped, unmapped, no-findings, and failed/missing scan cases.
+
+All acceptance criteria are met by the post-scan refresh path and
+`tests/test_pipeline_integration.py`.
 
 ### M2 — Make native analysis visible and useful in the final report
 

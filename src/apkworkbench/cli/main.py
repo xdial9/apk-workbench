@@ -17,7 +17,10 @@ from apkworkbench.acquisition.verification import (
     verify_google_play_run,
 )
 from apkworkbench.analysis.trufflehog import AnalysisError, TruffleHogScanner
-from apkworkbench.analysis.apk_surface import run_static_surface_analysis
+from apkworkbench.analysis.apk_surface import (
+    refresh_secret_links,
+    run_static_surface_analysis,
+)
 from apkworkbench.core.config import Config
 from apkworkbench.core.logging import setup_logging
 from apkworkbench.database.workspace import DatabaseError, WorkspaceDatabase, utc_now
@@ -814,6 +817,15 @@ def analyze(limit: int, force: bool, run_id: str | None) -> None:
         click.echo(f"Analysis failed: {exc}", err=True)
         raise click.exceptions.Exit(1) from exc
 
+    try:
+        link_summary = refresh_secret_links(
+            database, config.get("workspace"), run_id=run_id
+        )
+    except (DatabaseError, OSError, ValueError, RuntimeError) as exc:
+        logger.error("Secret-link refresh failed: %s", exc)
+        click.echo(f"Secret-link refresh failed: {exc}", err=True)
+        raise click.exceptions.Exit(1) from exc
+
     click.echo("COMPLETE ORIGINAL TRUFFLEHOG FINDINGS")
     if not summary.finding_records:
         click.echo("  No findings were emitted by the scans performed in this run.")
@@ -828,8 +840,20 @@ def analyze(limit: int, force: bool, run_id: str | None) -> None:
     click.echo(f"  Candidate findings: {summary.findings}")
     click.echo(f"  Failed scans: {summary.failed}")
     click.echo(f"  Skipped / not decompiled: {summary.skipped}")
+    click.echo(
+        f"  Secret links refreshed: {link_summary['updated']}; "
+        f"failed: {link_summary['failed']}; "
+        f"missing surface output: {link_summary['missing_surface']}; "
+        f"already frozen: {link_summary['frozen']}"
+    )
+    if link_summary["frozen"]:
+        click.echo(
+            "  Frozen bundles were left unchanged; re-analysis must use an "
+            "unfrozen evidence workspace.",
+            err=True,
+        )
     click.echo(f"  Complete-finding aggregate: {Path(config.get('workspace')) / 'reports/findings.csv'}")
-    if summary.failed:
+    if summary.failed or link_summary["failed"] or link_summary["frozen"]:
         raise click.exceptions.Exit(1)
 
 

@@ -1,11 +1,11 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
-Current state (verified 2026-11-17): **P0-P7 DONE; bundle freeze and
-`verify-workspace` implemented; cross-APK JNI matching and trace-chain
-generation implemented. P8 is PARTIAL**: the handoff/freeze mechanics exist,
-but model dry-run, output-contract enforcement, and volume hierarchy are not
-validated. Full suite: **381 passed** at `5f7b465`. Current open work is tracked
-in [PRODUCT-RESCUE-BOARD.md](../docs/engineering/PRODUCT-RESCUE-BOARD.md).
+Current state (verified 2026-11-17): **P0-P7 DONE; M1 post-scan secret links
+and trace-chain refresh DONE; bundle freeze and `verify-workspace`
+implemented. P8 is PARTIAL**: the handoff/freeze mechanics exist, but model
+dry-run, output-contract enforcement, and volume hierarchy are not validated.
+Full suite: **381 passed**. Current open work is tracked in
+[PRODUCT-RESCUE-BOARD.md](../docs/engineering/PRODUCT-RESCUE-BOARD.md).
 The older 2026-11-16 status snapshots below are retained as history, not as the
 current state.
 This file is the resume point for the scanner track. Read it after
@@ -333,12 +333,11 @@ the *upstream* `internal_call_graph` order vary; links does not inherit it.)
 **Remaining observations (rechecked 2026-11-17)**: the Application class is an
 entry point with its own `class_citation` but has no `component->class` edge
 (it is not in `manifest.components[]`); a walker starts from the entry point.
-Commit `5f7b465` now passes retained TruffleHog findings to `build_link_graph`,
-so the old statement that secrets are never supplied is superseded. The new
-read path treats file/JSON errors as absent findings; this is not yet a safe,
-distinguishable failure state and is an M1 acceptance gap. `caller_class` /
-`callee_class` and `asset->reader` relationships must be rechecked against
-current code before considering D20 or related gaps closed.
+M1 now refreshes the link/trace outputs after scanning and differentiates
+successful-empty, failed, missing, and not-run scans. Smali file-to-class
+mapping uses the DEX slash-form descriptor. `caller_class` / `callee_class`
+and `asset->reader` relationships must be rechecked against current code
+before considering D20 or related gaps closed.
 
 ### P5 — Detection breadth (implemented)
 `CODE_RULES` grew from 19 to 29 rules, with `docs/rules.md` and positive /
@@ -433,7 +432,7 @@ An AI can answer these **from the bundle alone, with a citation**:
 | D18 | only 3 driver-level tests | improved (301 total) |
 | D19 | `internal_call_graph` / `call_sites` / `dex_api_strings[].references` order comes from set iteration -> two runs are byte-different (content identical) | open (found in P3 verification, pre-existing at HEAD; P4 output is unaffected, it sorts edges) |
 | D20 | `asset->reader` has no provable derivation — assets are inventoried but no edge says who reads them | open (P5; P4 records `link_type_asset_reader=not_applicable` + diagnostic, never a guess) |
-| D21 | surface stage cannot see TruffleHog findings (trufflehog runs after surface), so secret links are absent in a pipeline run | **PARTIAL** (`5f7b465` loads findings for link building; malformed/missing input handling and post-scan integration tests remain open) |
+| D21 | surface stage cannot see TruffleHog findings (trufflehog runs after surface), so secret links are absent in a pipeline run | **FIXED** (M1 refreshes links and trace chains after scanning; successful-empty, failed, missing, and not-run states are tested) |
 
 Fixed outside the ledger:
 - `insecure_http` false positive on the Android XML namespace (`ec9419d`).

@@ -696,7 +696,7 @@ def _native_secret_edges(
             "no .so is modelled in native inventory: nothing to attach a secret to",
         )
         return []
-    if not trufflehog_findings:
+    if trufflehog_findings is None:
         _record(
             diagnostics,
             "link_native_secret_source_absent",
@@ -761,7 +761,7 @@ def _file_path_to_class(file_path: str) -> str | None:
             return None
     else:
         return None
-    return "L" + rel.replace("/", ".") + ";"
+    return "L" + rel + ";"
 
 
 def _permission_secret_edges(
@@ -780,7 +780,7 @@ def _permission_secret_edges(
     """
     edges: list[dict[str, Any]] = []
 
-    if not trufflehog_findings:
+    if trufflehog_findings is None:
         return edges
 
     dex_result = dex_result or {}
@@ -872,7 +872,7 @@ def _method_secret_edges(
     """
     edges: list[dict[str, Any]] = []
 
-    if not trufflehog_findings:
+    if trufflehog_findings is None:
         return edges
 
     dex_result = dex_result or {}
@@ -958,7 +958,7 @@ def _smali_path_to_class(smali_path: str) -> str | None:
     if not rel.endswith(".smali"):
         return None
     rel = rel[:-len(".smali")]
-    return "L" + rel.replace("/", ".") + ";"
+    return "L" + rel + ";"
 
 
 def build_link_graph(
@@ -1039,8 +1039,18 @@ def build_link_graph(
     ordered = [unique[key] for key in sorted(unique)]
 
     produced = {edge["edge_type"] for edge in ordered}
+    completed_secret_types = (
+        {"native->secret", "method->secret", "permission->secret"}
+        if trufflehog_findings is not None else set()
+    )
     for edge_type in EDGE_TYPES:
-        _mark(coverage, edge_type, "success" if edge_type in produced else "not_applicable")
+        _mark(
+            coverage,
+            edge_type,
+            "success"
+            if edge_type in produced or edge_type in completed_secret_types
+            else "not_applicable",
+        )
     return ordered
 
 

@@ -1,49 +1,36 @@
 # APK Workbench — Current Engineering Brief
 
 **Verified:** 2026-11-17
-**Repository:** `main`, starting snapshot `5f7b465`
-**Tests:** `.venv/bin/python -m pytest -q` — 381 passed in 5.71s
-**Next work:** `docs/engineering/PRODUCT-RESCUE-BOARD.md`
+**Repository:** `main`; M0 and M1 are complete in the current change
+**Tests:** `.venv/bin/python -m pytest -q` — 381 passed
+**Next work:** M2 on `docs/engineering/PRODUCT-RESCUE-BOARD.md`, only after
+the user requests the next item
 
 ## Current state
 
-- Scanner phases P0-P7 are implemented.
-- Bundle-level static-analysis relocation, `handoff.json`, `hashes.sha256`,
-  evidence read-only permissions, and `verify-workspace` are implemented and
-  have fixture/integration coverage.
-- Native ELF/JNI analysis, embedded code/native extraction, cross-APK JNI
-  matching, typed evidence links, and trace-chain generation are present.
-- Commit `5f7b465` passes retained TruffleHog findings into
-  `build_link_graph`. This is implementation evidence, not proof that all
-  post-scan failure modes are safe: parse/load errors currently fall back to
-  no findings, and the complete pipeline join still needs targeted tests.
-- P8 is partial: no model dry-run, enforced AI output contract, location-map
-  volume hierarchy, or split-component bundle aggregation has been
-  demonstrated.
+- Scanner phases P0-P7 are implemented; P8 remains partial.
+- Bundle-level static-analysis output, handoff, evidence freeze, and
+  `verify-workspace` are implemented and fixture-tested.
+- Native ELF/JNI analysis, cross-APK JNI matching, typed evidence links, and
+  trace-chain generation are present.
+- M1 now rebuilds links, trace chains, static output, and handoff files after
+  TruffleHog. Successful-empty, failed, missing/malformed, and not-run scan
+  states are distinct; stale secret edges are not reused. Frozen bundles are
+  not modified and are reported as requiring an unfrozen workspace.
+- The focused integration/link tests pass (13); the full suite passes (381).
 - No representative result bundle was found in the repository. The external
-  configured workspace was not inspected; real-app report quality is
+  configured workspace was not inspected; real-app report quality remains
   unverified.
-
-## What this phase updates
-
-M0 in the product rescue board reconciles current-state notes against source,
-tests, and recent commits. The old branch/test snapshots and Unit 1 design
-remain in memory files as dated historical records; they must not be used as
-the current work queue. No source code changes are part of M0.
 
 ## Rescue sequence
 
-1. **M0 — current-state reconciliation:** update scanner, native, index,
-   appdev, todo, and this briefing. Commit together.
-2. **M1 — post-scan secret links:** add explicit status/error handling and
-   pipeline tests for mapped, unmapped, absent, malformed, and failed
-   TruffleHog inputs; ensure trace chains are generated from the final links.
-3. **M2 — native report visibility:** present per-library parse/load/JNI
-   status, totals, unmapped reasons, citations, and trace chains in the HTML
-   report while preserving complete JSON evidence and avoiding secret leakage.
-4. **M3 — one real-app end-to-end proof:** produce and inspect a small
-   representative bundle, report, reconciliation, and workspace verification.
-   Do not substitute fixture-only success for this proof.
+1. **M0 — current-state reconciliation:** complete and committed.
+2. **M1 — post-scan secret links:** complete; pipeline fixture covers mapped,
+   unmapped, empty, not-run, failed, and missing TruffleHog output.
+3. **M2 — native report visibility:** next board item; do not begin without
+   the user's next-step instruction.
+4. **M3 — one real-app end-to-end proof:** still required; do not substitute
+   fixture-only success for this proof.
 5. **M4/M5 — re-audit determinism/scale and establish a release gate** only
    after the end-to-end evidence exists.
 

@@ -1,10 +1,11 @@
 # RESUME FILE — APK-Workbench (current state 2026-11-17)
 
-**Current snapshot:** `main` at `5f7b465`; `.venv/bin/python -m pytest -q`
-reports 381 passed. Scanner P0-P7 are implemented. The per-bundle evidence
-freeze, handoff manifest, and `verify-workspace` are implemented and
-fixture-tested; Unit 1 is complete in code. The current delivery sequence is
-the product rescue board at `docs/engineering/PRODUCT-RESCUE-BOARD.md`.
+**Current snapshot:** M0 and M1 are complete on `main`; `.venv/bin/python -m
+pytest -q` reports 381 passed. Scanner P0-P7, per-bundle evidence freeze,
+handoff manifest, and `verify-workspace` are implemented and fixture-tested.
+Post-TruffleHog secret-link refresh and its distinct scan states are tested.
+The current delivery sequence is the product rescue board at
+`docs/engineering/PRODUCT-RESCUE-BOARD.md`.
 
 The original Unit 1 design and historical notes below are retained for context,
 but their old status/phase ordering is superseded by this current snapshot.
@@ -21,24 +22,22 @@ asked.
 --------------------------------------------------------------------------------
 ## CURRENT STATE — verified 2026-11-17
 --------------------------------------------------------------------------------
-- Branch/revision: `main` at `5f7b465` (main is ahead of `origin/main` by one
-  commit at this snapshot; do not push without explicit instruction).
+- Branch: `main` (do not push without explicit instruction).
 - P0-P7 are implemented. Unit 1 bundle freeze and `verify-workspace` are
   implemented in code and covered by `tests/test_workspace_freeze.py` and
   `tests/test_pipeline_integration.py`.
 - Native ELF/JNI analysis, cross-APK JNI matching, typed links, and trace
-  chains exist. Commit `5f7b465` passes retained TruffleHog findings into
-  `build_link_graph`; its failure-state handling and full pipeline behavior
-  still need targeted tests.
+  chains exist. M1 rebuilds them after TruffleHog and distinguishes
+  successful-empty, failed, missing, and not-run scans. Full suite: 381
+  passed.
 - P8 is partial: a model dry-run, enforced output schemas, large-volume
   hierarchy, and split-component bundle aggregation remain unverified.
 - No representative result bundle was found in the repository. The external
   configured workspace has not been inspected; real-app report quality is
   therefore unverified.
-- M0 current-state synchronization is complete in this change and will be
-  committed with the board and memory updates. Next: verify/fix the post-scan
-  secret-link integration (M1). Do not begin broader enhancements until that
-  gate is met.
+- M0 current-state synchronization and M1 post-scan secret-link integration
+  are complete. Next board item: M2 native report visibility. Do not start it
+  until the user asks for the next item.
 
 --------------------------------------------------------------------------------
 ## HISTORICAL PHASE ORDER — superseded by the product rescue board
@@ -47,8 +46,8 @@ asked.
 0b. DONE 2026-11-16 — citation-root parameter (D-1 step 2). Committed+pushed.
 1. DONE  — PER-BUNDLE WORKSPACE + FREEZE (implementation present; see
            `oc-handoff/99-briefing.md` and `tests/test_workspace_freeze.py`).
-2. NEXT  — Verify post-scan TruffleHog-to-link/trace integration (board M1).
-3.       — Make native evidence visible in final report (board M2).
+2. DONE  — Post-scan TruffleHog-to-link/trace integration (board M1).
+3. NEXT  — Make native evidence visible in final report (board M2).
 4.       — Produce and inspect one complete bundle/report (board M3).
 5.       — Fix ONLY what the dry run proves: expect volume hierarchy, evidence
            precedence, output schema gate.

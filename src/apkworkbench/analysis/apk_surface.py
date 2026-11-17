@@ -1722,6 +1722,162 @@ def cross_apk_native_jni_match(
     }
 
 
+def refresh_secret_links(
+    database,
+    workspace: str | Path,
+    *,
+    run_id: str | None = None,
+) -> dict[str, int]:
+    """Rebuild surface links from the current TruffleHog scan state."""
+    root = Path(workspace).expanduser().resolve()
+    results_root = root / "results"
+    if results_root.is_symlink():
+        raise ValueError("Results directory must not be a symlink.")
+    resolved_results = results_root.resolve(strict=True)
+    resolved_results.relative_to(root)
+
+    history = database.read_download_history()
+    if run_id is not None:
+        history_by_hash = {
+            row.get("sha256", "").lower(): row for row in history
+            if row.get("sha256")
+        }
+        selected_rows = []
+        for selected in database.read_manifest(run_id):
+            acquired = history_by_hash.get(selected.get("sha256", "").lower())
+            if (
+                acquired is not None
+                and acquired.get("source") == selected.get("source")
+                and acquired.get("run_id") == run_id
+                and acquired.get("package_id") == selected.get("package_id")
+                and str(acquired.get("version_code", ""))
+                == str(selected.get("version_code", ""))
+            ):
+                selected_rows.append(acquired)
+    else:
+        selected_rows = history
+
+    processing = database.read_processing_status()
+    summary = {"updated": 0, "missing_surface": 0, "failed": 0, "frozen": 0}
+    for row in selected_rows:
+        package_id = str(row.get("package_id") or "")
+        version_code = str(row.get("version_code") or "")
+        digest = str(row.get("sha256") or "").lower()
+        if (
+            not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id)
+            or not version_code.isdigit()
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
+            raise ValueError("Malformed artifact identity while refreshing secret links.")
+
+        bundle_dir = results_root / package_id / version_code / digest
+        surface_dir = bundle_dir / "surface"
+        trufflehog_dir = bundle_dir / "trufflehog"
+        static_path = surface_dir / "static-analysis.json"
+        findings_path = trufflehog_dir / "findings.json"
+        for path in (
+            bundle_dir, surface_dir, trufflehog_dir, static_path, findings_path
+        ):
+            if path.is_symlink():
+                raise ValueError(f"Refusing symlinked secret-link path: {path}")
+        if (bundle_dir / "hashes.sha256").is_file():
+            summary["frozen"] += 1
+            continue
+        if not static_path.is_file():
+            summary["missing_surface"] += 1
+            continue
+        static_path.resolve(strict=True).relative_to(resolved_results)
+
+        result_value = json.loads(static_path.read_text(encoding="utf-8"))
+        if not isinstance(result_value, dict):
+            raise ValueError(f"Surface result must be a JSON object: {static_path}")
+        result = result_value
+        scan = processing.get(digest, {})
+        scan_status = scan.get("scan_status", "")
+        findings: list[dict[str, Any]] | None = None
+        linkage_status = "not_run"
+        linkage_reason = "TruffleHog has no successful scan status for this artifact."
+        if scan_status == "success":
+            try:
+                findings_value = json.loads(findings_path.read_text(encoding="utf-8"))
+                if not isinstance(findings_value, list) or any(
+                    not isinstance(item, dict) for item in findings_value
+                ):
+                    raise ValueError(
+                        "findings.json must contain a list of finding objects"
+                    )
+            except (OSError, ValueError) as exc:
+                linkage_status = "failed"
+                linkage_reason = f"Cannot use successful TruffleHog output: {exc}"
+            else:
+                findings = findings_value
+                linkage_status = "success"
+                linkage_reason = ""
+        elif scan_status == "failed":
+            linkage_status = "failed"
+            linkage_reason = scan.get("error") or "TruffleHog recorded a failed scan."
+        elif scan_status == "running":
+            linkage_status = "running"
+            linkage_reason = "TruffleHog scan is still running."
+
+        diagnostics = result.get("diagnostics")
+        if not isinstance(diagnostics, list):
+            diagnostics = []
+        result["diagnostics"] = [
+            item for item in diagnostics
+            if not (
+                isinstance(item, dict)
+                and str(item.get("code", "")).startswith(
+                    ("link_", "trufflehog_secret_linkage_")
+                )
+            )
+        ]
+        link_coverage: dict[str, str] = {}
+        link_diagnostics: list[dict[str, str]] = []
+        citation_root = f"{(bundle_dir / 'apktool').relative_to(bundle_dir).as_posix()}/"
+        edges = build_link_graph(
+            result,
+            result.get("dex_analysis"),
+            trufflehog_findings=findings,
+            tree_root=citation_root,
+            coverage=link_coverage,
+            diagnostics=link_diagnostics,
+        )
+        entry_points = build_entry_points(
+            result, result.get("dex_analysis"), tree_root=citation_root
+        )
+        write_links(bundle_dir, edges, entry_points)
+        write_trace_chains_to_dir(bundle_dir, edges, entry_points)
+        coverage = result.setdefault("coverage", {})
+        if not isinstance(coverage, dict):
+            raise ValueError(f"Surface coverage must be a JSON object: {static_path}")
+        for key in tuple(coverage):
+            if isinstance(key, str) and key.startswith("link_type_"):
+                del coverage[key]
+        coverage.update(link_coverage)
+        coverage["trufflehog_secret_linkage"] = linkage_status
+        result["secret_linkage"] = {
+            "status": linkage_status,
+            "finding_count": len(findings) if findings is not None else None,
+        }
+        result["diagnostics"].extend(link_diagnostics)
+        if linkage_reason:
+            result["diagnostics"].append({
+                "code": f"trufflehog_secret_linkage_{linkage_status}",
+                "message": linkage_reason,
+            })
+        metrics = result.setdefault("metrics", {})
+        metrics["link_edge_count"] = len(edges)
+        metrics["entry_point_count"] = len(entry_points)
+        finalize_result(result, tree_root=citation_root)
+        _atomic_write_json(static_path, result)
+        write_handoff(bundle_dir, result, tree_root=citation_root)
+        summary["updated"] += 1
+        if linkage_status == "failed":
+            summary["failed"] += 1
+    return summary
+
+
 def run_static_surface_analysis(
     database,
     workspace: str | Path,
@@ -1981,19 +2137,8 @@ def run_static_surface_analysis(
                 link_coverage: dict[str, str] = {}
                 link_diagnostics: list[dict[str, str]] = []
 
-                # Load TruffleHog findings for secret linkage
-                trufflehog_dir = output_root / "trufflehog"
-                trufflehog_findings: list[dict[str, Any]] | None = None
-                findings_path = trufflehog_dir / "findings.json"
-                if findings_path.is_file():
-                    try:
-                        trufflehog_findings = json.loads(findings_path.read_text(encoding="utf-8"))
-                    except (OSError, ValueError):
-                        trufflehog_findings = None
-
                 link_edges = build_link_graph(
                     result, dex_result,
-                    trufflehog_findings=trufflehog_findings,
                     tree_root=citation_root,
                     coverage=link_coverage,
                     diagnostics=link_diagnostics,
