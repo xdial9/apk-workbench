@@ -181,17 +181,17 @@ def _worker_entry(analyzer: Analyzer, context: AnalyzerContext, send_connection,
             json.dump(payload, fh, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         try:
             send_connection.send_bytes(b"OK")
-        except Exception:
+        except Exception:  # noqa: S110, BLE001 - cleanup failure must not hang parent
             pass
     except Exception as exc:  # noqa: BLE001 - worker must not hang parent
         try:
             send_connection.send_bytes(b"FAIL:" + str(exc)[:500].encode("utf-8", "ignore"))
-        except Exception:
+        except Exception:  # noqa: S110, BLE001 - cleanup failure must not hang parent
             pass
     finally:
         try:
             send_connection.close()
-        except Exception:
+        except Exception:  # noqa: S110, BLE001 - cleanup failure must not hang parent
             pass
 
 

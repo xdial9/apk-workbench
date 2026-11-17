@@ -937,17 +937,17 @@ def _worker_entry(apk_path: str, send_connection, output_path: str) -> None:
             json.dump(payload, fh, ensure_ascii=False, separators=(",", ":"))
         try:
             send_connection.send_bytes(b"OK")
-        except Exception:
+        except Exception:  # noqa: S110, BLE001 - cleanup failure must not hang parent
             pass
     except Exception as exc:  # noqa: BLE001 - worker must not hang parent
         try:
             send_connection.send_bytes(b"FAIL:" + str(exc)[:500].encode("utf-8", "ignore"))
-        except Exception:
+        except Exception:  # noqa: S110, BLE001 - cleanup failure must not hang parent
             pass
     finally:
         try:
             send_connection.close()
-        except Exception:
+        except Exception:  # noqa: S110, BLE001 - cleanup failure must not hang parent
             pass
 
 
@@ -1073,7 +1073,7 @@ def analyze_apk_dex(
         with open(tmp_path, "r", encoding="utf-8") as fh:
             result = json.load(fh)
         if not isinstance(result, dict):
-            raise ValueError("Androguard worker returned a non-object JSON payload.")
+            raise TypeError("Androguard worker returned a non-object JSON payload.")
         # Safety: if worker wrote a failed payload, return it as-is (it is honest, not a cap lie)
         return result
     except (EOFError, OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
