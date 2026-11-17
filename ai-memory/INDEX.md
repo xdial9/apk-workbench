@@ -91,7 +91,16 @@ surface.txt/plan.txt checkboxes if applicable.
   facts (view_count/views/ids/custom_views) and `custom_view` facts. New
   coverage keys file_provider_paths + layout_inventory; metrics
   file_provider_root_count / layout_count / custom_view_count.
-  STATE: 341 tests green, P2 COMPLETE, P3 COMMITTED (3de13fe), P4 COMMITTED
+  STATE: 365 tests green, P2/P3/P4 COMMITTED, P5 DONE (2026-11-17, worktree).
+  P5: CODE_RULES 19 -> 29 (added certificate_pinning_present/bypass,
+  keystore_credential_access, sql_string_concatenation, path_traversal,
+  intent_redirection, overlay_window, clipboard_access, accessibility_service,
+  root_emulator_detection, exported_provider_risk, task_hijacking); docs/
+  rules.md catalog; D2/D3 fixed (packed_indicator + obfuscation_metric now
+  carry evidence cites); D9 fixed (endpoint/route rollup: one finding per
+  normalised pattern + occurrence_count + citation_sample, facts plane keeps
+  every occurrence). Positive+negative fixture per new rule in
+  tests/test_surface_sweep.py.
   (2c3d535), 2026-11-16. P3: class_model / method_model /
   string_class_index / reflection_sites in androguard_dex.py, `dex_class` on
   every call-graph edge, external refs and call sites, D4 fixed (callerless

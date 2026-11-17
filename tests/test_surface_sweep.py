@@ -246,3 +246,146 @@ def test_insecure_http_still_flags_a_real_cleartext_endpoint():
     )
     hits = [item for item in state.findings if item["rule_id"] == "insecure_http"]
     assert len(hits) == 1
+
+
+# ---- P5 detection-breadth fixtures (positive + negative per rule) ----------
+
+def _rule_fires(state, rule_id: str) -> bool:
+    return any(f["rule_id"] == rule_id for f in state.findings)
+
+
+def test_certificate_pinning_present_positive(tmp_path):
+    state = _sweep(
+        tmp_path,
+        'const-string v0, "sha256/A9bC8dE7fG6hI5jK4lM3nO2pQ1rS0tU9vW8xY7z"\n'
+        '.field pin: Lokhttp3/CertificatePinner;\n',
+    )
+    assert _rule_fires(state, "certificate_pinning_present")
+
+
+def test_certificate_pinning_present_negative(tmp_path):
+    state = _sweep(tmp_path, 'const-string v0, "https://api.example.test/v1"\n')
+    assert not _rule_fires(state, "certificate_pinning_present")
+
+
+def test_certificate_pinning_bypass_positive(tmp_path):
+    state = _sweep(tmp_path, 'setCertificatePinner(null)\n', name="smali/com/x/B.smali")
+    assert _rule_fires(state, "certificate_pinning_bypass")
+
+
+def test_certificate_pinning_bypass_negative(tmp_path):
+    state = _sweep(tmp_path, 'const-string v0, "pin-set: {hash}"\n')
+    assert not _rule_fires(state, "certificate_pinning_bypass")
+
+
+def test_keystore_credential_access_positive(tmp_path):
+    state = _sweep(tmp_path, 'invoke-static {v0}, Ljava/security/KeyStore;->getInstance(Ljava/lang/String;)Ljava/security/KeyStore;\n')
+    assert _rule_fires(state, "keystore_credential_access")
+
+
+def test_keystore_credential_access_negative(tmp_path):
+    state = _sweep(tmp_path, 'invoke-virtual {v0, "data"}, Ljava/io/File;->write(Ljava/lang/String;)V\n')
+    assert not _rule_fires(state, "keystore_credential_access")
+
+
+def test_sql_string_concatenation_positive(tmp_path):
+    state = _sweep(
+        tmp_path,
+        'const-string v0, "SELECT * FROM t WHERE x = " + v1\n',
+    )
+    assert _rule_fires(state, "sql_string_concatenation")
+
+
+def test_sql_string_concatenation_negative(tmp_path):
+    state = _sweep(tmp_path, 'invoke-virtual {v0, v1, p0}, Landroid/database/sqlite/SQLiteDatabase;->execSQL(Ljava/lang/String;[Ljava/lang/Object;)V\n')
+    assert not _rule_fires(state, "sql_string_concatenation")
+
+
+def test_path_traversal_positive(tmp_path):
+    state = _sweep(tmp_path, 'const-string v0, "../../etc/passwd"\n')
+    assert _rule_fires(state, "path_traversal")
+
+
+def test_path_traversal_negative(tmp_path):
+    state = _sweep(tmp_path, 'const-string v0, "assets/config.json"\n')
+    assert not _rule_fires(state, "path_traversal")
+
+
+def test_intent_redirection_positive(tmp_path):
+    state = _sweep(
+        tmp_path,
+        'invoke-virtual {v0}, Landroid/content/Intent;->getParcelableExtra(Ljava/lang/String;)Landroid/os/Parcelable;\n',
+    )
+    assert _rule_fires(state, "intent_redirection")
+
+
+def test_intent_redirection_negative(tmp_path):
+    state = _sweep(tmp_path, 'invoke-virtual {v0}, Landroid/content/Intent;->getStringExtra(Ljava/lang/String;)Ljava/lang/String;\n')
+    assert not _rule_fires(state, "intent_redirection")
+
+
+def test_overlay_window_positive(tmp_path):
+    state = _sweep(tmp_path, 'const/4 v0, 0x6f010001\n.line TYPE_APPLICATION_OVERLAY\n')
+    assert _rule_fires(state, "overlay_window")
+
+
+def test_overlay_window_negative(tmp_path):
+    state = _sweep(tmp_path, 'const/4 v0, 0x6f010001\n.line WINDOW_TYPE_NORMAL\n')
+    assert not _rule_fires(state, "overlay_window")
+
+
+def test_clipboard_access_positive(tmp_path):
+    state = _sweep(tmp_path, 'invoke-virtual {v0}, Landroid/content/ClipboardManager;->getPrimaryClip()Landroid/content/ClipData;\n')
+    assert _rule_fires(state, "clipboard_access")
+
+
+def test_clipboard_access_negative(tmp_path):
+    state = _sweep(tmp_path, 'const-string v0, "clip"\n')
+    assert not _rule_fires(state, "clipboard_access")
+
+
+def test_accessibility_service_positive(tmp_path):
+    state = _sweep(tmp_path, '.class public Lcom/x/MyAccessibilityService;\n.super Landroid/accessibilityservice/AccessibilityService;\n')
+    assert _rule_fires(state, "accessibility_service")
+
+
+def test_accessibility_service_negative(tmp_path):
+    state = _sweep(tmp_path, '.class public Lcom/x/Worker;\n.super Ljava/lang/Object;\n')
+    assert not _rule_fires(state, "accessibility_service")
+
+
+def test_root_emulator_detection_positive(tmp_path):
+    state = _sweep(tmp_path, 'const-string v0, "/system/bin/su"\n')
+    assert _rule_fires(state, "root_emulator_detection")
+
+
+def test_root_emulator_detection_negative(tmp_path):
+    state = _sweep(tmp_path, 'const-string v0, "normal/file/path"\n')
+    assert not _rule_fires(state, "root_emulator_detection")
+
+
+def test_exported_provider_risk_positive(tmp_path):
+    state = _sweep(
+        tmp_path,
+        'invoke-virtual {v0}, Landroid/content/ContentResolver;->insert(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/Object;)Landroid/net/Uri;\n',
+    )
+    assert _rule_fires(state, "exported_provider_risk")
+
+
+def test_exported_provider_risk_negative(tmp_path):
+    state = _sweep(tmp_path, 'invoke-virtual {v0}, Ljava/lang/String;->length()I\n')
+    assert not _rule_fires(state, "exported_provider_risk")
+
+
+def test_task_hijacking_positive(tmp_path):
+    state = _sweep(
+        tmp_path,
+        '<application android:taskAffinity="com.attacker.Foo">\n',
+        name="AndroidManifest.xml",
+    )
+    assert _rule_fires(state, "task_hijacking")
+
+
+def test_task_hijacking_negative(tmp_path):
+    state = _sweep(tmp_path, '<activity android:name=".Main" />\n')
+    assert not _rule_fires(state, "task_hijacking")

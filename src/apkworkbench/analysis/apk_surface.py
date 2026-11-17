@@ -16,6 +16,7 @@ import zipfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from apkworkbench.analysis.androguard_dex import analyze_apk_dex
 from apkworkbench.analysis.surface.classify import (
@@ -114,6 +115,48 @@ DEPENDENCY_MARKERS = {
     "SendGrid": ("com/sendgrid/", "com.sendgrid."),
 }
 
+# ---- P5 D9 endpoint-rollup helpers ------------------------------------------
+# Identifier-shaped path segments are normalised to "{id}" so one findings-
+# layer entry covers one endpoint pattern instead of every near-duplicate URL
+# (e.g. /v1/users/123 and /v1/users/456). The facts plane keeps every concrete
+# occurrence unchanged; only the report-facing finding is grouped.
+_PATH_PARAM_RE = re.compile(
+    r"^(?:\d{1,16}|[0-9a-fA-F]{16,}|"
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+)
+_CITATION_SAMPLE_LIMIT = 10
+
+
+def _endpoint_pattern(endpoint: str) -> str:
+    """Normalise path-identifier segments of an endpoint to '{id}'."""
+    try:
+        parsed = urlsplit(endpoint)
+    except ValueError:
+        return endpoint
+    if not parsed.scheme or not parsed.netloc:
+        return endpoint
+    netloc = parsed.hostname or parsed.netloc
+    if parsed.port:
+        netloc += f":{parsed.port}"
+    segments = (parsed.path or "/").split("/")
+    normalised = [
+        "{id}" if _PATH_PARAM_RE.match(segment) else segment
+        for segment in segments
+    ]
+    path = "/".join(normalised).rstrip("/")
+    return f"{parsed.scheme.lower()}://{netloc}{path}"
+
+
+def _path_pattern(route: str) -> str:
+    """Normalise path-identifier segments of a route string."""
+    segments = route.split("/")
+    normalised = [
+        "{id}" if _PATH_PARAM_RE.match(segment) else segment
+        for segment in segments
+    ]
+    return "/".join(normalised)
+
+
 # These are review leads, not automatic vulnerability verdicts.
 CODE_RULES = (
     ("webview_javascript_interface", "webview", "high", "JavaScript bridge exposed to WebView",
@@ -173,6 +216,55 @@ CODE_RULES = (
     ("webview_javascript", "webview", "info", "WebView JavaScript configuration API referenced",
      r"setJavaScriptEnabled", 0.78,
      "Review whether JavaScript is enabled for untrusted or remote content."),
+    # ---- P5 detection breadth (docs/rules.md documents every id/false-positive) ----
+    ("certificate_pinning_present", "network_security", "info",
+     "Certificate pinning configuration referenced",
+     r"CertificatePinner|setCertificatePinner|pin-set|sha256/[A-Za-z0-9+/=]{16,}", 0.85,
+     "A pinning control appears to be configured. Verify which hosts are pinned and whether every client enforces it."),
+    ("certificate_pinning_bypass", "network_security", "high",
+     "Certificate pinning appears disabled or built empty",
+     r"setCertificatePinner\s*\(\s*null\s*\)|certificatePinner\s*=\s*null|CertificatePinner\.Builder\s*\(\s*\)\s*\.build\s*\(\s*\)", 0.80,
+     "A pinner is cleared or built empty. Confirm whether pinning is intentionally bypassed in this build."),
+    ("keystore_credential_access", "cryptography", "medium",
+     "Android keystore / credential API referenced",
+     r"KeyStore\.getInstance|AndroidKeyStore|Ljava/security/KeyStore;|KeyGenParameterSpec", 0.80,
+     "Key material is handled through a keystore API. Review key protection flags, user-authentication binding and export paths."),
+    ("sql_string_concatenation", "data_storage", "high",
+     "SQL statement built by string concatenation",
+     r"""(?:SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM)[^;\n]{0,160}["']\s*\+|\+\s*["'][^"'\n]{0,60}(?:WHERE|FROM|VALUES|ORDER\s+BY|LIMIT)\b|String\.format\s*\(\s*["'][^"']*(?:SELECT|INSERT|UPDATE|DELETE)""", 0.78,
+     "A SQL statement is assembled from literal and non-literal parts. Check whether untrusted input reaches the concatenated segment instead of a bound parameter."),
+    ("path_traversal", "file_system", "medium",
+     "Parent-directory path component present in a string literal",
+     r"""["'][^"'\n]*\.\./(?:\.\./)*|%2e%2e%2f""", 0.70,
+     "A relative parent-directory sequence is present. Confirm whether it is joined with untrusted input and whether canonicalization or an allow-list bounds the result."),
+    ("intent_redirection", "components", "medium",
+     "Intent read from a Parcelable extra",
+     r"Landroid/content/Intent;->getParcelableExtra|getParcelableExtra\s*\(|getParcelableArrayListExtra\s*\(", 0.70,
+     "A Parcelable extra is read. If that Parcelable is an Intent and is started/forwarded without validation, an external caller can redirect it."),
+    ("overlay_window", "components", "high",
+     "Overlay window type or permission referenced",
+     r"TYPE_APPLICATION_OVERLAY|TYPE_SYSTEM_ALERT|SYSTEM_ALERT_WINDOW", 0.85,
+     "An overlay window capability is present. Review whether the overlay can sit above other apps and what it displays."),
+    ("clipboard_access", "privacy", "medium",
+     "Clipboard API referenced",
+     r"ClipboardManager|getPrimaryClip|setPrimaryClip|Landroid/content/ClipboardManager;", 0.80,
+     "Clipboard content may be read or written. Check whether sensitive data can be captured from, or leaked to, the clipboard."),
+    ("accessibility_service", "components", "high",
+     "Accessibility service surface referenced",
+     r"AccessibilityService|BIND_ACCESSIBILITY_SERVICE|Landroid/accessibilityservice/AccessibilityService;", 0.85,
+     "An accessibility service can observe and act on other apps' UI. Verify the service is declared, intended and restricted."),
+    ("root_emulator_detection", "environment_checks", "info",
+     "Root/emulator detection indicator present",
+     r"Superuser\.apk|/system/xbin/su|/system/bin/su\b|test-keys|ro\.debuggable|ro\.kernel\.qemu|ro\.hardware\.goldfish|genymotion", 0.80,
+     "Root or emulator checks are present. This is defensive-posture evidence, not a vulnerability; note which checks run and what changes when they fire."),
+    ("exported_provider_risk", "components", "high",
+     "Exported content provider with a query/insert surface",
+     r"""Landroid/content/ContentResolver;->query\(|->insert\(Landroid/net/Uri;|->bulkInsert\(|->update\(Landroid/net/Uri;""", 0.80,
+     "Code invokes ContentResolver query/insert/bulkInsert/update with a content:// URI. Pair this with the manifest's exported <provider> facts (exported_component) to determine whether any app that can reach the authority may query or insert. Review readPermission/writePermission, grantUriPermissions and path restrictions."),
+    ("task_hijacking", "components", "medium",
+     "Activity taskAffinity or singleTask launchMode may permit task hijacking",
+     r"""android:taskAffinity\s*=\s*"[^"]+"|android:launchMode\s*=\s*"(?:singleTask|singleInstance)\"""", 0.75,
+     "An activity sets taskAffinity or singleTask/singleInstance launch mode. An attacker activity with the same affinity can hijack the task; verify affinity matches the package name and that the launch mode is actually required."),
 )
 
 COMPILED_CODE_RULES = [
@@ -612,6 +704,12 @@ def analyze_apk_surface(
             if coverage[area] == "success":
                 coverage[area] = "partial"
 
+    # D9: findings-layer rollup. One finding per endpoint PATTERN (identifier
+    # path segments normalised to {id}) instead of one per distinct endpoint
+    # value, with occurrence_count + a bounded citation sample. The facts plane
+    # below still receives every occurrence of every endpoint value: no data is
+    # dropped, only the report-facing finding is grouped.
+    endpoint_groups: dict[str, dict[str, Any]] = {}
     for endpoint, metadata in sorted(api_endpoints.items()):
         first = metadata["evidence"][0] if metadata["evidence"] else {}
         nearby_limit_signals = [
@@ -625,22 +723,89 @@ def analyze_apk_surface(
             "indicators_near_endpoint" if nearby_limit_signals
             else "no_nearby_client_indicator_found"
         )
-        findings.append(_finding(
+        pattern = _endpoint_pattern(endpoint)
+        group = endpoint_groups.setdefault(pattern, {
+            "endpoints": [], "occurrences": 0, "evidence": [], "first": first,
+        })
+        group["endpoints"].append(endpoint)
+        group["occurrences"] += metadata["occurrences"]
+        group["evidence"].extend(metadata["evidence"])
+    for pattern, group in sorted(endpoint_groups.items()):
+        first = group["first"]
+        evidence = group["evidence"]
+        sample = evidence[:_CITATION_SAMPLE_LIMIT]
+        finding = _finding(
             "api_endpoint_inventory", "api_inventory", "info",
-            f"API/network endpoint candidate: {endpoint}",
-            f"String occurrence count: {metadata['occurrences']}. This endpoint was discovered statically; no request was sent.",
-            str(first.get("path", "")), first.get("line"), endpoint, 0.99,
+            f"API/network endpoint pattern: {pattern}",
+            (
+                f"{group['occurrences']} string occurrence(s) across "
+                f"{len(group['endpoints'])} distinct endpoint value(s) under this "
+                f"pattern; {len(evidence)} citation(s) recorded "
+                f"(sample of {len(sample)} in this finding). "
+                "Discovered statically; no request was sent."
+            ),
+            str(first.get("path", "")), first.get("line"), pattern, 0.99,
             offset=first.get("offset"),
-        ))
+        )
+        finding["endpoint_pattern"] = pattern
+        finding["endpoints"] = sorted(set(group["endpoints"]))
+        finding["endpoint_count"] = len(finding["endpoints"])
+        finding["occurrence_count"] = group["occurrences"]
+        finding["citation_count"] = len(evidence)
+        finding["citation_sample"] = [
+            {
+                "path": item.get("path"),
+                "line": item.get("line"),
+                "offset": item.get("offset"),
+            }
+            for item in sample
+        ]
+        finding["citation_sample_truncated"] = len(evidence) > len(sample)
+        findings.append(finding)
+    route_groups: dict[tuple[str | None, str], dict[str, Any]] = {}
     for route, metadata in sorted(api_routes.items()):
-        first = metadata["evidence"][0] if metadata["evidence"] else {}
-        findings.append(_finding(
+        key = (metadata.get("http_method"), _path_pattern(route))
+        group = route_groups.setdefault(key, {
+            "routes": [], "occurrences": 0, "evidence": [], "first": None,
+        })
+        group["routes"].append(route)
+        group["occurrences"] += metadata["occurrences"]
+        group["evidence"].extend(metadata["evidence"])
+        if group["first"] is None:
+            group["first"] = metadata["evidence"][0] if metadata["evidence"] else {}
+    for (method, pattern), group in sorted(route_groups.items()):
+        first = group["first"] or {}
+        evidence = group["evidence"]
+        sample = evidence[:_CITATION_SAMPLE_LIMIT]
+        finding = _finding(
             "api_route_inventory", "api_inventory", "info",
-            f"API route candidate: {metadata['http_method'] or 'METHOD UNKNOWN'} {route}",
-            f"Route occurrence count: {metadata['occurrences']}. HTTP behavior was not exercised.",
-            str(first.get("path", "")), first.get("line"), route, 0.88,
+            f"API route pattern: {method or 'METHOD UNKNOWN'} {pattern}",
+            (
+                f"{group['occurrences']} occurrence(s) across "
+                f"{len(group['routes'])} distinct route value(s) under this pattern; "
+                f"{len(evidence)} citation(s) recorded "
+                f"(sample of {len(sample)} in this finding). "
+                "HTTP behavior was not exercised."
+            ),
+            str(first.get("path", "")), first.get("line"), pattern, 0.88,
             offset=first.get("offset"),
-        ))
+        )
+        finding["route_pattern"] = pattern
+        finding["http_method"] = method
+        finding["routes"] = sorted(set(group["routes"]))
+        finding["route_count"] = len(finding["routes"])
+        finding["occurrence_count"] = group["occurrences"]
+        finding["citation_count"] = len(evidence)
+        finding["citation_sample"] = [
+            {
+                "path": item.get("path"),
+                "line": item.get("line"),
+                "offset": item.get("offset"),
+            }
+            for item in sample
+        ]
+        finding["citation_sample_truncated"] = len(evidence) > len(sample)
+        findings.append(finding)
     dependencies = [
         {"name": name, "evidence_paths": sorted(set(paths))}
         for name, paths in sorted(dependency_evidence.items()) if paths
@@ -793,13 +958,30 @@ def analyze_apk_surface(
             or (entry.content_kind is None and entry.suffix not in TEXT_SUFFIXES)
         )
     )
+    large_asset_blob_paths = sorted(
+        entry.relative
+        for entry in tree.entries
+        if entry.relative.startswith("assets/")
+        and entry.size_bytes > 1_000_000
+        and (
+            entry.content_kind in {"zip", "gzip"}
+            or (entry.content_kind is None and entry.suffix not in TEXT_SUFFIXES)
+        )
+    )
     code_rule_hits = [finding["rule_id"] for finding in findings]
+    short_name_smali_paths = sorted(
+        entry.relative
+        for entry in smali_entries
+        if len(entry.path.stem) <= 3
+    )
     deductions: list[dict[str, Any]] = []
     for deduction in (
         sdk_stack(fact_store, histogram),
         api_surface(fact_store, list(api_endpoints.values()), api_routes),
         *packed_or_obfuscated(
-            fact_store, code_rule_hits, large_asset_blobs, short_name_ratio
+            fact_store, code_rule_hits, large_asset_blobs, short_name_ratio,
+            findings=findings, large_asset_blob_paths=large_asset_blob_paths,
+            short_name_smali_paths=short_name_smali_paths,
         ),
     ):
         if deduction is not None:

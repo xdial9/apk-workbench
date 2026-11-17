@@ -45,7 +45,7 @@ Everything below is the fix ladder. P0-P1 are done and verified.
 | P2c | FileProvider `file_paths.xml` roots + layout/view inventory | **DONE** | `4adb6a5` |
 | P3 | Code model: class/method/field inventory, call graph v2, reflection sites | **DONE** | `3de13fe` |
 | P4 | Link graph: typed edges with two cites each + entry_points | **DONE** | `2c3d535` |
-| P5 | Detection breadth: 11 deduction templates, rule catalog 19 -> ~60 | queued | — |
+| P5 | Detection breadth: 11 deduction templates, rule catalog 19 -> ~60 | **DONE** | P5 commit |
 | P6 | Containers: extract `.dex`/`.jar`/nested zips and analyse them | queued | — |
 | P7 | Scale: single-pass streaming, checkpoint, shard by unit | queued | — |
 | P8 | Handoff: `surface/` layout, bundle aggregation, workbook v2, prompts | queued | — |
@@ -386,14 +386,14 @@ An AI can answer these **from the bundle alone, with a citation**:
 | # | Defect | Status |
 |---|---|---|
 | D1 | `resource_inventory=success` without parsing | **FIXED** P0 |
-| D2 | `packed_indicator` deduction has no evidence | open |
-| D3 | `obfuscation_metric` deduction has no evidence | open |
+| D2 | `packed_indicator` deduction has no evidence | **FIXED** P5 |
+| D3 | `obfuscation_metric` deduction has no evidence | **FIXED** P5 |
 | D4 | external methods without callers dropped, metric hides it | **FIXED** P3 (emitted with `call_sites=[]`, counted in `external_methods_without_callers`) |
 | D5 | DEX strings deduped by value, DEX-of-origin lost | open (P3 partial: `string_class_index` is keyed by value, same limit; document it) |
 | D6 | stripped-section ELF yields no symbols despite `PT_DYNAMIC` | open (P3/native) |
 | D7 | load-site map keyed on basename only | open |
 | D8 | `text_file_limit` / `finding_limit` referenced, never emitted | **FIXED** P0 |
-| D9 | one finding per endpoint/route (inventory noise) | open (P5) |
+| D9 | one finding per endpoint/route (inventory noise) | **FIXED** P5 (rollup: one finding per pattern + occurrence_count + citation sample; facts plane unchanged) |
 | D10 | `SENSITIVE_PERMISSIONS` dead duplicate in `apk_surface.py:53` | open |
 | D11 | unhardened `DOMAIN_RE` (ReDoS) x2 | **FIXED** P0c |
 | D12 | `manifest_v2.py` severity if/else identical | open |

@@ -80,12 +80,43 @@ def packed_or_obfuscated(
     code_rule_hits: list[str],
     large_asset_blobs: int,
     short_name_ratio: float | None,
+    findings: list[dict[str, Any]] | None = None,
+    large_asset_blob_paths: list[str] | None = None,
+    short_name_smali_paths: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     packed = DYNAMIC_CODE_LOADING_RULE in code_rule_hits and large_asset_blobs > 0
     if packed:
+        # D2 fix: the deduction fired with no evidence behind it. Cite the
+        # findings that actually triggered it (the dynamic-code-loading rule
+        # hits) and the large asset blob paths, so the AI can trace it. Attach
+        # the same evidence to the fact so it never fires evidence-less.
+        trigger_evidence = next(
+            (
+                finding.get("evidence") or {}
+                for finding in (findings or [])
+                if finding.get("rule_id") == DYNAMIC_CODE_LOADING_RULE
+            ),
+            None,
+        )
+        packed_evidence = dict(trigger_evidence) if trigger_evidence else {
+            "path": "apktool/dynamic_code_loading",
+            "line": None,
+        }
         fingerprints = [
-            facts.add("packed_indicator", "dynamic_code_loading + large asset blob")
+            facts.add(
+                "packed_indicator",
+                "dynamic_code_loading + large asset blob",
+                evidence=packed_evidence,
+            )
+        ]
+        cites = [
+            f"finding:{finding.get('rule_id')}@{finding.get('evidence', {}).get('path')}:{finding.get('evidence', {}).get('line')}"
+            for finding in (findings or [])
+            if finding.get("rule_id") == DYNAMIC_CODE_LOADING_RULE
+        ]
+        blob_cites = [
+            f"apktool/{path}" for path in sorted(large_asset_blob_paths or [])
         ]
         out.append(_deduction(
             "D-PACKED-CANDIDATE",
@@ -110,10 +141,29 @@ def packed_or_obfuscated(
                     "state stands."
                 ),
             ],
+            cites=cites + blob_cites,
         ))
     if short_name_ratio is not None and short_name_ratio >= 0.6:
+        # D3 fix: same treatment — cite the short-name smali files that drove
+        # the ratio, not just the number. Attach evidence to the fact so it
+        # never fires evidence-less.
+        first_short = next(
+            (path for path in sorted(short_name_smali_paths or [])),
+            None,
+        )
+        obf_evidence = {"path": f"apktool/{first_short}"} if first_short else {
+            "path": "apktool/smali",
+            "line": None,
+        }
         fingerprints = [
-            facts.add("obfuscation_metric", f"short_name_ratio={short_name_ratio:.2f}")
+            facts.add(
+                "obfuscation_metric",
+                f"short_name_ratio={short_name_ratio:.2f}",
+                evidence=obf_evidence,
+            )
+        ]
+        cites = [
+            f"apktool/{path}" for path in sorted(short_name_smali_paths or [])
         ]
         out.append(_deduction(
             "D-OBFUSCATED-NAMES",
@@ -136,6 +186,7 @@ def packed_or_obfuscated(
                     "artifact before concluding names are unrecoverable."
                 ),
             ],
+            cites=cites,
         ))
     return out
 
