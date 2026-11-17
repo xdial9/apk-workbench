@@ -5,16 +5,18 @@ verifiable, useful per-app result. This is a delivery board, not a proposal to
 rewrite the scanner or add another detection catalog.
 
 **Snapshot:** 2026-11-17, M0, M1, and M2 are complete on `main`. M3's real-run
-validation has been exercised but is **blocked** by a JNI evidence mismatch.
-Current full test suite: **383 passed**. The pre-existing untracked
+validation has been exercised but is **blocked** by missing per-stage status
+files and the need to regenerate the frozen pre-fix report. Current full test
+suite: **384 passed**. The pre-existing untracked
 `ai-memory/test.txt` remains untouched.
 
 **Evidence boundary:** the configured external workspace contains a real
 Simple Calculator v85 run (`b8e85b99-a5f9-496d-b3a4-e15cb1deca73`), but its
-final report exposes a cross-APK JNI mapping inconsistency. The four bundles
-are frozen and verify, but M3 is not accepted until that discrepancy and the
-missing per-stage `status.json` outputs are resolved and the report is
-regenerated.
+frozen report predates the cross-APK JNI reconciliation fix. The fix now
+passes against a temporary staging copy of the real component data; the four
+original bundles remain frozen and verify. M3 is not accepted until
+per-stage `status.json` outputs are produced and a new end-to-end report is
+generated and verified.
 
 ## Bottom line
 
@@ -193,13 +195,13 @@ introduced, and the new summary does not render secret values.
 - A fixture proves a mapped JNI path and a separate unmapped-with-reason path.
 
 All acceptance criteria are exercised by
-`tests/test_final_run_report.py`; the full suite passes 383 tests.
+`tests/test_final_run_report.py`; the full suite passes 384 tests.
 
 ### M3 — Produce and inspect one complete bundle from start to report
 
 **Priority:** P0 · **Estimate:** M · **Depends on:** M1 and M2
 
-**Status: IN PROGRESS — real-run validation found an acceptance blocker.**
+**Status: IN PROGRESS — real-run validation found acceptance blockers.**
 
 **Run evidence (2026-11-17):**
 - Real input: Simple Calculator v85, Google Play run
@@ -218,19 +220,24 @@ All acceptance criteria are exercised by
   2,160 Smali API call sites, 8,339 external DEX method references, 3,786 DEX
   API/config strings, 28 permission/API groups, and 201 rate-limit/retry clues.
   Their sizes are about 758 MB JSON and 1.13 GB HTML.
-- The native split has 3 ELF libraries and 7 JNI exports. The generated report
-  says 7 mapped and 7 unmapped (total 7), while that component's JNI inventory
-  has 0 mapped entries and 7 unmapped entries. The run-level consistency flag
-  is false. `cross_apk_native_jni_match` appends mapped facts and increments
-  the mapped metric without reconciling the inventory/unmapped records. This
-  is a verified source/report inconsistency; do not claim JNI mapping coverage
-  is complete.
+- The frozen pre-fix report for the native split has 3 ELF libraries and 7 JNI
+  exports. It says 7 mapped and 7 unmapped (total 7), while the component's
+  JNI inventory has 0 mapped entries and 7 unmapped entries; its run-level
+  consistency flag is false.
+- Fixed `cross_apk_native_jni_match` to reconcile mapped facts, inventory,
+  unmapped records/findings, per-library counts, and metrics. A regression test
+  covers mapping, removal of stale unmapped records, and idempotent reruns.
+  Running the fixed matcher against a temporary staging copy of the real run
+  matched all 7 exports, emitted 0 unmapped records, and rendered
+  `7 mapped, 0 unmapped` in the native HTML section. The frozen originals were
+  not modified; the published final JSON/HTML still show the pre-fix data.
 - No stage `status.json` files were found in the four component bundles (stage
-  status is present in the processing database and final report instead).
+  status is present in the processing database and final report instead), and
+  no writer for `status.json` exists in the current pipeline code.
 - All 4 component bundles were frozen after report generation;
   `verify-workspace` passed for each with 0 mismatches, missing files, or extra
-  files. Keep these bundles immutable while fixing the writer; validate any
-  rerun in a new output workspace/run.
+  files. Keep these bundles immutable; produce the post-fix run and status
+  artifacts in a new output workspace/run.
 
 Run one small, representative app through the normal workflow. Prefer a
 previously acquired local APK bundle. If none is available, use an operator-
@@ -239,11 +246,13 @@ validation. Avoid a large corpus.
 
 **Likely files if defects are found**
 - `scripts/full_google_play_pipeline.sh`
+- `src/apkworkbench/analysis/apk_surface.py`
 - `src/apkworkbench/cli/main.py`
 - `src/apkworkbench/database/workspace.py`
 - `src/apkworkbench/reporting/final_run.py`
 - `docs/reliability-and-recovery.md`
 - `tests/test_pipeline_integration.py`
+- `tests/test_native_analysis.py`
 
 **Acceptance**
 - Record the exact run ID, app/component counts, per-stage status, testable
@@ -260,8 +269,8 @@ validation. Avoid a large corpus.
 
 **Known boundary:** no representative result bundle was found in the repository
 tree. The external workspace was inspected as described above; M3 remains
-open until the JNI inventory mismatch and per-stage status output are fixed and
-the current-code report passes the acceptance checks.
+open until per-stage status outputs are implemented and a post-fix full report
+passes the acceptance checks.
 
 ### M4 — Re-audit determinism, unresolved scanner defects, and scale behavior
 
@@ -325,10 +334,10 @@ commands/report match that contract.
 
 ## Immediate next ticket
 
-Finish **M3**: make cross-APK JNI mappings consistent across facts, metrics,
-inventories, and report sections; emit per-stage `status.json` outputs; then
-validate the corrected behavior in a new output workspace and freeze/verify
-the resulting bundles. Do not start M4 until this real-run gate passes.
+Finish **M3**: emit per-stage `status.json` outputs, run the corrected pipeline
+in a new output workspace, regenerate JSON/HTML, and freeze/verify the result.
+The JNI reconciliation fix is tested, including against staged real data; do
+not start M4 until the new full run passes.
 
 Do not begin with more detection rules, a broad architecture rewrite, a
 large-scale acquisition, or a new reporting framework.

@@ -2,10 +2,11 @@
 
 **Verified:** 2026-11-17
 **Repository:** `main`; M0, M1, and M2 are complete; M3 validation is in
-progress and blocked by real-run JNI evidence inconsistencies
-**Tests:** `.venv/bin/python -m pytest -q` — 383 passed
-**Next work:** resolve M3 findings in a new output workspace; preserve the
-frozen Simple Calculator run
+progress; JNI reconciliation is fixed/tested, but status JSON and a
+post-fix full run remain
+**Tests:** `.venv/bin/python -m pytest -q` — 384 passed
+**Next work:** emit per-stage status files and validate in a new output
+workspace; preserve the frozen Simple Calculator run
 
 ## Current state
 
@@ -27,12 +28,14 @@ frozen Simple Calculator run
   TruffleHog findings and 0 verified findings.
 - M3 is not accepted: native metrics report 7 mapped and 7 unmapped JNI
   exports out of 7, while the component inventory has 0 mapped and 7
-  unmapped. No per-stage `status.json` files were found. The JSON report is
-  about 758 MB and HTML about 1.13 GB.
-- Do not mutate the frozen run. Fix the cross-APK JNI inventory/metric
-  reconciliation and per-stage status outputs, then validate in a new output
-  workspace. Focused changes also fixed streaming selection of native-only
-  links and the missing-hash verifier CLI error; full suite: 383 passed.
+  unmapped in the frozen pre-fix report. The fix now reconciles these outputs;
+  it passed against a temporary staging copy of the real data (7 mapped, 0
+  unmapped, native HTML section agrees). No per-stage `status.json` writer
+  exists. The JSON report is about 758 MB and HTML about 1.13 GB.
+- Do not mutate the frozen run. Add status outputs and generate/verify a new
+  full run in a new output workspace. Focused changes also fixed streaming
+  selection of native-only links and the missing-hash verifier CLI error;
+  full suite: 384 passed.
 
 ## Rescue sequence
 

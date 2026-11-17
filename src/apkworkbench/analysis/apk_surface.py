@@ -1661,43 +1661,172 @@ def cross_apk_native_jni_match(
         except (OSError, ValueError):
             continue
 
+        inventory = result.setdefault("inventory", {})
+        if not isinstance(inventory, dict):
+            raise TypeError(f"Invalid surface inventory in {target}.")
+        jni_entries = inventory.setdefault("jni_entries", [])
+        jni_unmapped = inventory.setdefault("jni_unmapped", [])
+        native_analysis = inventory.setdefault("native_analysis", [])
         facts = result.setdefault("facts", [])
+        findings = result.setdefault("findings", [])
+        if not all(
+            isinstance(value, list)
+            for value in (jni_entries, jni_unmapped, native_analysis, facts, findings)
+        ):
+            raise TypeError(f"Invalid JNI evidence lists in {target}.")
+
+        def export_key(library_path: str, symbol_name: str) -> tuple[str, str]:
+            return library_path.removeprefix("apktool/"), symbol_name
+
+        matched_keys = {
+            export_key(library, symbol) for library, symbol, _offset, _entry in exports_list
+        }
+        mapped_fact_keys = {
+            export_key(
+                extra.get("library", ""),
+                extra.get("symbol", ""),
+            )
+            for fact in facts
+            if isinstance(fact, dict)
+            and fact.get("kind") == "native_jni_entry"
+            and isinstance((extra := fact.get("extra")), dict)
+        }
+        inventory_entry_keys = {
+            export_key(item.get("library", ""), item.get("symbol", ""))
+            for item in jni_entries
+            if isinstance(item, dict) and item.get("symbol")
+        }
+
         for library, symbol, offset, entry in exports_list:
-            facts.append({
-                "kind": "native_jni_entry",
-                "value": f"{library}::{symbol}",
-                "evidence": [
-                    {"path": library, "offset": offset},
-                    {"path": entry["smali_path"], "line": entry["smali_line"]},
-                ],
-                "extra": {
-                    "library": library,
-                    "symbol": symbol,
-                    "java_class": entry["java_class"],
-                    "java_method": entry["java_method"],
-                    "java_signature": entry["java_signature"],
-                    "mapping_confidence": entry["confidence"],
-                    "cross_apk_match": True,
-                },
-            })
+            key = export_key(library, symbol)
+            if key not in mapped_fact_keys:
+                facts.append(
+                    {
+                        "kind": "native_jni_entry",
+                        "value": f"{library}::{symbol}",
+                        "evidence": [
+                            {"path": library, "offset": offset},
+                            {"path": entry["smali_path"], "line": entry["smali_line"]},
+                        ],
+                        "extra": {
+                            "library": library,
+                            "symbol": symbol,
+                            "java_class": entry["java_class"],
+                            "java_method": entry["java_method"],
+                            "java_signature": entry["java_signature"],
+                            "mapping_confidence": entry["confidence"],
+                            "cross_apk_match": True,
+                        },
+                    },
+                )
+                mapped_fact_keys.add(key)
+
+            already_in_inventory = key in inventory_entry_keys or any(
+                isinstance(item, dict)
+                and export_key(item.get("library", ""), "")[0] == key[0]
+                and item.get("java_class") == entry["java_class"]
+                and item.get("java_method") == entry["java_method"]
+                and item.get("java_signature") == entry["java_signature"]
+                for item in jni_entries
+            )
+            if not already_in_inventory:
+                jni_entries.append(
+                    {
+                        "library": key[0],
+                        "symbol": symbol,
+                        "java_class": entry["java_class"],
+                        "java_method": entry["java_method"],
+                        "java_signature": entry["java_signature"],
+                        "smali_path": entry["smali_path"],
+                        "smali_line": entry["smali_line"],
+                        "confidence": entry["confidence"],
+                    }
+                )
+                inventory_entry_keys.add(key)
+
+        inventory["jni_unmapped"] = [
+            item
+            for item in jni_unmapped
+            if not (
+                isinstance(item, dict)
+                and export_key(item.get("library", ""), item.get("symbol", "")) in matched_keys
+            )
+        ]
+        result["facts"] = [
+            fact
+            for fact in facts
+            if not (
+                isinstance(fact, dict)
+                and fact.get("kind") == "native_jni_unmapped"
+                and isinstance((extra := fact.get("extra")), dict)
+                and export_key(extra.get("library", ""), extra.get("symbol", "")) in matched_keys
+            )
+        ]
+        result["findings"] = [
+            finding
+            for finding in findings
+            if not (
+                isinstance(finding, dict)
+                and finding.get("rule_id") == "native_jni_entry_unmapped"
+                and isinstance((evidence := finding.get("evidence")), dict)
+                and export_key(
+                    evidence.get("path", ""),
+                    evidence.get("snippet", ""),
+                )
+                in matched_keys
+            )
+        ]
+        resolved_finding_count = len(findings) - len(result["findings"])
 
         # Update metrics
         metrics = result.setdefault("metrics", {})
-        current_mapped = metrics.get("native_jni_exports_mapped", 0)
-        metrics["native_jni_exports_mapped"] = current_mapped + len(exports_list)
-        metrics["native_jni_mapping_complete"] = True
+        metrics["native_jni_exports_mapped"] = len(jni_entries)
+        metrics["native_jni_exports_unmapped"] = len(inventory["jni_unmapped"])
+        metrics["native_jni_mapping_complete"] = (
+            metrics.get("native_jni_exports_total", 0)
+            == metrics["native_jni_exports_mapped"] + metrics["native_jni_exports_unmapped"]
+        )
+        metrics["native_findings_emitted"] = max(
+            metrics.get("native_findings_emitted", 0) - resolved_finding_count,
+            0,
+        )
+        metrics["finding_count"] = len(result["findings"])
+        distinct_findings = {
+            (
+                finding.get("rule_id"),
+                (finding.get("evidence") or {}).get("path"),
+                (finding.get("evidence") or {}).get("line"),
+            )
+            for finding in result["findings"]
+        }
+        metrics["distinct_finding_count"] = len(distinct_findings)
+        metrics["fact_count"] = len(result["facts"])
 
         # Update coverage
         coverage = result.setdefault("coverage", {})
-        coverage["native_jni_mapping"] = "mapped"
+        coverage["native_jni_mapping"] = (
+            "mapped"
+            if metrics["native_jni_mapping_complete"]
+            and metrics["native_jni_exports_unmapped"] == 0
+            else "partial"
+        )
         coverage["link_type_method_native"] = "success"
 
-        # Update native library entries with matched entries
-        for lib_report in result.get("libraries", []):
-            lib_name = lib_report.get("relative", "")
-            for library, symbol, offset, entry in exports_list:
-                if lib_name == library:
-                    lib_report.setdefault("jni_entries", []).append(entry)
+        for library_report in native_analysis:
+            if not isinstance(library_report, dict):
+                continue
+            library_name = library_report.get("path", "")
+            library_report["jni_entries"] = sum(
+                1
+                for item in jni_entries
+                if isinstance(item, dict)
+                and export_key(item.get("library", ""), "")[0] == library_name
+            )
+            library_report["jni_unmapped"] = sum(
+                1
+                for item in inventory["jni_unmapped"]
+                if isinstance(item, dict) and item.get("library") == library_name
+            )
 
         try:
             _atomic_write_json(target, result)

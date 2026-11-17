@@ -1,9 +1,13 @@
 """N5-N10: JNI mapping, load sites, strings, findings and coverage identities."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from apkworkbench.analysis.apk_surface import analyze_apk_surface
+from apkworkbench.analysis.apk_surface import (
+    analyze_apk_surface,
+    cross_apk_native_jni_match,
+)
 from apkworkbench.analysis.surface.native import (
     UNMAPPED_REASONS,
     demangle_jni_symbol,
@@ -485,3 +489,102 @@ def test_native_string_evidence_is_retargeted_to_byte_offsets(tmp_path):
         if str(evidence.get("path", "")).startswith("lib/"):
             assert evidence.get("line") is None
             assert isinstance(evidence.get("offset"), int)
+
+
+def test_cross_apk_jni_match_reconciles_inventory_and_unmapped_metrics(tmp_path):
+    results_root = tmp_path / "results"
+    package_id = "com.example.app"
+    version_code = "1"
+    base_digest = "a" * 64
+    split_digest = "b" * 64
+    base_decoded = results_root / package_id / version_code / base_digest / "apktool"
+    base_decoded.joinpath("smali/com/example").mkdir(parents=True)
+    write_native_method(base_decoded, "run")
+
+    split_root = results_root / package_id / version_code / split_digest
+    split_decoded = split_root / "apktool"
+    native_path = split_decoded / "lib/arm64-v8a/libgood.so"
+    native_path.parent.mkdir(parents=True)
+    native_symbol = "Java_com_example_Main_run"
+    write_elf(native_path, symbols=(symbol(native_symbol, value=0x810),))
+
+    library = "lib/arm64-v8a/libgood.so"
+    split_surface = split_root / "surface"
+    split_surface.mkdir()
+    static_analysis = {
+        "facts": [
+            {
+                "kind": "native_jni_unmapped",
+                "value": f"{library}::{native_symbol}",
+                "extra": {"library": library, "symbol": native_symbol},
+            }
+        ],
+        "findings": [
+            {
+                "rule_id": "native_jni_entry_unmapped",
+                "evidence": {"path": library, "snippet": native_symbol},
+            }
+        ],
+        "metrics": {
+            "native_jni_exports_total": 1,
+            "native_jni_exports_mapped": 0,
+            "native_jni_exports_unmapped": 1,
+            "native_jni_mapping_complete": True,
+            "native_findings_emitted": 1,
+        },
+        "coverage": {"native_jni_mapping": "mapped"},
+        "inventory": {
+            "jni_entries": [],
+            "jni_unmapped": [
+                {
+                    "library": library,
+                    "symbol": native_symbol,
+                    "java_class": "Lcom/example/Main;",
+                    "java_method": "run",
+                    "java_signature": None,
+                    "reason": "no_matching_method",
+                    "offset": 0x810,
+                }
+            ],
+            "native_analysis": [{"path": library, "jni_entries": 0, "jni_unmapped": 1}],
+        },
+    }
+    static_path = split_surface / "static-analysis.json"
+    static_path.write_text(json.dumps(static_analysis), encoding="utf-8")
+    eligible = [
+        {
+            "package_id": package_id,
+            "version_code": version_code,
+            "sha256": base_digest,
+        },
+        {
+            "package_id": package_id,
+            "version_code": version_code,
+            "sha256": split_digest,
+        },
+    ]
+
+    summary = cross_apk_native_jni_match(results_root, eligible)
+
+    updated = json.loads(static_path.read_text(encoding="utf-8"))
+    assert summary["matched"] == 1
+    assert summary["unmatched"] == 0
+    assert updated["metrics"]["native_jni_exports_total"] == 1
+    assert updated["metrics"]["native_jni_exports_mapped"] == 1
+    assert updated["metrics"]["native_jni_exports_unmapped"] == 0
+    assert updated["metrics"]["native_jni_mapping_complete"] is True
+    assert updated["metrics"]["native_findings_emitted"] == 0
+    assert updated["metrics"]["distinct_finding_count"] == 0
+    assert updated["coverage"]["native_jni_mapping"] == "mapped"
+    assert updated["inventory"]["jni_entries"][0]["symbol"] == native_symbol
+    assert updated["inventory"]["jni_unmapped"] == []
+    assert updated["inventory"]["native_analysis"][0]["jni_entries"] == 1
+    assert updated["inventory"]["native_analysis"][0]["jni_unmapped"] == 0
+    assert not [fact for fact in updated["facts"] if fact["kind"] == "native_jni_unmapped"]
+    assert not updated["findings"]
+
+    cross_apk_native_jni_match(results_root, eligible)
+    resumed = json.loads(static_path.read_text(encoding="utf-8"))
+    assert len(resumed["inventory"]["jni_entries"]) == 1
+    assert len([fact for fact in resumed["facts"] if fact["kind"] == "native_jni_entry"]) == 1
+    assert resumed["metrics"]["native_jni_exports_mapped"] == 1

@@ -1,11 +1,13 @@
 # RESUME FILE — APK-Workbench (current state 2026-11-17)
 
 **Current snapshot:** M0, M1, and M2 are complete. M3 real-run validation is
-in progress and blocked by a verified cross-APK JNI inventory/metric mismatch
-and missing per-stage `status.json` files. `.venv/bin/python -m pytest -q`
-reports 383 passed. Real run `b8e85b99-a5f9-496d-b3a4-e15cb1deca73` has 4
+in progress: the JNI inventory/metric reconciliation fix passed against a
+staging copy of real data, but the frozen report remains pre-fix and the
+pipeline has no per-stage `status.json` writer. `.venv/bin/python -m pytest
+-q` reports 384 passed. Real run `b8e85b99-a5f9-496d-b3a4-e15cb1deca73` has 4
 frozen, verified APK component bundles; preserve them unchanged. Its reports
-are 758 MB JSON / 1.13 GB HTML. Fix and validate in a new workspace before M4.
+are 758 MB JSON / 1.13 GB HTML. Emit status outputs and validate a post-fix
+full run in a new workspace before M4.
 The current delivery sequence is the product rescue board at
 `docs/engineering/PRODUCT-RESCUE-BOARD.md`.
 
@@ -31,16 +33,17 @@ asked.
 - Native ELF/JNI analysis, cross-APK JNI matching, typed links, and trace
   chains exist. M1 rebuilds them after TruffleHog and distinguishes
   successful-empty, failed, missing, and not-run scans. M2 adds a tested
-  native report view; current full suite: 383 passed.
+  native report view; current full suite: 384 passed.
 - P8 is partial: a model dry-run, enforced output schemas, large-volume
   hierarchy, and split-component bundle aggregation remain unverified.
 - Real-app validation used Simple Calculator v85. Acquisition verification
   passed for 4 APK components; report generation completed; reconciliation
   accounted for 4/4 (1 complete, 3 complete-with-warnings); all 4 bundles
   froze and passed `verify-workspace`.
-- M3 remains in progress: native metrics say 7 mapped + 7 unmapped for 7 JNI
-  exports, but the native inventory says 0 mapped and 7 unmapped. No
-  per-stage `status.json` files were found. Do not mutate the frozen run.
+- M3 remains in progress: a cross-APK JNI reconciliation fix passed on a
+  staging copy of the real run (7 mapped, 0 unmapped), but the immutable
+  report predates the fix and the pipeline has no `status.json` writer. Do
+  not mutate the frozen run; generate a new output workspace before M4.
 - M0 current-state synchronization, M1 post-scan secret-link integration,
   and M2 native report visibility are complete. Finish M3 in a new output
   workspace before starting M4.

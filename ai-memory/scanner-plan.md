@@ -5,13 +5,16 @@ and trace-chain refresh DONE; M2 native report visibility DONE; M3 real-run
 validation IN PROGRESS**. M3 used the real Simple Calculator v85 run
 `b8e85b99-a5f9-496d-b3a4-e15cb1deca73`: download verification passed for all
 4 APK components, reports were regenerated, all 4 evidence bundles froze and
-passed `verify-workspace`, but M3 is blocked by inconsistent cross-APK JNI
-metrics/inventory (7 mapped + 7 unmapped for 7 exports) and absent per-stage
-`status.json` files. The 758 MB JSON / 1.13 GB HTML report is also a scale
-constraint. The M3 follow-up is to fix those output mismatches and validate in
-a new workspace; do not mutate the frozen evidence. P8 remains PARTIAL:
+passed `verify-workspace`. A cross-APK JNI reconciliation fix now passes on a
+temporary staging copy of the real data: 7 exports mapped, 0 unmapped, and
+the HTML section agrees. The frozen report is still pre-fix and has the old
+7-mapped/7-unmapped inconsistency. No per-stage `status.json` writer exists;
+the original bundles contain none. M3 remains open until the status outputs
+exist and a post-fix full run/report is generated in a new workspace. Do not
+mutate the frozen evidence. The 758 MB JSON / 1.13 GB HTML report is also a
+scale constraint. P8 remains PARTIAL:
 handoff/freeze mechanics exist, but model dry-run, output-contract enforcement,
-and volume hierarchy are not validated. Full suite: **383 passed**. Current
+and volume hierarchy are not validated. Full suite: **384 passed**. Current
 open work is tracked in
 [PRODUCT-RESCUE-BOARD.md](../docs/engineering/PRODUCT-RESCUE-BOARD.md).
 The older 2026-11-16 status snapshots below are retained as history, not as the
