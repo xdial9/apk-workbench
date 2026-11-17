@@ -62,6 +62,13 @@ MAX_EMBEDDED_LIBRARY_BYTES = 128 * 1024 * 1024
 MAX_EMBEDDED_BYTES_TOTAL = 256 * 1024 * 1024
 MAX_EMBEDDED_LIBRARIES = 32
 
+# Code-bearing member extraction (P6). Same cap/diagnostic structure as
+# extract_embedded_libraries: every cap is a diagnostic, never a silent drop.
+# Members stream to disk in 1 MiB chunks so a large member cannot OOM.
+CODE_MEMBER_SUFFIXES = (".dex", ".jar", ".apk")
+# zip-in-zip-in-zip is enough; deeper nesting is a diagnostic, not a silent stop.
+MAX_CONTAINER_DEPTH = 3
+
 SECRET_KEYWORDS = (
     "secret", "passwd", "password", "api_key", "apikey", "api-key",
     "private_key", "private-key", "credential", "auth_token", "access_token",
@@ -450,6 +457,194 @@ def extract_embedded_libraries(
                     path=target,
                 ))
                 counters["libraries_extracted"] += 1
+    return embedded
+
+
+@dataclass
+class EmbeddedCode:
+    """A code-bearing member (.dex/.jar/.apk) inside a container, cited through the container.
+
+    ``citation`` is the full container chain, e.g. ``assets/plugins.apk!classes2.dex``
+    or ``assets/plugin.zip!inner.jar!classes3.dex``. ``depth`` is the nesting
+    depth (0 = directly in a top-level container).
+    """
+
+    citation: str
+    container: str
+    member: str
+    size: int
+    path: Path
+    depth: int = 0
+
+
+def _extract_code_from_zip(
+    archive: zipfile.ZipFile,
+    citation_prefix: str,
+    depth: int,
+    max_depth: int,
+    member_suffixes: tuple[str, ...],
+    state: dict[str, Any],
+    embedded: list[EmbeddedCode],
+) -> None:
+    """Recursively extract code-bearing members from one open zip archive.
+
+    ``state`` holds shared mutable counters (total_bytes, diagnostics, counters)
+    so recursion across nested containers sees the same budgets.
+    """
+    diagnostics = state["diagnostics"]
+    counters = state["counters"]
+
+    members = [
+        info for info in archive.infolist()
+        if not info.is_dir()
+        and info.filename.lower().endswith(member_suffixes)
+    ]
+    counters["members_found"] += len(members)
+    if len(members) > MAX_MEMBERS_PER_CONTAINER:
+        diagnostics.append({
+            "code": "code_container_member_limit",
+            "message": (
+                f"{citation_prefix}: {len(members)} code members, scanning "
+                f"first {MAX_MEMBERS_PER_CONTAINER}"
+            ),
+        })
+        members = members[:MAX_MEMBERS_PER_CONTAINER]
+
+    for info in members:
+        # Depth limit on nested containers: at or past max_depth, stop
+        # scanning this container's contents entirely (evidence, not silent drop).
+        if depth >= max_depth:
+            diagnostics.append({
+                "code": "code_container_depth_limit",
+                "message": (
+                    f"{citation_prefix}: container depth {depth} >= max "
+                    f"{max_depth}; contents not scanned"
+                ),
+            })
+            counters["members_skipped"] += 1
+            continue
+
+        if (
+            info.file_size > MAX_EMBEDDED_LIBRARY_BYTES
+            or state["total_bytes"] + info.file_size > MAX_EMBEDDED_BYTES_TOTAL
+        ):
+            diagnostics.append({
+                "code": "code_embedded_byte_limit",
+                "message": (
+                    f"{citation_prefix}!{info.filename}: {info.file_size} bytes "
+                    "exceeds the embedded extraction budget"
+                ),
+            })
+            counters["members_skipped"] += 1
+            continue
+
+        fd, temporary_name = tempfile.mkstemp(
+            prefix="apk-surface-code-", suffix=Path(info.filename).suffix
+        )
+        target = Path(temporary_name)
+        try:
+            with archive.open(info) as source, os.fdopen(fd, "wb") as sink:
+                shutil.copyfileobj(source, sink, length=1 << 20)
+        except (zipfile.BadZipFile, OSError, RuntimeError) as exc:
+            target.unlink(missing_ok=True)
+            diagnostics.append({
+                "code": "code_container_member_unreadable",
+                "message": f"{citation_prefix}!{info.filename}: {exc}",
+            })
+            counters["members_skipped"] += 1
+            continue
+
+        size = target.stat().st_size
+        state["total_bytes"] += size
+
+        citation = f"{citation_prefix}!{info.filename}"
+        embedded.append(EmbeddedCode(
+            citation=citation,
+            container=citation_prefix.rsplit("!", 1)[0] if "!" in citation_prefix else citation_prefix,
+            member=info.filename,
+            size=size,
+            path=target,
+            depth=depth,
+        ))
+        counters["code_extracted"] += 1
+
+        # Recurse into nested .jar/.apk to find their .dex members.
+        if info.filename.lower().endswith((".jar", ".apk")):
+            try:
+                nested_archive = zipfile.ZipFile(target)
+            except (zipfile.BadZipFile, OSError) as exc:
+                diagnostics.append({
+                    "code": "code_container_unreadable",
+                    "message": f"{citation}: {exc}",
+                })
+                continue
+            with nested_archive:
+                _extract_code_from_zip(
+                    archive=nested_archive,
+                    citation_prefix=citation,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    member_suffixes=member_suffixes,
+                    state=state,
+                    embedded=embedded,
+                )
+
+
+def extract_embedded_code(
+    root: Path,
+    containers: list[str],
+    member_suffixes: tuple[str, ...] = CODE_MEMBER_SUFFIXES,
+    diagnostics: list[dict[str, str]] | None = None,
+    counters: dict[str, int] | None = None,
+    max_depth: int | None = None,
+) -> list[EmbeddedCode]:
+    """Stream code-bearing members out of zip/APK/JAR containers into temp files.
+
+    Follows the same cap/diagnostic structure as extract_embedded_libraries:
+    every cap is reported as a diagnostic and flips coverage to partial —
+    nothing is silently dropped. Members are streamed in 1 MiB chunks so a
+    large member cannot OOM.
+
+    The citation keeps the full container chain so a byte offset inside the
+    member stays resolvable: ``assets/plugins.apk!classes2.dex``,
+    ``assets/plugin.zip!inner.jar!classes3.dex``.
+
+    Nested containers (.jar/.apk inside .zip) are recursed up to ``max_depth``;
+    hitting the limit produces a ``code_container_depth_limit`` diagnostic.
+    """
+    if max_depth is None:
+        max_depth = MAX_CONTAINER_DEPTH
+    embedded: list[EmbeddedCode] = []
+    diagnostics = diagnostics if diagnostics is not None else []
+    counters = counters if counters is not None else {
+        "containers_scanned": 0,
+        "members_found": 0,
+        "members_skipped": 0,
+        "code_extracted": 0,
+    }
+    state = {"total_bytes": 0, "diagnostics": diagnostics, "counters": counters}
+
+    for container_rel in containers[:MAX_CONTAINERS]:
+        container_path = root / container_rel
+        try:
+            archive = zipfile.ZipFile(container_path)
+        except (zipfile.BadZipFile, OSError) as exc:
+            diagnostics.append({
+                "code": "code_container_unreadable",
+                "message": f"{container_rel}: {exc}",
+            })
+            continue
+        counters["containers_scanned"] += 1
+        with archive:
+            _extract_code_from_zip(
+                archive=archive,
+                citation_prefix=container_rel,
+                depth=0,
+                max_depth=max_depth,
+                member_suffixes=member_suffixes,
+                state=state,
+                embedded=embedded,
+            )
     return embedded
 
 

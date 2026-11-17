@@ -46,7 +46,7 @@ Everything below is the fix ladder. P0-P1 are done and verified.
 | P3 | Code model: class/method/field inventory, call graph v2, reflection sites | **DONE** | `3de13fe` |
 | P4 | Link graph: typed edges with two cites each + entry_points | **DONE** | `2c3d535` |
 | P5 | Detection breadth: 11 deduction templates, rule catalog 19 -> ~60 | **DONE** | P5 commit |
-| P6 | Containers: extract `.dex`/`.jar`/nested zips and analyse them | queued | — |
+| P6 | Containers: extract `.dex`/`.jar`/nested zips and analyse them | **DONE** | P6 commit |
 | P7 | Scale: single-pass streaming, checkpoint, shard by unit | queued | — |
 | P8 | Handoff: `surface/` layout, bundle aggregation, workbook v2, prompts | queued | — |
 

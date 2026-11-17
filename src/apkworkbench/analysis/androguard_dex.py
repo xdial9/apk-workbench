@@ -182,6 +182,362 @@ def _looks_like_relative_api_path(value: str) -> bool:
     return bool(RELATIVE_PATH_RE.fullmatch(value))
 
 
+def _analyze_dex_payloads(
+    dex_payloads: list[tuple[bytes, str | None]],
+    target_sdk: int,
+) -> dict[str, Any]:
+    """Core DEX analysis from raw dex byte payloads (in-process, no multiprocessing).
+
+    Each payload is paired with an optional ``source_citation`` — for top-level
+    APK DEX this is ``None``; for container-embedded DEX it is the
+    ``container!member`` chain (e.g. ``assets/plugins.apk!classes2.dex``).
+    Every class/method/reference/string entry originating from a payload carries
+    ``dex_source`` set to that citation, so the AI can tell which container a
+    finding came from.
+
+    Reuses the exact ``DEX(dex_bytes, using_api=target_sdk)`` call already used
+    for the top-level case.
+    """
+    from androguard.core.analysis.analysis import Analysis
+    from androguard.core.dex import DEX
+
+    if not dex_payloads:
+        return {
+            "status": "partial",
+            "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
+            "apk": {
+                "package": None,
+                "version_code": None,
+                "version_name": None,
+                "min_sdk": None,
+                "target_sdk": target_sdk,
+                "effective_target_sdk": target_sdk,
+            },
+            "metrics": {
+                "dex_files": 0,
+                "classes": 0,
+                "internal_methods": 0,
+                "class_model_count": 0,
+                "method_model_count": 0,
+                "string_class_index_entries": 0,
+                "reflection_site_count": 0,
+                "external_methods_without_callers": 0,
+            },
+            "coverage": {"code_model": "not_applicable"},
+            "diagnostics": [{"code": "dex_not_found", "message": "No DEX payloads were provided for analysis."}],
+            "class_model": [],
+            "method_model": [],
+            "string_class_index": {},
+            "reflection_sites": [],
+            "external_method_references": [],
+            "internal_call_graph": [],
+            "dex_api_strings": [],
+            "permission_api_usage": [],
+            "limitations": ["No DEX code was available for semantic cross-reference analysis."],
+        }
+
+    dx = Analysis()
+    dex_objects = []
+    dex_sources: dict[int, str | None] = {}
+    for index, (dex_bytes, source_citation) in enumerate(dex_payloads):
+        vm = DEX(dex_bytes, using_api=target_sdk)
+        dx.add(vm)
+        dex_objects.append(vm)
+        dex_sources[id(vm)] = source_citation
+    dx.create_xref()
+
+    # DEX-of-origin index: position in dx.vms == order of payloads.
+    dex_index_by_vm = {id(vm): index for index, vm in enumerate(dex_objects)}
+    internal_methods = [method for method in dx.get_internal_methods()]
+    external_methods = [method for method in dx.get_external_methods()]
+    internal_call_graph: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, str]] = []
+    # CAP-FREE: no cap on call edges. Every edge is preserved.
+    for caller in internal_methods:
+        caller_dex = _method_dex_index(dex_index_by_vm, caller)
+        for _class_obj, callee, offset in caller.get_xref_to():
+            internal_call_graph.append({
+                "caller": _method_name(caller),
+                "callee": _method_name(callee),
+                "offset": int(offset),
+                "dex_class": caller_dex,
+                "dex_source": dex_sources.get(
+                    id(dx.vms[caller_dex]) if caller_dex is not None else None
+                ),
+            })
+
+    # ---- P3 code model: class inventory + method inventory --------------------
+    internal_classes = list(dx.get_internal_classes())
+    class_model: list[dict[str, Any]] = []
+    method_model: list[dict[str, Any]] = []
+    code_model_status = "success" if internal_classes else "not_applicable"
+    for class_analysis in internal_classes:
+        try:
+            class_def = class_analysis.get_vm_class()
+            class_name = str(class_def.get_name())
+            method_annotations = _method_annotation_types(class_def)
+            source_file_index = int(class_def.get_source_file_idx())
+            source_file: str | None = None
+            if source_file_index != NO_SOURCE_FILE_INDEX:
+                source_value = class_def.CM.get_string(source_file_index)
+                source_file = str(source_value) if source_value is not None else None
+            methods = list(class_analysis.get_methods())
+            fields = list(class_analysis.get_fields())
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
+            code_model_status = "partial"
+            diagnostics.append({
+                "code": "class_model_incomplete",
+                "message": f"{type(exc).__name__}: {exc}",
+            })
+            continue
+        class_dex_index = _class_dex_index(dex_index_by_vm, class_def)
+        class_source = dex_sources.get(
+            id(dx.vms[class_dex_index]) if class_dex_index is not None else None
+        )
+        class_model.append({
+            "dex_index": class_dex_index,
+            "dex_source": class_source,
+            "class_name": class_name,
+            "access_flags": str(class_def.get_access_flags_string()),
+            "superclass": str(class_def.get_superclassname()),
+            "interfaces": [str(name) for name in class_def.get_interfaces()],
+            "source_file": source_file,
+            "method_count": len(methods),
+            "field_count": len(fields),
+            "annotations": [str(name) for name in class_def.get_annotations()],
+        })
+        for method in methods:
+            try:
+                method_index = int(method.get_method().get_method_idx())
+            except (AttributeError, TypeError, ValueError):
+                method_index = -1
+            method_model.append({
+                "class_name": class_name,
+                "dex_index": class_dex_index,
+                "dex_source": class_source,
+                "method_name": str(method.name),
+                "full_name": _method_name(method),
+                "access_flags": str(method.get_access_flags_string()),
+                "descriptor": str(method.descriptor),
+                "annotations": list(method_annotations.get(method_index, [])),
+            })
+    if len(class_model) != len(internal_classes):
+        code_model_status = "partial"
+
+    external_references: list[dict[str, Any]] = []
+    network_caller_names: set[str] = set()
+    external_methods_without_callers = 0
+    # CAP-FREE: no cap on external methods. Every referenced method is preserved.
+    for method in external_methods:
+        callers = _safe_xrefs(method)
+        class_name = str(getattr(method, "class_name", ""))
+        category = _api_category(class_name)
+        if category in {"network", "webview"}:
+            network_caller_names.update(_method_name(caller) for _class_obj, caller, _offset in callers)
+        if not callers:
+            external_methods_without_callers += 1
+        entry = {
+            "owner": class_name,
+            "method": str(getattr(method, "name", "")),
+            "descriptor": str(getattr(method, "descriptor", "")),
+            "full_name": _method_name(method),
+            "category": category,
+            "android_api": bool(method.is_android_api()),
+            "dex_class": None,
+            "dex_source": None,
+            "call_sites": [],
+        }
+        for _class_obj, caller, offset in callers:
+            caller_dex = _method_dex_index(dex_index_by_vm, caller)
+            entry["call_sites"].append({
+                "caller": _method_name(caller),
+                "caller_class": str(getattr(caller, "class_name", "")),
+                "offset": int(offset),
+                "dex_class": caller_dex,
+                "dex_source": dex_sources.get(
+                    id(dx.vms[caller_dex]) if caller_dex is not None else None
+                ),
+            })
+        caller_dex_indexes = {site["dex_class"] for site in entry["call_sites"]}
+        if len(caller_dex_indexes) == 1:
+            entry["dex_class"] = entry["call_sites"][0]["dex_class"]
+            entry["dex_source"] = entry["call_sites"][0]["dex_source"]
+        external_references.append(entry)
+
+    # ---- P3 reflection sites (one-hop, never guessed) -------------------------
+    reflection_sites: list[dict[str, Any]] = []
+    reflection_callers: set[str] = set()
+    string_evidence_by_caller: dict[str, list[tuple[int, str]]] = {}
+    for entry in external_references:
+        api = f"{entry['owner']}->{entry['method']}"
+        if api not in REFLECTION_APIS:
+            continue
+        for call_site in entry["call_sites"]:
+            reflection_callers.add(call_site["caller"])
+            reflection_sites.append({
+                "caller": call_site["caller"],
+                "caller_class": call_site["caller_class"],
+                "api": api,
+                "offset": call_site["offset"],
+                "argument_resolved": False,
+                "resolved_target": None,
+                "resolution_kind": None,
+                "unresolved_reason": None,
+            })
+
+    dex_api_strings: list[dict[str, Any]] = []
+    seen_strings: set[str] = set()
+    string_class_index: dict[str, list[str]] = {}
+    # CAP-FREE: no cap on string candidates. Every candidate is preserved.
+    for string_item in dx.get_strings():
+        value = str(string_item.get_value())
+        url_matches = [match.group(0).rstrip(".,);]}:") for match in URL_RE.finditer(value)]
+        domain_matches = [match.group(0).lower().rstrip(".") for match in DOMAIN_RE.finditer(value)]
+        if _is_static_asset_path(value):
+            domain_matches = []
+        ip_matches = [match.group(0) for match in IPV4_RE.finditer(value)]
+        string_xrefs = list(string_item.get_xref_from(with_offset=True))
+        caller_names = {_method_name(caller) for _class_obj, caller, _offset in string_xrefs}
+        network_call_context = bool(caller_names & network_caller_names)
+        if string_xrefs:
+            referencing_classes = sorted(
+                {
+                    str(getattr(caller, "class_name", ""))
+                    for _class_obj, caller, _offset in string_xrefs
+                }
+                - {""}
+            )
+            if referencing_classes:
+                string_class_index[value] = referencing_classes
+            for _class_obj, caller, offset in string_xrefs:
+                caller_name = _method_name(caller)
+                if caller_name in reflection_callers:
+                    string_evidence_by_caller.setdefault(caller_name, []).append(
+                        (int(offset), value)
+                    )
+        relative_path_candidate = (
+            network_call_context and _looks_like_relative_api_path(value)
+        )
+        is_route = bool(ROUTE_RE.search(value)) or relative_path_candidate
+        is_limit = bool(RATE_LIMIT_RE.search(value))
+        headers = sorted({match.group(1).lower() for match in HEADER_RE.finditer(value)})
+        if not (
+            url_matches or domain_matches or ip_matches or is_route or is_limit or headers
+        ):
+            continue
+        if value in seen_strings:
+            continue
+        seen_strings.add(value)
+        references = []
+        # CAP-FREE: keep ALL callers per string.
+        for class_obj, caller, offset in string_xrefs:
+            references.append({
+                "caller": _method_name(caller),
+                "caller_class": str(getattr(caller, "class_name", "")),
+                "offset": int(offset),
+            })
+        dex_api_strings.append({
+            "value": value,
+            "urls": url_matches,
+            "domains": sorted(set(domain_matches)),
+            "ip_addresses": sorted(set(ip_matches)),
+            "route_candidate": is_route,
+            "relative_path_candidate": relative_path_candidate,
+            "network_call_context": network_call_context,
+            "rate_limit_or_retry_indicator": is_limit,
+            "http_header_candidates": headers,
+            "references": references,
+            "reference_count": len(string_xrefs),
+        })
+
+    # One-hop reflection resolution.
+    for site in reflection_sites:
+        resolution_kind = REFLECTION_APIS[site["api"]]
+        if resolution_kind is None:
+            site["unresolved_reason"] = "no_literal_argument"
+            continue
+        preceding = [
+            (offset, target)
+            for offset, target in string_evidence_by_caller.get(site["caller"], [])
+            if offset < site["offset"]
+        ]
+        if not preceding:
+            site["unresolved_reason"] = "no_string_constant_before_call_site"
+            continue
+        preceding.sort(key=lambda item: (-item[0], item[1]))
+        site["argument_resolved"] = True
+        site["resolved_target"] = preceding[0][1]
+        site["resolution_kind"] = resolution_kind
+    reflection_sites.sort(key=lambda site: (site["caller"], site["offset"], site["api"]))
+
+    permission_api_usage = []
+    permission_mapping_status = "success"
+    try:
+        for api_method, permissions in dx.get_permissions(target_sdk):
+            permission_api_usage.append({
+                "api": api_method,
+                "permissions": list(permissions),
+            })
+    except Exception as exc:  # noqa: BLE001
+        permission_mapping_status = "partial"
+        diagnostics.append({
+            "code": "permission_mapping_failed",
+            "message": f"{type(exc).__name__}: {exc}",
+        })
+
+    return {
+        "status": "success",
+        "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
+        "apk": {
+            "package": None,
+            "version_code": None,
+            "version_name": None,
+            "min_sdk": None,
+            "target_sdk": target_sdk,
+            "effective_target_sdk": target_sdk,
+        },
+        "metrics": {
+            "dex_files": len(dex_objects),
+            "classes": len(internal_classes),
+            "external_classes_referenced": 0,
+            "internal_methods": len(internal_methods),
+            "external_methods_referenced": len(external_references),
+            "external_methods_without_callers": external_methods_without_callers,
+            "internal_call_graph_edges": len(internal_call_graph),
+            "dex_api_string_candidates": len(dex_api_strings),
+            "permission_api_usage": len(permission_api_usage),
+            "class_model_count": len(class_model),
+            "method_model_count": len(method_model),
+            "string_class_index_entries": len(string_class_index),
+            "reflection_site_count": len(reflection_sites),
+        },
+        "coverage": {
+            "dex_parsing": "success",
+            "method_cross_references": "success",
+            "external_api_usage": "success",
+            "dex_api_strings": "success",
+            "permission_api_usage": permission_mapping_status,
+            "code_model": code_model_status,
+            "runtime_behavior": "not_performed",
+        },
+        "class_model": class_model,
+        "method_model": method_model,
+        "string_class_index": string_class_index,
+        "reflection_sites": reflection_sites,
+        "external_method_references": external_references,
+        "internal_call_graph": internal_call_graph,
+        "dex_api_strings": dex_api_strings,
+        "permission_api_usage": permission_api_usage,
+        "diagnostics": diagnostics,
+        "limitations": [
+            "Androguard static XREFs describe declared DEX references, not proof that every branch executes.",
+            "Android API-to-permission mapping is version-specific and can be incomplete.",
+            "Native libraries, reflection, obfuscated strings, dynamically loaded code, and server behavior require separate analysis.",
+            "No application code was executed and no discovered API was contacted.",
+        ],
+    }
+
+
 def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
     from androguard.core.analysis.analysis import Analysis
     from androguard.core.apk import APK

@@ -91,7 +91,16 @@ surface.txt/plan.txt checkboxes if applicable.
   facts (view_count/views/ids/custom_views) and `custom_view` facts. New
   coverage keys file_provider_paths + layout_inventory; metrics
   file_provider_root_count / layout_count / custom_view_count.
-  STATE: 365 tests green, P2/P3/P4 COMMITTED, P5 DONE (2026-11-17, worktree).
+  STATE: 370 tests green, P2/P3/P4/P5 COMMITTED, P6 DONE (2026-11-17, worktree).
+  P6: extract_embedded_code in surface/native.py generalises the
+  extract_embedded_libraries cap/diagnostic structure to .dex/.jar/.apk
+  members, parameterized on suffix with MAX_CONTAINER_DEPTH=3 (depth-limit
+  hit = diagnostic, never silent drop). _analyze_dex_payloads in
+  androguard_dex.py accepts raw dex bytes with dex_source citations
+  ("container!member!nested.dex") on every class_model/method_model/
+  external_method_reference/dex_api_string entry. apk_surface.py wires
+  extracted .dex members into dex_analysis. +5 adversarial tests in
+  tests/test_surface_embedded_code.py.
   P5: CODE_RULES 19 -> 29 (added certificate_pinning_present/bypass,
   keystore_credential_access, sql_string_concatenation, path_traversal,
   intent_redirection, overlay_window, clipboard_access, accessibility_service,

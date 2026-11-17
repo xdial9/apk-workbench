@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from apkworkbench.analysis.androguard_dex import analyze_apk_dex
+from apkworkbench.analysis.androguard_dex import analyze_apk_dex, _analyze_dex_payloads
 from apkworkbench.analysis.surface.classify import (
     TEXT_SUFFIXES,
     classify_decoded_tree,
@@ -47,6 +47,7 @@ from apkworkbench.analysis.surface.facts import FactStore, package_root_histogra
 from apkworkbench.analysis.surface.native import (
     NativeMethodIndex,
     analyze_native,
+    extract_embedded_code,
     extract_library_loads,
 )
 from apkworkbench.analysis.surface.manifest_v2 import (
@@ -1096,6 +1097,98 @@ def analyze_apk_surface(
             **native_analysis.metrics,
         },
     }
+
+    # ---- P6: extract code-bearing members (.dex/.jar/.apk) from containers ----
+    # Nested containers (.jar/.apk inside .zip) are recursed by
+    # extract_embedded_code up to MAX_CONTAINER_DEPTH. Every extracted .dex is
+    # fed to the DEX analyzer with container!member citations. Works whether or
+    # not a source APK file is available.
+    code_containers = sorted(
+        entry.relative for entry in tree.entries
+        if entry.content_kind == "zip"
+        and entry.suffix.lower() in {".zip", ".apk", ".jar", ".aar"}
+    )
+    embedded_code = extract_embedded_code(
+        root, code_containers,
+        diagnostics=result.setdefault("diagnostics", []),
+    )
+    temp_paths: list[Path] = []
+    try:
+        embedded_dex = [
+            item for item in embedded_code
+            if item.member.lower().endswith(".dex")
+        ]
+        temp_paths.extend(item.path for item in embedded_code)
+        if embedded_dex:
+            _emit_progress(
+                progress,
+                f"  [Androguard] Analyzing {len(embedded_dex)} embedded DEX member(s) from containers",
+            )
+            embedded_payloads = [
+                (item.path.read_bytes(), item.citation) for item in embedded_dex
+            ]
+            target_sdk = int(
+                result.get("manifest", {}).get("target_sdk") or 0
+            )
+            embedded_result = _analyze_dex_payloads(
+                embedded_payloads, target_sdk=target_sdk
+            )
+            dex_result = result.setdefault("dex_analysis", {
+                "status": "success",
+                "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
+                "class_model": [], "method_model": [],
+                "external_method_references": [], "internal_call_graph": [],
+                "dex_api_strings": [], "reflection_sites": [],
+                "permission_api_usage": [], "string_class_index": {},
+                "metrics": {},
+                "diagnostics": [], "limitations": [],
+            })
+            for key in ("class_model", "method_model",
+                        "external_method_references", "internal_call_graph",
+                        "dex_api_strings", "reflection_sites",
+                        "permission_api_usage"):
+                dex_result.setdefault(key, []).extend(
+                    embedded_result.get(key, [])
+                )
+            top_sci = dex_result.setdefault("string_class_index", {})
+            for value, classes in embedded_result.get("string_class_index", {}).items():
+                if value in top_sci:
+                    merged = set(top_sci[value])
+                    merged.update(classes)
+                    top_sci[value] = sorted(merged)
+                else:
+                    top_sci[value] = list(classes)
+            top_metrics = dex_result.setdefault("metrics", {})
+            for key in ("dex_files", "classes", "internal_methods",
+                        "external_methods_referenced",
+                        "external_methods_without_callers",
+                        "internal_call_graph_edges",
+                        "dex_api_string_candidates",
+                        "permission_api_usage", "class_model_count",
+                        "method_model_count", "string_class_index_entries",
+                        "reflection_site_count"):
+                top_metrics[key] = (
+                    top_metrics.get(key, 0) + embedded_result.get("metrics", {}).get(key, 0)
+                )
+            dex_result.setdefault("diagnostics", []).extend(
+                embedded_result.get("diagnostics", [])
+            )
+            dex_result.setdefault("limitations", []).extend(
+                embedded_result.get("limitations", [])
+            )
+            if embedded_result.get("status") != "success":
+                result["status"] = "partial"
+            result["coverage"]["dex_semantic_analysis"] = dex_result.get("status", "failed")
+        elif code_containers:
+            # Containers exist but no extractable .dex members (all skipped by
+            # caps). Coverage is partial, not a bare success.
+            result["coverage"]["dex_semantic_analysis"] = "partial"
+        else:
+            result["coverage"]["dex_semantic_analysis"] = "not_applicable"
+    finally:
+        for path in temp_paths:
+            path.unlink(missing_ok=True)
+
     return finalize_result(result, tree_root=tree_root)
 
 
