@@ -22,6 +22,9 @@ from typing import Any
 FACTS_FILENAME = "facts.jsonl"
 LOCATION_MAP_FILENAME = "location_map.json"
 LOCATION_MAP_SCHEMA = 1
+PROMPTS_DIRNAME = "prompts"
+README_FILENAME = "README.txt"
+PROMPT_FILES = tuple(f"{index}.txt" for index in range(7))
 # CAP-FREE: VALUE_PREVIEW deleted. Location map must carry FULL value for AI matching.
 # Was 160 chars, hid full URLs/values from AI. Keep full.
 VALUE_PREVIEW = None  # deprecated, do not use to truncate
@@ -250,6 +253,79 @@ def build_location_map(
             LOCATION_MAP_FILENAME: "this index (generated, deterministic)",
         },
         "entries": entries,
+    }
+
+
+README_TEMPLATE = """APK-Workbench analysis bundle
+
+Start here, in order:
+  1. prompts/0.txt .. prompts/6.txt  (0.txt is the master prompt)
+  2. handoff.json                    (schema/tool/prompt versions + hashes)
+  3. surface/facts.jsonl             (one JSON fact per line)
+     surface/location_map.json       (index of every fact/finding with file:line)
+  4. apktool/                        (decoded application tree; one dir per split)
+Read trufflehog/ for secrets, manifest/ for acquisition provenance.
+Only ai_analysis/ is writable. Everything else is frozen evidence: do not edit.
+"""
+
+
+def prompts_source_dir() -> Path | None:
+    """Locate the shipped prompt chain, or ``None`` when not installed.
+
+    A checkout keeps it at ``<repo>/prompts``. An installed wheel may carry it
+    beside the package; an operator can always point at it explicitly.
+    """
+    candidates: list[Path] = []
+    env = os.environ.get("APKWORKBENCH_PROMPTS_DIR")
+    if env:
+        candidates.append(Path(env).expanduser())
+    here = Path(__file__).resolve()
+    candidates.extend(parent / PROMPTS_DIRNAME for parent in here.parents)
+    for candidate in candidates:
+        try:
+            if candidate.is_dir() and (candidate / "0.txt").is_file():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def deliver_prompts(
+    bundle_dir: str | Path, *, source: str | Path | None = None
+) -> dict[str, Any]:
+    """Copy the prompt chain + bootstrap README into ``bundle_dir``.
+
+    ``handoff.json`` used to publish only the prompts' hashes: an AI opened the
+    bundle, read "read 1.txt..6.txt", and the files were not there. The handoff
+    is not delivered until the instructions travel with the evidence.
+    """
+    target = Path(bundle_dir)
+    source_dir = Path(source) if source is not None else prompts_source_dir()
+    copied: list[str] = []
+    missing: list[str] = []
+    if source_dir is not None:
+        prompts_dir = target / PROMPTS_DIRNAME
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        for name in PROMPT_FILES:
+            candidate = source_dir / name
+            try:
+                payload = candidate.read_bytes()
+            except OSError:
+                missing.append(name)
+                continue
+            _atomic_write_bytes(prompts_dir / name, payload)
+            copied.append(name)
+    else:
+        missing = list(PROMPT_FILES)
+
+    readme = target / README_FILENAME
+    _atomic_write_bytes(readme, README_TEMPLATE.encode("utf-8"))
+    return {
+        "status": "delivered" if copied and not missing else "partial" if copied else "missing",
+        "source": str(source_dir) if source_dir is not None else None,
+        "copied": copied,
+        "missing": missing,
+        "readme": str(readme),
     }
 
 

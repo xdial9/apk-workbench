@@ -129,3 +129,49 @@ def test_resource_inventory_is_not_found_without_resource_dirs(tmp_path):
     result = analyze_apk_surface(root)
 
     assert result["coverage"]["resource_inventory"] == "not_found"
+
+
+def test_atomic_write_json_degrades_on_unserializable_object(tmp_path):
+    """A leaked third-party object must not abort a run (crash 2026-11-18)."""
+    import json
+
+    from apkworkbench.analysis.apk_surface import (
+        NON_SERIALIZABLE_MARKER,
+        _atomic_write_json,
+    )
+
+    class MethodAnalysis:  # shape of the leaked Androguard object
+        def __repr__(self) -> str:
+            return "<MethodAnalysis leak>"
+
+    target = tmp_path / "surface" / "static-analysis.json"
+    payload = {
+        "status": "success",
+        "diagnostics": [],
+        "inventory": {"methods": [MethodAnalysis()]},
+        "facts": [{"kind": "endpoint", "value": "https://a.b/"}],
+    }
+    _atomic_write_json(target, payload)
+
+    written = json.loads(target.read_text(encoding="utf-8"))
+    # Everything else is intact; the bad value is an explicit marker.
+    assert written["facts"] == [{"kind": "endpoint", "value": "https://a.b/"}]
+    marker = written["inventory"]["methods"][0]
+    assert marker[NON_SERIALIZABLE_MARKER] is True
+    assert "MethodAnalysis" in marker["type"]
+    # Degradation is recorded, and the artifact is no longer called success.
+    assert written["status"] == "partial"
+    codes = [item["code"] for item in written["diagnostics"]]
+    assert "non_serializable_value" in codes
+
+
+def test_atomic_write_json_is_unchanged_for_serializable_payload(tmp_path):
+    import json
+
+    from apkworkbench.analysis.apk_surface import _atomic_write_json
+
+    target = tmp_path / "static-analysis.json"
+    payload = {"status": "success", "diagnostics": [], "facts": [{"a": 1}]}
+    _atomic_write_json(target, payload)
+
+    assert json.loads(target.read_text(encoding="utf-8")) == payload

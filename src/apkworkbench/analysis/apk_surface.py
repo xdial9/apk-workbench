@@ -26,7 +26,7 @@ from apkworkbench.analysis.surface.classify import (
 )
 from apkworkbench.analysis.surface.checkpoint import Checkpoint, FactWriter
 from apkworkbench.analysis.surface.serialize import finalize_result
-from apkworkbench.analysis.surface.handoff import write_handoff
+from apkworkbench.analysis.surface.handoff import deliver_prompts, write_handoff
 from apkworkbench.analysis.surface.links import (
     build_entry_points,
     build_link_graph,
@@ -1651,27 +1651,81 @@ def _emit_progress(progress: Callable[[str], None] | None, message: str) -> None
         return
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
+NON_SERIALIZABLE_MARKER = "__non_serializable__"
+
+
+def _non_serializable_marker(obj: Any) -> dict[str, Any]:
+    """Replace one stray object with an explicit, greppable marker.
+
+    A single leaked Androguard object used to abort a multi-hour run at the
+    final write. The marker keeps the artifact loadable and names the type so
+    the leak is still visible instead of silently dropped.
+    """
+    kind = f"{type(obj).__module__}.{type(obj).__qualname__}"
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
+        preview = repr(obj)[:300]
+    except Exception:  # pragma: no cover - a broken __repr__ must not crash
+        preview = "<unrepresentable>"
+    return {NON_SERIALIZABLE_MARKER: True, "type": kind, "repr": preview}
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Atomically write ``payload`` as JSON; never raise on a stray object.
+
+    Non-serializable values are replaced by ``NON_SERIALIZABLE_MARKER`` records
+    and the payload is annotated (diagnostic + ``partial`` status) so the
+    artifact stays honest. This is the last line of defence for long runs: a
+    leaked third-party object must degrade the artifact, not destroy it.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    markers: list[str] = []
+
+    def _default(obj: Any) -> dict[str, Any]:
+        marker = _non_serializable_marker(obj)
+        markers.append(str(marker["type"]))
+        return marker
+
+    attempts = 0
+    while True:
+        attempts += 1
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        temporary = Path(temporary_name)
         try:
-            os.fsync(directory_fd)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                del markers[:]
+                json.dump(
+                    payload, handle, ensure_ascii=False, indent=2, default=_default
+                )
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            if markers and attempts == 1:
+                # Record the degradation inside the artifact, then rewrite it
+                # once so the diagnostic is part of the published evidence.
+                unique = sorted(set(markers))
+                payload.setdefault("diagnostics", []).append({
+                    "code": "non_serializable_value",
+                    "message": (
+                        f"{len(markers)} value(s) were not JSON serializable and "
+                        f"were replaced with {NON_SERIALIZABLE_MARKER} markers: "
+                        + ", ".join(unique[:10])
+                    ),
+                })
+                if payload.get("status") == "success":
+                    payload["status"] = "partial"
+                continue
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            break
         finally:
-            os.close(directory_fd)
-    finally:
-        temporary.unlink(missing_ok=True)
+            temporary.unlink(missing_ok=True)
 
 
 def cross_apk_native_jni_match(
@@ -2153,7 +2207,8 @@ def refresh_secret_links(
         metrics["entry_point_count"] = len(entry_points)
         finalize_result(result, tree_root=citation_root)
         _atomic_write_json(static_path, result)
-        write_handoff(bundle_dir, result, tree_root=citation_root)
+        write_handoff(static_path.parent, result, tree_root=citation_root)
+        deliver_prompts(bundle_dir)
         summary["updated"] += 1
         if linkage_status == "failed":
             summary["failed"] += 1
@@ -2467,6 +2522,19 @@ def run_static_surface_analysis(
                     f"{len(link_entry_points)} entry points",
                 )
             finalize_result(result, tree_root=citation_root)
+            # The prompt chain is part of the deliverable: copy it into the
+            # bundle before the artifact is written so the status is recorded.
+            try:
+                result["handoff_prompts"] = deliver_prompts(output_root)
+            except OSError as exc:
+                result["handoff_prompts"] = {
+                    "status": "missing",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                }
+                result.setdefault("diagnostics", []).append({
+                    "code": "handoff_prompts_failed",
+                    "message": f"{type(exc).__name__}: {exc}",
+                })
             _atomic_write_json(target, result)
             # S8 handoff contract: the prompt chain reads surface/facts.jsonl
             # and surface/location_map.json. Emit both next to
@@ -2475,7 +2543,7 @@ def run_static_surface_analysis(
             # partial and the reason lands in diagnostics.
             try:
                 handoff_paths = write_handoff(
-                    output_root, result, tree_root=citation_root
+                    target.parent, result, tree_root=citation_root
                 )
             except OSError as exc:
                 result["status"] = "partial"

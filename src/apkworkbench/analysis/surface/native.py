@@ -807,7 +807,27 @@ def _analyze_targets(
             "native_strings": "not_applicable",
             "native_embedded_libraries": _embedded_coverage(analysis),
         }
+        # A component can load a library that lives in another split. Dropping
+        # the load sites here is what made every cross-component native join
+        # impossible: the base APK owns the Java caller, the split owns the
+        # .so. Keep every load as an unresolved fact so the run-level pass can
+        # resolve it against the bundle-wide library set.
+        for load in library_loads:
+            resolved = library_from_load_value(load.get("value"))
+            analysis.facts.append({
+                "kind": "native_load_unresolved",
+                "value": str(load.get("value")),
+                "evidence": {"path": load["path"], "line": load["line"]},
+                "extra": {
+                    "library": resolved,
+                    "java_literal": load.get("value"),
+                    "java_call": f"java.lang.System.{load.get('system_call')}",
+                    "reason": "no_native_library_in_component",
+                },
+            })
         analysis.metrics = _empty_metrics()
+        analysis.metrics["native_load_sites_total"] = len(library_loads)
+        analysis.metrics["native_load_sites_unresolved"] = len(library_loads)
         return
 
     known_names = {citation: citation for citation, _path in targets}
@@ -1516,6 +1536,7 @@ def _build_metrics(
         ),
         "native_libraries_with_load_site": with_load,
         "native_libraries_without_load_site": without_load,
+        "native_load_sites_total": len(analysis.load_sites) + len(unresolved_loads),
         "native_load_sites_unresolved": len(unresolved_loads),
         "native_symbol_facts_emitted": symbol_fact_count,
         "native_symbol_facts_sharded": sharded_symbols,

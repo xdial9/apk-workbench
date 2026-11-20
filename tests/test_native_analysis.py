@@ -239,6 +239,37 @@ def test_load_of_missing_library_is_recorded_with_reason(tmp_path):
     assert result["metrics"]["native_libraries_without_load_site"] == 1
 
 
+def test_load_sites_survive_a_component_without_native_libraries(tmp_path):
+    """Base APK owns the caller, the split owns the .so (cross-component join).
+
+    Dropping the load site here is what made every cross-component native
+    join impossible: the load must be preserved with a closed reason.
+    """
+    root = make_tree(tmp_path)
+    (root / "smali/com/example/Loader.smali").write_text(
+        ".class public Lcom/example/Loader;\n"
+        ".method public static init()V\n"
+        '    const-string v0, "good"\n'
+        "    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n"
+        "    return-void\n"
+        ".end method\n",
+        encoding="utf-8",
+    )
+
+    result = analyze_apk_surface(root)
+
+    assert result["coverage"]["native_libraries"] == "not_found"
+    assert result["metrics"]["native_load_sites_total"] == 1
+    assert result["metrics"]["native_load_sites_unresolved"] == 1
+    unresolved = facts_of(result, "native_load_unresolved")
+    assert len(unresolved) == 1
+    assert unresolved[0]["reason"] == "no_native_library_in_component"
+    assert unresolved[0]["library"] == "libgood.so"
+    assert unresolved[0]["evidence"] == [
+        {"path": "smali/com/example/Loader.smali", "line": 4}
+    ]
+
+
 def test_extract_library_loads_requires_a_real_const_string():
     text = (
         ".method public static init()V\n"
