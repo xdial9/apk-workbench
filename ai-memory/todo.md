@@ -1,30 +1,43 @@
 # RESUME FILE — APK-Workbench (current state 2026-11-17)
 
-**Current snapshot:** M0, M1, and M2 are complete. M3 real-run validation is
-in progress: the JNI inventory/metric reconciliation fix passed against a
-staging copy of real data, but the frozen report remains pre-fix and the
-pipeline has no per-stage `status.json` writer. `.venv/bin/python -m pytest
--q` reports 384 passed. Real run `b8e85b99-a5f9-496d-b3a4-e15cb1deca73` has 4
-frozen, verified APK component bundles; preserve them unchanged. Its reports
-are 758 MB JSON / 1.13 GB HTML. Emit status outputs and validate a post-fix
-full run in a new workspace before M4.
-The current delivery sequence is the product rescue board at
-`docs/engineering/PRODUCT-RESCUE-BOARD.md`.
+**Current snapshot:** The fresh run
+`fc75a20f-f08e-455c-a833-31806844280e` completed all stages for
+`com.simplemobiletools.calculator`; reconciliation is 4/4 complete, all 4
+bundles were frozen and verified, and the final JSON/HTML reports were
+generated. A post-run evidence audit found standalone DEX and secret-link
+mapping gaps. Source fixes now pass 398 tests and Ruff, including a real-payload
+check of both decoded Calculator asset DEX files. Trace generation was bounded
+to one shortest path per reachable entry-point/secret pair. A pipeline audit
+then found the runner overwrote standalone-DEX models with APK-only analysis;
+the runner now merges both models and offsets their DEX indexes. Embedded-Dex
+permission records now use JSON-safe method/call-site fields. The full suite
+passes 402 tests and Ruff. The frozen run is untouched; corrected reanalysis
+is running in a separate writable workspace. Link refresh, report
+regeneration, freeze, and verification remain before acceptance. See
+[`FIRST-FULL-PIPELINE-PLAN.md`](../docs/engineering/FIRST-FULL-PIPELINE-PLAN.md)
+and `ai-memory/scanner-plan.md` for current status.
 
-The original Unit 1 design and historical notes below are retained for context,
-but their old status/phase ordering is superseded by this current snapshot.
-Read `ai-memory/scanner-plan.md` and the rescue board before starting code.
+Readiness fixes include the refreshed Play delivery retry, consistent
+dotfile hashing, recursive fail-closed evidence freezing, and file-only
+package discovery. No APK is installed or executed. Do not call the scan
+360-complete or the AI handoff fully validated until the corrected analysis
+is reprocessed and P8 gates pass.
+
+The detailed Unit 1 and phase notes below are historical specifications;
+their old status and phase ordering are superseded. Before editing scanner
+code, read `ai-memory/scanner-plan.md`; for the next run-readiness task, use
+the linked first-full-pipeline guide.
 
 Read this first, then INDEX.md "CANONICAL DESIGN DECISIONS" (D-1..D-9),
 then appdev.txt §1 + §14 + §15. This file is the hands-on handoff; INDEX is
 the contract.
 
-Operating rule agreed with the user: ONE PHASE AT A TIME. Complete it, stop,
-report. The user reviews before the next phase starts. Do not push unless
-asked.
+The user explicitly authorized executing the first-full-pipeline plan
+end-to-end and requested an audit after every two phases. Follow the plan's
+gates and preserve evidence. Do not push unless asked.
 
 --------------------------------------------------------------------------------
-## CURRENT STATE — verified 2026-11-17
+## HISTORICAL STATUS SNAPSHOT — superseded 2026-11-17
 --------------------------------------------------------------------------------
 - Branch: `main` (do not push without explicit instruction).
 - P0-P7 are implemented. Unit 1 bundle freeze and `verify-workspace` are
@@ -33,20 +46,16 @@ asked.
 - Native ELF/JNI analysis, cross-APK JNI matching, typed links, and trace
   chains exist. M1 rebuilds them after TruffleHog and distinguishes
   successful-empty, failed, missing, and not-run scans. M2 adds a tested
-  native report view; current full suite: 384 passed.
+  native report view; the suite count at this historical snapshot was 384.
 - P8 is partial: a model dry-run, enforced output schemas, large-volume
   hierarchy, and split-component bundle aggregation remain unverified.
 - Real-app validation used Simple Calculator v85. Acquisition verification
   passed for 4 APK components; report generation completed; reconciliation
   accounted for 4/4 (1 complete, 3 complete-with-warnings); all 4 bundles
   froze and passed `verify-workspace`.
-- M3 remains in progress: a cross-APK JNI reconciliation fix passed on a
-  staging copy of the real run (7 mapped, 0 unmapped), but the immutable
-  report predates the fix and the pipeline has no `status.json` writer. Do
-  not mutate the frozen run; generate a new output workspace before M4.
-- M0 current-state synchronization, M1 post-scan secret-link integration,
-  and M2 native report visibility are complete. Finish M3 in a new output
-  workspace before starting M4.
+- This section predates the completed M3 status/report refresh and is retained
+  as historical context. See `ai-memory/INDEX.md` and the current first-full-
+  pipeline guide before selecting work.
 
 --------------------------------------------------------------------------------
 ## HISTORICAL PHASE ORDER — superseded by the product rescue board

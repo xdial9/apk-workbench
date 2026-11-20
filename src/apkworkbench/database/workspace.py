@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
@@ -834,9 +835,8 @@ class WorkspaceDatabase:
 
         Under D-2 (in-place freeze) the decoded APK and all generated artifacts
         become read-only after a successful run so tampering is detected by
-        verify-workspace.  Every file under the bundle gets its SHA-256 recorded
-        in a ``hashes.sha256`` file at the bundle root.  The caller may then
-        chmod the evidence subdirectories read-only.
+        verify-workspace. Every file under the bundle gets its SHA-256 recorded
+        in a ``hashes.sha256`` file at the bundle root.
         """
         bundle_dir = Path(bundle_dir)
         hash_path = bundle_dir / "hashes.sha256"
@@ -863,8 +863,6 @@ class WorkspaceDatabase:
                     continue
                 if fpath.name == "hashes.sha256" and len(parts) == 1:
                     continue
-                if fpath.name.startswith("."):
-                    continue
                 files.append(fpath)
         files.sort()
 
@@ -883,18 +881,57 @@ class WorkspaceDatabase:
             bundle_dir / "manifest",
             bundle_dir / "stages",
         ]
+        frozen_directories: set[Path] = set()
         for ev_dir in evidence_dirs:
-            if ev_dir.is_dir():
-                os.chmod(ev_dir, 0o555)
-        for fpath in files:
-            try:
+            if ev_dir.is_symlink() or not ev_dir.is_dir():
+                continue
+            for root, dirs, _filenames in os.walk(ev_dir, followlinks=False):
+                current = Path(root)
+                frozen_directories.add(current)
+                dirs[:] = [
+                    dirname for dirname in dirs
+                    if not (current / dirname).is_symlink()
+                ]
+        file_modes: dict[Path, int] = {}
+        directory_modes: dict[Path, int] = {}
+        hash_mode: int | None = None
+        try:
+            file_modes = {path: stat.S_IMODE(path.stat().st_mode) for path in files}
+            directory_modes = {
+                path: stat.S_IMODE(path.stat().st_mode) for path in frozen_directories
+            }
+            hash_mode = stat.S_IMODE(hash_path.stat().st_mode)
+            for fpath in files:
                 os.chmod(fpath, 0o444)
-            except OSError:
-                pass
-        if bundle_dir.is_dir():
-            for child in bundle_dir.iterdir():
-                if child.is_dir() and child.name.startswith("apktool"):
-                    os.chmod(child, 0o555)
+            for directory in sorted(
+                frozen_directories, key=lambda path: len(path.parts), reverse=True
+            ):
+                os.chmod(directory, 0o555)
+            os.chmod(hash_path, 0o444)
+        except OSError as exc:
+            rollback_errors: list[str] = []
+            for directory in sorted(
+                directory_modes, key=lambda path: len(path.parts)
+            ):
+                try:
+                    os.chmod(directory, directory_modes[directory])
+                except OSError as rollback_exc:
+                    rollback_errors.append(f"{directory}: {rollback_exc}")
+            for fpath, mode in file_modes.items():
+                try:
+                    os.chmod(fpath, mode)
+                except OSError as rollback_exc:
+                    rollback_errors.append(f"{fpath}: {rollback_exc}")
+            try:
+                if hash_mode is not None:
+                    os.chmod(hash_path, hash_mode)
+                hash_path.unlink()
+            except OSError as rollback_exc:
+                rollback_errors.append(f"{hash_path}: {rollback_exc}")
+            detail = f"Cannot make frozen evidence read-only: {exc}"
+            if rollback_errors:
+                detail += "; rollback errors: " + "; ".join(rollback_errors)
+            raise DatabaseError(detail) from exc
 
     def verify_workspace(self, folder: Path) -> dict[str, Any]:
         """Verify a frozen workspace bundle has not been tampered with.
@@ -917,6 +954,7 @@ class WorkspaceDatabase:
                 "mismatches": [],
                 "missing": [],
                 "extra": [],
+                "writable": [],
             }
 
         expected: dict[str, str] = {}
@@ -956,12 +994,24 @@ class WorkspaceDatabase:
         # Detect files added to the frozen folder after freeze. The writable
         # ai_analysis/ area and the hash file itself are allowed to change.
         extra: list[str] = []
+        writable: list[dict[str, str]] = []
         for root, dirs, filenames in os.walk(folder):
             rel_root = Path(root).relative_to(folder)
             parts = rel_root.parts
             if parts and parts[0] in {"ai_analysis", "database"}:
                 dirs[:] = []
                 continue
+            if parts and parts[0] in {"apktool", "surface", "trufflehog", "manifest", "stages"}:
+                current = Path(root)
+                if current.is_dir() and current.stat().st_mode & 0o222:
+                    writable.append({
+                        "path": current.relative_to(folder).as_posix(),
+                        "kind": "directory",
+                    })
+                dirs[:] = [
+                    dirname for dirname in dirs
+                    if not (current / dirname).is_symlink()
+                ]
             for fname in filenames:
                 fpath = Path(root) / fname
                 if fpath.is_symlink() or not fpath.is_file():
@@ -971,13 +1021,22 @@ class WorkspaceDatabase:
                     continue
                 if rel not in expected_keys:
                     extra.append(rel)
+                if rel in expected_keys and fpath.stat().st_mode & 0o222:
+                    writable.append({"path": rel, "kind": "file"})
+        if hash_path.stat().st_mode & 0o222:
+            writable.append({"path": "hashes.sha256", "kind": "file"})
         extra.sort()
+        writable.sort(key=lambda item: (item["path"], item["kind"]))
 
         result = {
-            "status": "ok" if not mismatches and not missing and not extra else "failed",
+            "status": (
+                "ok" if not mismatches and not missing and not extra and not writable
+                else "failed"
+            ),
             "mismatches": mismatches,
             "missing": missing,
             "extra": extra,
+            "writable": writable,
             "hash_file": str(hash_path),
         }
 

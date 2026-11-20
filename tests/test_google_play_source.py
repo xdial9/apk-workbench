@@ -192,7 +192,12 @@ def test_download_records_provenance_and_cleans_stale_partial_files(monkeypatch,
 
 def test_download_refreshes_stale_delivery_once_when_first_transfer_fails(monkeypatch, tmp_path):
     payloads = {"base.apk": b"refresh payload"}
-    play_files = [FakePlayFile("base.apk", payloads["base.apk"])]
+    original_delivery = object()
+    fresh_delivery = object()
+    original_file = FakePlayFile("base.apk", payloads["base.apk"])
+    original_file.url = "https://play.example.invalid/old-url"
+    refreshed_file = FakePlayFile("base.apk", payloads["base.apk"])
+    refreshed_file.url = "https://play.example.invalid/fresh-url"
     plan = gp.PlayBundlePlan(
         app=gp.PlayApp("com.example.app", "Example App", "Example Developer", "2.4.1", 241),
         files=(
@@ -207,14 +212,13 @@ def test_download_refreshes_stale_delivery_once_when_first_transfer_fails(monkey
         ),
         signer_sha256=("a" * 64,),
         _doc=_doc(),
-        _delivery=object(),
+        _delivery=original_delivery,
     )
-    state = {"downloader_calls": 0}
-    fresh_delivery = object()
+    state = {"downloader_calls": 0, "fetched_urls": []}
     reinspect = {"called": False}
 
     def fake_play_files(_package, delivery):
-        return play_files
+        return [refreshed_file if delivery is fresh_delivery else original_file]
 
     monkeypatch.setattr(gp.play_download, "play_files", fake_play_files)
 
@@ -225,6 +229,7 @@ def test_download_refreshes_stale_delivery_once_when_first_transfer_fails(monkey
         def fetch(self, item, directory):
             if state["downloader_calls"] == 1:
                 raise OSError("expired delivery URL")
+            state["fetched_urls"].append(item.url)
             (directory / item.name).write_bytes(payloads[item.name])
             return True
 
@@ -243,6 +248,7 @@ def test_download_refreshes_stale_delivery_once_when_first_transfer_fails(monkey
     assert {path.name for path in result.apk_files} == {"base.apk"}
     assert reinspect["called"] is True          # delivery was re-inspected
     assert state["downloader_calls"] == 2       # new authenticated downloader after refresh
+    assert state["fetched_urls"] == [refreshed_file.url]
 
 
 def test_download_aborts_when_fresh_delivery_diverges_from_frozen_plan(monkeypatch, tmp_path):

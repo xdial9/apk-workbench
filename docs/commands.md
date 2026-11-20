@@ -73,7 +73,7 @@ Options:
 - `--limit INTEGER`: maximum unique package IDs to save; default 15,000.
 - `--per-category INTEGER`: top-free chart cap per category; default 200.
 - `--per-query INTEGER`: search cap per query; default 516.
-- `--packages-file PATH`: UTF-8 file with one package ID per line; blank lines and lines beginning with `#` are ignored.
+- `--packages-file PATH`: UTF-8 file with one package ID per line; blank lines and lines beginning with `#` are ignored. When used alone (without `--query` or `--category`), only those IDs are catalogued and no broad Play discovery request is made.
 
 The catalog is saved to `database/google_play_discovery.csv`. The requested limit is not a promise that Google Play will return that many unique apps.
 

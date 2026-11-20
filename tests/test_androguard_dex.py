@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -350,6 +351,26 @@ def test_androguard_extracts_external_api_calls_strings_and_permission_usage(mon
     assert result["permission_api_usage"][0]["permissions"] == [
         "android.permission.ACCESS_FINE_LOCATION"
     ]
+
+
+def test_embedded_dex_permission_usage_is_json_serializable(monkeypatch):
+    methods = install_fake_androguard(monkeypatch)
+
+    result = androguard_dex._analyze_dex_payloads(
+        [(b"fake dex", "assets/embedded/classes.dex")],
+        target_sdk=35,
+    )
+
+    assert result["permission_api_usage"][0] == {
+        "api_method": methods["permission_method"].full_name,
+        "permissions": ["android.permission.ACCESS_FINE_LOCATION"],
+        "call_sites": [{
+            "caller": methods["caller"].full_name,
+            "caller_class": "Lcom/example/Main;",
+            "offset": 124,
+        }],
+    }
+    json.dumps(result)
 
 
 def test_class_model_shape_matches_dex_class_count(fixture_result):

@@ -227,7 +227,7 @@ def test_discover_accepts_valid_package_ids_from_packages_file(monkeypatch, tmp_
             pass
 
         def discover(self, **_kwargs):
-            return [], {}
+            raise AssertionError("file-only discovery must not query Google Play")
 
     monkeypatch.setattr(cli, "Config", lambda: config)
     monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-packages-file"))
@@ -258,7 +258,7 @@ def test_discover_rejects_invalid_package_ids_from_packages_file(monkeypatch, tm
             pass
 
         def discover(self, **_kwargs):
-            return [], {}
+            raise AssertionError("invalid package file must be rejected before discovery")
 
     monkeypatch.setattr(cli, "Config", lambda: config)
     monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-packages-file-invalid"))
@@ -384,7 +384,6 @@ def test_full_run_continues_to_trufflehog_when_some_apktool_output_exists(monkey
 
 def test_download_records_provenance_and_rerun_hygiene(monkeypatch, tmp_path):
     config = _config(tmp_path)
-    catalog = cli._catalog_path(config)
     payload = b"provenance-run apk bytes"
     digest = hashlib.sha256(payload).hexdigest()
     app = PlayApp("com.example.prov", "Prov App", "Example", "1.0", 7)

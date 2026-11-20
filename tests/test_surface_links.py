@@ -94,6 +94,7 @@ def built(tmp_path_factory):
     paths = write_links(output, graph, entry_points)
     return {
         "directory": output,
+        "apktool_root": root,
         "paths": paths,
         "graph": graph,
         "entry_points": entry_points,
@@ -294,12 +295,13 @@ def test_native_secret_edges_come_from_trufflehog_findings(built):
         "DecoderName": "PLAIN",
         "Verified": False,
         "SourceMetadata": {"Data": {"Filesystem": {
-            "file": str(built["directory"] / "apktool/lib/arm64-v8a/libdexfixture.so"),
+            "file": str(built["apktool_root"] / "lib/arm64-v8a/libdexfixture.so"),
             "line": 7,
         }}},
     }]
     graph = build_link_graph(
-        built["surface_result"], built["dex_result"], trufflehog_findings=findings
+        built["surface_result"], built["dex_result"],
+        trufflehog_findings=findings, finding_root=built["apktool_root"],
     )
     edge = _one(_edges(graph, "native->secret"))
     assert edge["from"].startswith("native:lib/arm64-v8a/libdexfixture.so::")
@@ -320,6 +322,236 @@ def test_native_secret_edges_come_from_trufflehog_findings(built):
     assert any(
         item["code"] == "link_native_secret_source_absent" for item in diagnostics
     )
+
+
+def test_absolute_smali_finding_path_maps_inside_apktool_root(built):
+    smali_path = built["apktool_root"] / "smali/com/example/Main.smali"
+    findings = [{
+        "DetectorName": "Generic API Key",
+        "Verified": False,
+        "SourceMetadata": {"Data": {"Filesystem": {
+            "file": str(smali_path),
+            "line": 20,
+        }}},
+    }]
+
+    graph = build_link_graph(
+        built["surface_result"],
+        built["dex_result"],
+        trufflehog_findings=findings,
+        finding_root=built["apktool_root"],
+    )
+
+    edge = _one(
+        _edges(graph, "method->secret"),
+        **{"from": "method:Lcom/example/Main; onCreate ()V"},
+    )
+    assert edge["citations"][1]["source_path"] == (
+        "apktool/smali/com/example/Main.smali"
+    )
+    assert edge["citations"][0]["line_start"] == 19
+    assert edge["citations"][1]["line_start"] == 20
+    assert len(_edges(graph, "method->secret")) == 1
+
+
+def test_smali_assets_finding_path_maps_to_exact_method(built):
+    source = built["apktool_root"] / "smali/com/example/Main.smali"
+    smali_path = (
+        built["apktool_root"]
+        / "smali_assets/audience_network/classes2/com/example/Main.smali"
+    )
+    smali_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, smali_path)
+    findings = [{
+        "DetectorName": "Generic API Key",
+        "Verified": False,
+        "SourceMetadata": {"Data": {"Filesystem": {
+            "file": str(smali_path),
+            "line": 20,
+        }}},
+    }]
+    usage: list[dict] = []
+
+    graph = build_link_graph(
+        built["surface_result"],
+        built["dex_result"],
+        trufflehog_findings=findings,
+        finding_root=built["apktool_root"],
+        secret_usage=usage,
+    )
+
+    edge = _one(
+        _edges(graph, "method->secret"),
+        **{"from": "method:Lcom/example/Main; onCreate ()V"},
+    )
+    assert edge["citations"][1]["source_path"] == (
+        "apktool/smali_assets/audience_network/classes2/com/example/Main.smali"
+    )
+    assert usage[0]["usage_status"] == "mapped"
+
+
+def test_smali_assets_class_missing_from_dex_model_is_explicitly_unverified(built):
+    smali_path = (
+        built["apktool_root"]
+        / "smali_assets/audience_network/classes2/com/example/Unknown.smali"
+    )
+    smali_path.parent.mkdir(parents=True, exist_ok=True)
+    smali_path.write_text(".class Lcom/example/Unknown;\n", encoding="utf-8")
+    findings = [{
+        "DetectorName": "Generic API Key",
+        "Verified": False,
+        "SourceMetadata": {"Data": {"Filesystem": {
+            "file": str(smali_path),
+            "line": 1,
+        }}},
+    }]
+    usage: list[dict] = []
+
+    build_link_graph(
+        built["surface_result"],
+        {},
+        trufflehog_findings=findings,
+        finding_root=built["apktool_root"],
+        secret_usage=usage,
+    )
+
+    assert usage[0]["usage_status"] == "usage_unverified"
+    assert usage[0]["reason"] == "class_not_in_dex_model"
+
+
+def test_secret_outside_method_is_explicitly_unverified(built):
+    findings = [{
+        "DetectorName": "Generic API Key",
+        "Verified": False,
+        "SourceMetadata": {"Data": {"Filesystem": {
+            "file": "smali/com/example/Main.smali",
+            "line": 1,
+        }}},
+    }]
+    usage: list[dict] = []
+    graph = build_link_graph(
+        built["surface_result"],
+        built["dex_result"],
+        trufflehog_findings=findings,
+        finding_root=built["apktool_root"],
+        secret_usage=usage,
+    )
+
+    assert _edges(graph, "method->secret") == []
+    assert usage == [{
+        "finding_index": 0,
+        "source_path": "apktool/smali/com/example/Main.smali",
+        "line": 1,
+        "detector": "Generic API Key",
+        "verification": "unverified",
+        "usage_status": "usage_unverified",
+        "method": None,
+        "reason": "line_not_inside_method",
+    }]
+
+
+def test_absolute_finding_path_outside_apktool_root_is_not_linked(built, tmp_path):
+    smali_path = tmp_path / "smali/com/example/Main.smali"
+    smali_path.parent.mkdir(parents=True)
+    smali_path.write_text(".class Lcom/example/Main;\n", encoding="utf-8")
+    findings = [{
+        "DetectorName": "Generic API Key",
+        "Verified": False,
+        "SourceMetadata": {"Data": {"Filesystem": {
+            "file": str(smali_path),
+            "line": 1,
+        }}},
+    }]
+    diagnostics: list[dict[str, str]] = []
+    coverage: dict[str, str] = {}
+
+    graph = build_link_graph(
+        built["surface_result"],
+        built["dex_result"],
+        trufflehog_findings=findings,
+        finding_root=built["apktool_root"],
+        diagnostics=diagnostics,
+        coverage=coverage,
+    )
+
+    assert _edges(graph, "method->secret") == []
+    assert coverage["link_type_method_secret"] == "partial"
+    assert any(
+        item["code"] == "link_secret_finding_path_unresolved"
+        for item in diagnostics
+    )
+
+
+def test_permission_secret_edge_uses_the_finding_method_not_its_class(built):
+    findings = [{
+        "DetectorName": "Generic API Key",
+        "Verified": False,
+        "SourceMetadata": {"Data": {"Filesystem": {
+            "file": "smali/com/example/Api.smali",
+            "line": 32,
+        }}},
+    }]
+    graph = build_link_graph(
+        built["surface_result"],
+        built["dex_result"],
+        trufflehog_findings=findings,
+        finding_root=built["apktool_root"],
+    )
+
+    edges = _edges(graph, "permission->secret")
+    assert edges
+    assert all(
+        edge["citations"][0]["method_signature"]
+        == "Lcom/example/Api; fetch ()Ljava/lang/String;"
+        for edge in edges
+    )
+
+
+def test_trace_chains_emit_one_shortest_path_per_secret_and_entry_point():
+    edges = [{
+        "edge_type": "component->class",
+        "from": "component:activity:Main",
+        "to": "class:LMain;",
+        "citations": [],
+    }]
+    previous = ["class:LMain;"]
+    for layer in range(12):
+        current = [f"method:layer{layer}:{index}" for index in range(2)]
+        edge_type = "class->method" if layer == 0 else "method->method"
+        edges.extend({
+            "edge_type": edge_type,
+            "from": source,
+            "to": target,
+            "citations": [],
+        } for source in previous for target in current)
+        previous = current
+    edges.extend({
+        "edge_type": "method->secret",
+        "from": method,
+        "to": "secret:token",
+        "citations": [],
+    } for method in previous)
+    edges.extend([
+        {
+            "edge_type": "class->method",
+            "from": "class:LMain;",
+            "to": "method:shortcut",
+            "citations": [],
+        },
+        {
+            "edge_type": "method->secret",
+            "from": "method:shortcut",
+            "to": "secret:token",
+            "citations": [],
+        },
+    ])
+
+    chains = link_module.build_trace_chains(edges, [], max_depth=20)
+
+    assert len(chains) == 1
+    assert chains[0]["start_node"] == "component:activity:Main"
+    assert chains[0]["end_node"] == "secret:token"
+    assert chains[0]["chain_length"] == 3
 
 
 def test_asset_reader_is_not_applicable_with_a_reason(built):

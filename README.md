@@ -26,7 +26,7 @@ Supported runtime: Linux, Python 3.10+, Java 11+, Apktool, and TruffleHog.
 sudo apt update
 sudo apt install -y ca-certificates git curl unzip python3 python3-venv python3-pip default-jre-headless
 
-git clone --branch fix/apktool-only-trufflehog-pipeline https://github.com/xdial9/apk-workbench.git
+git clone --branch main https://github.com/xdial9/apk-workbench.git
 cd apk-workbench
 
 python3 -m venv .venv
@@ -75,11 +75,11 @@ apkworkbench discover --limit 15000 \
 # Restrict discovery to selected Play categories.
 apkworkbench discover --category FINANCE --category APPLICATION --limit 1000
 
-# Import known package IDs (one per line), while retaining Play as the only source.
+# Import only the listed IDs (one per line), without crawling Play charts.
 apkworkbench discover --packages-file packages.txt --limit 15000
 ```
 
-Discovery results are de-duplicated by Android package ID and stored in `database/google_play_discovery.csv`. A requested limit is a ceiling, not a guarantee: Play search and chart endpoints return bounded result sets, and discovery can produce fewer than 15,000 unique apps. Supply additional search queries or a package-ID list to expand coverage.
+Discovery results are de-duplicated by Android package ID and stored in `database/google_play_discovery.csv`. A requested limit is a ceiling, not a guarantee: Play search and chart endpoints return bounded result sets, and discovery can produce fewer than 15,000 unique apps. To combine a package-ID list with broad discovery, also provide a query or category explicitly.
 
 ## Acquire and process
 
@@ -128,6 +128,9 @@ The static surface pass inventories manifest/components/permissions, network-sec
 - `apkworkbench doctor`
 
 See [CLI reference](docs/commands.md), [configuration](docs/configuration.md), [installation](docs/installation.md), and [reliability and recovery](docs/reliability-and-recovery.md).
+
+The active, evidence-gated plan for the first fresh one-app pipeline run is
+the [First Fresh Full-Pipeline Run guide](docs/engineering/FIRST-FULL-PIPELINE-PLAN.md).
 
 ## Project history and engineering references
 

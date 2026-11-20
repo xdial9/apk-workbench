@@ -6,6 +6,8 @@ import json
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from apkworkbench.analysis import apk_surface
 from apkworkbench.analysis.apk_surface import (
     refresh_secret_links,
@@ -57,6 +59,43 @@ def test_trufflehog_success_requires_complete_counted_outputs(tmp_path):
     assert status == "success"
     assert counts == {"total_seen": 1, "verified": 1, "unverified": 0}
     assert diagnostic == ""
+
+
+def test_refresh_secret_links_rejects_non_object_surface_and_coverage(tmp_path):
+    digest = hashlib.sha256(b"invalid surface schema").hexdigest()
+    run_id = "invalid-surface-schema"
+    row = {
+        "run_id": run_id,
+        "package_id": "com.example.app",
+        "version_code": "1",
+        "sha256": digest,
+        "source": "google_play",
+    }
+
+    class FakeDatabase:
+        def read_download_history(self):
+            return [row]
+
+        def read_manifest(self, selected_run_id):
+            assert selected_run_id == run_id
+            return [row]
+
+        def read_processing_status(self):
+            return {}
+
+    surface_dir = (
+        tmp_path / "results/com.example.app/1" / digest / "surface"
+    )
+    surface_dir.mkdir(parents=True)
+    static_path = surface_dir / "static-analysis.json"
+
+    static_path.write_text("[]", encoding="utf-8")
+    with pytest.raises(TypeError, match="Surface result must be a JSON object"):
+        refresh_secret_links(FakeDatabase(), tmp_path, run_id=run_id)
+
+    static_path.write_text('{"coverage": []}', encoding="utf-8")
+    with pytest.raises(TypeError, match="Surface coverage must be a JSON object"):
+        refresh_secret_links(FakeDatabase(), tmp_path, run_id=run_id)
 
 
 def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypatch, tmp_path):
@@ -127,7 +166,13 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
             smali = output / "smali/com/example"
             smali.mkdir(parents=True)
             (smali / "Main.smali").write_text(
-                ".class public Lcom/example/Main;\\n", encoding="utf-8"
+                ".class public Lcom/example/Main;\\n"
+                ".super Ljava/lang/Object;\\n"
+                ".method public onCreate()V\\n"
+                "    .locals 0\\n"
+                "    return-void\\n"
+                ".end method\\n",
+                encoding="utf-8",
             )
             (smali / "Unmapped.smali").write_text(
                 ".class public Lcom/example/Unmapped;\\n", encoding="utf-8"
@@ -154,7 +199,7 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
             finding = {
                 "SourceMetadata": {
                     "Data": {"Filesystem": {
-                        "file": "smali/com/example/Main.smali", "line": 1
+                        "file": "smali/com/example/Main.smali", "line": 4
                     }}
                 },
                 "DetectorType": 2,
@@ -185,6 +230,51 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
     assert decompilation.failed == 0
     assert database.read_processing_status()[digest]["jadx_status"] == "not_used"
 
+    bundle_dir = workspace / "results/org.example.integration/1" / digest
+    embedded_dex_path = bundle_dir / "apktool/assets/embedded/classes.dex"
+    embedded_dex_path.parent.mkdir(parents=True, exist_ok=True)
+    embedded_dex_path.write_bytes(b"dex\n035\x00")
+    embedded_dex_result = {
+        "status": "success",
+        "metrics": {
+            "dex_files": 1,
+            "classes": 1,
+            "internal_methods": 1,
+            "class_model_count": 1,
+            "method_model_count": 1,
+        },
+        "coverage": {"dex_parsing": "success", "code_model": "success"},
+        "class_model": [{
+            "class_name": "Lcom/example/Embedded;",
+            "dex_index": 0,
+            "dex_source": "assets/embedded/classes.dex",
+        }],
+        "method_model": [{
+            "full_name": "Lcom/example/Embedded; read ()V",
+            "class_name": "Lcom/example/Embedded;",
+            "dex_index": 0,
+            "method_name": "read",
+            "descriptor": "()V",
+            "dex_source": "assets/embedded/classes.dex",
+        }],
+        "external_method_references": [],
+        "internal_call_graph": [{
+            "caller": "Lcom/example/Embedded; read ()V",
+            "callee": "Lcom/example/Embedded; helper ()V",
+            "dex_class": 0,
+        }],
+        "dex_api_strings": [],
+        "reflection_sites": [],
+        "permission_api_usage": [],
+        "string_class_index": {},
+        "diagnostics": [],
+        "limitations": [],
+    }
+    monkeypatch.setattr(
+        apk_surface,
+        "_analyze_dex_payloads",
+        lambda _payloads, *, target_sdk: embedded_dex_result,
+    )
     monkeypatch.setattr(
         apk_surface,
         "analyze_apk_dex",
@@ -202,6 +292,8 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
                 "full_name": "Lcom/example/Main; onCreate ()V",
                 "class_name": "Lcom/example/Main;",
                 "dex_index": 0,
+                "method_name": "onCreate",
+                "descriptor": "()V",
             }],
             "external_method_references": [{
                 "full_name": "Lokhttp3/Call; execute ()",
@@ -221,7 +313,16 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
     static_path = workspace / "results/org.example.integration/1" / digest / "surface" / "static-analysis.json"
     assert static_path.is_file()
     static_payload = __import__("json").loads(static_path.read_text(encoding="utf-8"))
-    assert static_payload["dex_analysis"]["metrics"]["external_methods_referenced"] == 3
+    dex_analysis = static_payload["dex_analysis"]
+    assert dex_analysis["metrics"]["external_methods_referenced"] == 3
+    assert dex_analysis["metrics"]["dex_files"] == 2
+    classes = {item["class_name"]: item for item in dex_analysis["class_model"]}
+    assert "Lcom/example/Embedded;" in classes
+    assert classes["Lcom/example/Embedded;"]["dex_index"] == 1
+    assert classes["Lcom/example/Embedded;"]["dex_source"] == (
+        "assets/embedded/classes.dex"
+    )
+    assert dex_analysis["internal_call_graph"][-1]["dex_class"] == 1
 
     reused_surface = run_static_surface_analysis(
         database, workspace, run_id=run_id
@@ -265,6 +366,15 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
     assert secret_edges[0]["citations"][1]["source_path"] == (
         "apktool/smali/com/example/Main.smali"
     )
+    assert secret_edges[0]["citations"][0]["evidence_kind"] == "smali_method"
+    assert secret_edges[0]["citations"][0]["line_start"] == 3
+    usage = static_payload["secret_usage"]
+    assert usage["status"] == "partial"
+    assert usage["mapped_count"] == 1
+    assert usage["usage_unverified_count"] == 1
+    assert usage["findings"][0]["usage_status"] == "mapped"
+    assert usage["findings"][1]["usage_status"] == "usage_unverified"
+    assert usage["findings"][1]["reason"] == "class_not_in_dex_model"
     assert all(
         edge["citations"][1]["source_path"]
         != "apktool/smali/com/example/Unmapped.smali"
@@ -285,7 +395,7 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
         "status": "success",
         "finding_count": 0,
     }
-    assert empty_payload["coverage"]["link_type_method_secret"] == "success"
+    assert empty_payload["coverage"]["link_type_method_secret"] == "not_applicable"
     assert not [
         json.loads(line) for line in link_path.read_text().splitlines()
         if json.loads(line)["edge_type"] == "method->secret"

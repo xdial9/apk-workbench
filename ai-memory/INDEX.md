@@ -22,8 +22,13 @@ ends without updating STATE.
 - firstreport.txt       : full-codebase audit baseline (2026-11-13) +
                           overall opinion — stable reference, rarely changes.
 - acquisition-review.md : acquisition rework audit trail (F1..F7).
-- todo.md               : ACTIVE resume file. Phase order, Unit 1 spec,
-                          environment constraints, tripwires. Read after this.
+- todo.md               : ACTIVE resume summary plus historical Unit 1 spec,
+                          environment constraints, and tripwires. Read after
+                          this; use current guide for run readiness.
+- ../docs/engineering/FIRST-FULL-PIPELINE-PLAN.md:
+                          current evidence-gated plan for the first fresh
+                          one-app end-to-end run; supersedes stale next-step
+                          sequencing in older handoff snapshots.
 - resumeprompt.txt      : user-authored; do not edit.
 NOTE: repo /prompts/0.txt..6.txt still assume the OLD folder shape in places
 (old `ai_handoff/` naming in surface-plan-v2 §7B is superseded; prompts are
@@ -49,32 +54,45 @@ DURING: register risks/hallucination doubts as VERIFY notes immediately.
 END: update STATE (phase item moved? decisions? VERIFYs resolved?) + tick
 surface.txt/plan.txt checkboxes if applicable.
 
-## STATE (current as of 2026-11-17; M3 complete)
-- Current verified snapshot: M0-M3 are complete; `.venv/bin/python -m
-  pytest -q` reports **386 passed**. P0-P7 are implemented; bundle freeze,
-  `handoff.json`, `hashes.sha256`, and `verify-workspace` are implemented and
-  fixture-tested. Real Simple Calculator v85 run
-  (`b8e85b99-a5f9-496d-b3a4-e15cb1deca73`) has 4 independently verified APK
-  components. Existing decoded and TruffleHog outputs were reused; links were
-  refreshed and a post-fix report was regenerated in the isolated
-  `/home/dial9/APK-Workbench/workspace-m3-postfix-real` copy. New stage
-  statuses cover per-bundle download, verification, decompile, surface, and
-  TruffleHog, plus run-level discover, report, reconciliation, freeze, and
-  pipeline state. The 7 JNI exports now reconcile as 7 mapped / 0 unmapped.
-  The three splits have no DEX payload, so Androguard reports DEX coverage as
-  `not_applicable`; a driver bug incorrectly downgraded that to partial. The
-  driver now preserves not-applicable status without marking the surface
-  incomplete. Reprocessed these components: surface status is success for
-  all 4; DEX coverage is success for base and not_applicable for the splits.
-  Reconciliation accounts for 4/4 as complete. Cached successful surface
-  reuse also no longer makes the run marker partial. All 4 copied bundles
-  froze and passed `verify-workspace` with zero mismatches, missing files, or extras.
-  Original frozen evidence was not modified. No fresh download, decompile, or
-  TruffleHog rescan was performed. The final report is about 758 MB JSON /
-  1.13 GB HTML. P8 remains PARTIAL:
-  no model dry-run, enforced AI output contract, location-map volume
-  hierarchy, or split-component bundle aggregation has been demonstrated.
-  The active delivery board is `docs/engineering/PRODUCT-RESCUE-BOARD.md`.
+## STATE (current as of 2026-11-17; fresh pipeline audited)
+- Fresh run `fc75a20f-f08e-455c-a833-31806844280e` for
+  `com.simplemobiletools.calculator` completed in
+  `/home/dial9/APK-Workbench/workspace-first-full-20261117`. All four APK
+  components were acquired, independently verified, decoded, scanned, and
+  reported. Stage statuses are success except run-level discover (`skipped`,
+  because the saved catalog was used). Reconciliation is 4/4 complete with
+  zero warnings; all four bundles were frozen and verified. JSON report size:
+  757,972,011 bytes; HTML: 1,125,800,064 bytes.
+- The post-run mapping audit blocked 360 acceptance: two standalone DEX
+  assets were skipped despite DEX success; 13 TruffleHog findings had no
+  per-finding mapping state, and absolute paths prevented method links while
+  method-secret coverage said success with zero edges. Current worktree fixes
+  bounded standalone DEX parsing and ledger states, root-confined absolute
+  path normalization, exact Smali method association, `usage_unverified`
+  reasons, and honest partial/empty secret-edge coverage. Both actual
+  Calculator asset DEX files were parsed in isolation (2 files, 3,330 class
+  entries, success). A 12-layer branching regression reproduced 4,096
+  duplicate trace paths; trace generation now emits one shortest cited path
+  per reachable entry-point/secret pair, with all call edges retained in the
+  graph. An end-to-end pass exposed that the surface runner overwrote its
+  standalone-DEX model with APK-only analysis; the runner now merges both
+  models and offsets DEX indexes. A regression verifies asset classes and
+  call edges survive. Embedded-Dex permission records now also serialize
+  method names and call sites rather than Androguard objects. The original
+  frozen bundles were not modified; a corrected reanalysis is running in a
+  separate writable workspace.
+- Current validation: `.venv/bin/python -m pytest -q` — **402 passed**;
+  `.venv/bin/ruff check .` — passed; focused Python compilation and
+  `git diff --check` — passed. The Androguard transcript was about 159 MB,
+  largely vendor DEBUG output; noise reduction remains a scale follow-up.
+- Readiness fixes remain in effect: refreshed Play delivery URL retry,
+  consistent dotfile hashing, recursive fail-closed read-only freeze,
+  file-only package discovery, and the M3 split-status correction. P8 remains
+  partial: model dry-run, enforced AI output contract, location-map volume
+  hierarchy, and split-component aggregation are unvalidated. The active
+  run record is
+  `docs/engineering/FIRST-FULL-PIPELINE-PLAN.md`; the current scanner phase
+  record is `ai-memory/scanner-plan.md`.
 - The detailed scanner/native history below includes older point-in-time
   snapshots. Those are historical evidence, not current work queues; use the
   current state above and the dated status in the canonical phase files.

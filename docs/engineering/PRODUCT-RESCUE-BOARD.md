@@ -5,9 +5,17 @@ verifiable, useful per-app result. This is a delivery board, not a proposal to
 rewrite the scanner or add another detection catalog.
 
 **Snapshot:** 2026-11-17, M0-M3 are complete on `main`; the real-app evidence
-accounts for all 4 APK components with no partial surface outcomes. Current
-full test suite: **386 passed**. The pre-existing untracked
+accounts for all 4 APK components with no partial surface outcomes. Full test
+suite: **392 passed** at the Phase 4 gate; Ruff and shell syntax checks pass.
+A fresh run is active under `fc75a20f-f08e-455c-a833-31806844280e`; see the
+first-full-pipeline guide for current stage progress. The pre-existing staged
 `ai-memory/test.txt` remains untouched.
+
+**Next-step authority:** use
+[`FIRST-FULL-PIPELINE-PLAN.md`](./FIRST-FULL-PIPELINE-PLAN.md) for the ordered
+engineering gates and first fresh run. The M3 validation below reused prior
+acquisition/decompilation/TruffleHog outputs and is not fresh full-pipeline
+validation.
 
 **Evidence boundary:** the configured external workspace contains a real
 Simple Calculator v85 run (`b8e85b99-a5f9-496d-b3a4-e15cb1deca73`), but its
@@ -342,9 +350,13 @@ commands/report match that contract.
 
 ## Immediate next ticket
 
-M3 is complete. Do not start M4 until its scope is selected:
-first address the 758 MB JSON / 1.13 GB HTML scale constraint and decide
-whether report generation should shard or stream the full evidence views.
+Follow the phase gates in
+[`FIRST-FULL-PIPELINE-PLAN.md`](./FIRST-FULL-PIPELINE-PLAN.md). First close
+the confirmed stale-delivery retry and freeze-integrity gaps with focused
+tests, then restore the test/lint gate. Only after those pass, perform one
+fresh, small, approved app run. The report-size constraint remains a measured
+risk; assess its impact during preflight and after the run rather than
+starting a broad report rewrite without fresh measurements.
 
 Do not begin with more detection rules, a broad architecture rewrite, a
 large-scale acquisition, or a new reporting framework.
@@ -379,5 +391,5 @@ large-scale acquisition, or a new reporting framework.
   `tests/test_final_run_report.py`.
 - Current end-to-end fixture pipeline:
   `tests/test_pipeline_integration.py`.
-- Current full test baseline: `.venv/bin/python -m pytest -q` — **381 passed
-  in 5.71s** on 2026-11-17.
+- Full test suite: `.venv/bin/python -m pytest -q` — **391 passed** after the
+  first-fresh-run readiness fixes. A fresh run is still pending.

@@ -1,6 +1,9 @@
 # AGENTS.md — APK-Workbench
 
-Repo: /home/user/APK-Workbench. Branch: feat/native-elf-reader (main == origin/main carries the same work after the 2026-11-16 push; feature/goopdl-account-auth is stale).
+Repo: /home/dial9/apk-workbench. Current working branch: `main` (at the
+2026-11-17 audit, `5afe633`, aligned with `origin/main`). Local `agent-work`
+is 17 commits behind `main` with no unique commits; do not use it as the base
+for new work.
 Venv: .venv/bin/python. Tests: .venv/bin/python -m pytest -q
 CORE IDENTITY
 
@@ -32,18 +35,19 @@ HARD RULES
 
 Two tracks exist. Read the one you are on before touching code.
 
-1. SCANNER TRACK (active) — `ai-memory/scanner-plan.md`. Phases P0..P8.
-   P0 and P1 are DONE; P2 (resource model) is next. That file holds the phase
-   ladder, the audit defect ledger (D1-D18), the decisions already taken, and
-   the resume protocol. Do not re-plan the scanner from scratch.
-2. UNIT 1 (queued) — `ai-memory/todo.md`. Per-bundle workspace + freeze
-   (`surface/` layout, `handoff.json`, `hashes.sha256`, `verify-workspace`).
-   Nothing in it is implemented; it is P8's dependency, not a substitute.
+1. SCANNER TRACK — `ai-memory/scanner-plan.md`. P0-P7 are implemented; P8
+   remains partial. That file holds the scanner phase history, defect ledger,
+   decisions, and scanner-specific resume protocol. Do not re-plan the
+   scanner from scratch.
+2. FIRST FRESH PIPELINE RUN — the current execution sequence is
+   `docs/engineering/FIRST-FULL-PIPELINE-PLAN.md`. Unit 1 bundle workspace,
+   freeze, and `verify-workspace` are implemented; do not treat them as
+   queued work. The guide records the remaining verified readiness gates.
 
 MEMORY DUTY — after EVERY phase, before the final commit of that phase:
 - update `ai-memory/scanner-plan.md` (phase status, what changed, new keys,
   defects closed, next phase) and `ai-memory/INDEX.md` §STATE (one bullet);
-- rewrite `/home/user/oc-handoff/99-briefing.md` so it matches reality
+- rewrite `oc-handoff/99-briefing.md` so it matches reality
   (state, commits, test count, next step, open decisions);
 - commit the code and the notes. Leave the tree clean. Never leave a phase
   "done" with an uncommitted or undocumented change.

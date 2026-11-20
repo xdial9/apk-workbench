@@ -212,18 +212,22 @@ def _native_html_section(native: dict[str, Any]) -> list[str]:
 
     parts = [
         "<h4>Native analysis</h4>",
-        f"<p>Status: {html.escape(status)} · "
-        f"Libraries: {metric('native_library_count')} · "
-        f"JNI exports: {metric('native_jni_exports_total')} "
-        f"({metric('native_jni_exports_mapped')} mapped, "
-        f"{metric('native_jni_exports_unmapped')} unmapped) · "
-        f"Imports: {metric('native_imports_total')} total / "
-        f"{metric('native_imports_emitted')} emitted</p>",
-        f"<p>Native strings: {metric('native_strings_total')} total · "
-        f"{metric('native_strings_emitted')} emitted · "
-        f"{metric('native_strings_sharded')} sharded · "
-        f"{metric('native_strings_dropped')} dropped · "
-        f"coverage: {html.escape(str(native.get('coverage', {}).get('native_strings', 'unavailable')))}</p>",
+        (
+            f"<p>Status: {html.escape(status)} · "
+            f"Libraries: {metric('native_library_count')} · "
+            f"JNI exports: {metric('native_jni_exports_total')} "
+            f"({metric('native_jni_exports_mapped')} mapped, "
+            f"{metric('native_jni_exports_unmapped')} unmapped) · "
+            f"Imports: {metric('native_imports_total')} total / "
+            f"{metric('native_imports_emitted')} emitted</p>"
+        ),
+        (
+            f"<p>Native strings: {metric('native_strings_total')} total · "
+            f"{metric('native_strings_emitted')} emitted · "
+            f"{metric('native_strings_sharded')} sharded · "
+            f"{metric('native_strings_dropped')} dropped · "
+            f"coverage: {html.escape(str(native.get('coverage', {}).get('native_strings', 'unavailable')))}</p>"
+        ),
     ]
     if status == "not_present":
         parts.append("<p>No native libraries were present in the decoded artifact.</p>")

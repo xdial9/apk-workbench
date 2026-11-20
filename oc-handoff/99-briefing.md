@@ -1,16 +1,21 @@
 # APK Workbench — Current Engineering Brief
 
 **Verified:** 2026-11-17
-**Repository:** `main`; M0-M3 and the split-status correction are complete
-**Commits:** `4fa3e40`, `324fba4` (M3); `f3a9f75` (split-status fix, local/not pushed)
-**Tests:** `.venv/bin/python -m pytest -q` — 386 passed
-**Next:** stop at M3; M4 needs a separately selected scope
+**Repository:** `main`; fresh run completed, post-run mapping fixes tested
+**Tests:** `.venv/bin/python -m pytest -q` — 401 passed;
+`.venv/bin/ruff check .` — passed; focused Python compilation and
+`git diff --check` — passed.
+**Next:** reanalyze the fresh run in a separate writable workspace, regenerate
+reports, freeze, and verify. See
+[`FIRST-FULL-PIPELINE-PLAN.md`](../docs/engineering/FIRST-FULL-PIPELINE-PLAN.md).
 
 ## Current state
 
-- Scanner phases P0-P7 are implemented. P8 remains partial: model dry-run,
-  output-contract enforcement, location-map volume hierarchy, and
-  split-component aggregation remain unvalidated.
+- Scanner phases P0-P7 are implemented. Current worktree closes the audited
+  standalone-DEX and secret-to-method gaps; the frozen run still needs
+  reanalysis before those fixes appear in its handoff. P8 remains partial:
+  model dry-run, output-contract enforcement, location-map volume hierarchy,
+  and split-component aggregation remain unvalidated.
 - M1 refreshes secret links and trace chains after TruffleHog while preserving
   successful-empty, failed, missing/malformed, and not-run states.
 - M2 exposes native parse/load state, JNI mappings/unmapped reasons, symbols,
@@ -37,6 +42,36 @@
   with zero mismatches, missing files, or extras. The original frozen evidence
   remains untouched.
 - Report size remains a scale constraint: about 758 MB JSON and 1.13 GB HTML.
+- Phase 4 cleared all 8 repository Ruff findings. Full suite at that gate:
+  **392 passed**. Both pipeline shell syntax checks and `git diff --check`
+  passed.
+- Phase 5 used the previous Simple Calculator package identity,
+  `com.simplemobiletools.calculator`, with anonymous auth in isolated
+  workspace `/home/dial9/APK-Workbench/workspace-first-full-20261117`.
+  Corrected file-only discovery skipped broad catalog requests and recorded
+  exactly one package.
+- Fresh run `fc75a20f-f08e-455c-a833-31806844280e` completed all stages:
+  4 APK components acquired, verified, decoded, scanned, reconciled (4/4
+  complete, zero warnings), frozen, and verified. Report sizes: JSON
+  757,972,011 bytes; HTML 1,125,800,064 bytes. TruffleHog reported 13
+  unverified and 0 verified candidates, with no failed scans. The subsequent
+  mapping audit found two standalone asset DEX files omitted from DEX
+  analysis and no proven Smali method-secret edges despite nonempty findings.
+- Current code analyzes standalone DEX with bounded caps and explicit file
+  ledger states. TruffleHog paths are root-confined; a secret maps only to
+  the exact containing Smali method, and otherwise receives an explicit
+  `usage_unverified` reason. The actual two Calculator asset DEX files parse
+  successfully (2 files, 3,330 classes). The old frozen outputs were not
+  modified; reanalysis in a separate writable copy is still required.
+- A 12-layer branching call-graph test reproduced 4,096 equivalent trace
+  paths. Trace output now retains one shortest cited path per reachable
+  entry-point/secret pair; the link graph still preserves all call edges.
+- The end-to-end pass found the runner overwrote standalone-DEX analysis with
+  APK-only analysis. It now merges the models, metrics, and DEX indexes; the
+  integration regression proves the asset class and call edge survive.
+  Corrected copied-workspace reanalysis is running.
+- Androguard output was unusually verbose (about 159 MB transcript in the
+  fresh run); log-noise reduction remains an open scale task.
 
 ## Rescue sequence
 
@@ -44,8 +79,19 @@
 2. M1 — post-scan secret links: complete.
 3. M2 — native report visibility: complete.
 4. M3 — real-app report, statuses, freeze, and verification: complete.
-5. M4/M5 — not started. M4 should first decide how to address report size and
-   then re-audit determinism and scale.
+5. First fresh-run readiness — pending; see
+   `docs/engineering/FIRST-FULL-PIPELINE-PLAN.md`. The previous M3 work reused
+   existing acquired APKs, decoded trees, and TruffleHog output, so it is not
+   evidence of a fresh full pipeline run.
+6. Expired-delivery retry fix — complete; regression was observed failing on
+   the stale URL, then all 9 focused Google Play source tests passed. No live
+   Play request was made.
+7. Freeze dotfile hashing/verification — complete; regression failed before
+   the fix. Recursive permissions and fail-closed chmod handling are complete;
+   8 freeze tests pass and `ai_analysis/attempt-01` remains writable.
+   Verification also rejects writable files, directories, and hash manifests.
+   Combined phase tests: 22 passed; full suite: 391 passed. Next: restore
+   Ruff/whitespace checks.
 
 ## Guardrails
 

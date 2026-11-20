@@ -474,9 +474,18 @@ def _analyze_dex_payloads(
     permission_mapping_status = "success"
     try:
         for api_method, permissions in dx.get_permissions(target_sdk):
+            callers = [
+                {
+                    "caller": _method_name(caller),
+                    "caller_class": str(getattr(caller, "class_name", "")),
+                    "offset": int(offset),
+                }
+                for _class_obj, caller, offset in _safe_xrefs(api_method)
+            ]
             permission_api_usage.append({
-                "api": api_method,
+                "api_method": _method_name(api_method),
                 "permissions": list(permissions),
+                "call_sites": callers,
             })
     except Exception as exc:  # noqa: BLE001
         permission_mapping_status = "partial"

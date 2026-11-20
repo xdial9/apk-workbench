@@ -32,7 +32,9 @@ FILES_FILENAME = "files.jsonl"
 # Closed status set. A value outside this set is a bug, not a new state.
 SCANNED_TEXT = "scanned_text"
 ANALYSED_NATIVE = "analysed_native"
+ANALYSED_DEX = "analysed_dex"
 SKIPPED_CONTAINER = "skipped_container"
+SKIPPED_DEX = "skipped_dex"
 SKIPPED_BINARY = "skipped_binary"
 SKIPPED_UNSUPPORTED = "skipped_unsupported"
 SKIPPED_SYMLINK = "skipped_symlink"
@@ -41,7 +43,9 @@ UNDECODABLE = "undecodable"
 STATUSES = (
     SCANNED_TEXT,
     ANALYSED_NATIVE,
+    ANALYSED_DEX,
     SKIPPED_CONTAINER,
+    SKIPPED_DEX,
     SKIPPED_BINARY,
     SKIPPED_UNSUPPORTED,
     SKIPPED_SYMLINK,
@@ -51,6 +55,9 @@ STATUSES = (
 # Closed reason set, paired with the status that may carry it.
 REASONS = {
     "container_not_extracted": SKIPPED_CONTAINER,
+    "dex_analysis_limit": SKIPPED_DEX,
+    "dex_read_failed": SKIPPED_DEX,
+    "dex_not_analyzed": SKIPPED_DEX,
     "elf_without_library_suffix": SKIPPED_BINARY,
     "binary_content": SKIPPED_BINARY,
     "no_text_suffix": SKIPPED_UNSUPPORTED,
@@ -62,7 +69,7 @@ REASONS = {
 
 LIBRARY_SUFFIXES = frozenset({".so", ".a"})
 
-_CHECKED = frozenset({SCANNED_TEXT, ANALYSED_NATIVE})
+_CHECKED = frozenset({SCANNED_TEXT, ANALYSED_NATIVE, ANALYSED_DEX})
 
 
 def _record(
@@ -91,6 +98,8 @@ def build_file_ledger(
     *,
     scanned: set[str],
     read_failures: dict[str, str] | None = None,
+    dex_analyzed: set[str] | None = None,
+    dex_skipped: dict[str, str] | None = None,
     library_suffixes: frozenset[str] = LIBRARY_SUFFIXES,
 ) -> list[dict[str, Any]]:
     """One record per tree entry, sorted by path.
@@ -100,6 +109,8 @@ def build_file_ledger(
     that is in neither is reported as undecodable rather than assumed read.
     """
     failures = read_failures or {}
+    analyzed_dex = dex_analyzed or set()
+    skipped_dex = dex_skipped or {}
     records: list[dict[str, Any]] = []
     for entry in tree.entries:
         relative = entry.relative
@@ -117,6 +128,17 @@ def build_file_ledger(
             records.append(_record(
                 relative, UNDECODABLE, reason="text_read_failed", **base,
             ))
+            continue
+        if entry.content_kind == "dex":
+            if relative in analyzed_dex:
+                records.append(_record(
+                    relative, ANALYSED_DEX, analysed_by="androguard_dex", **base,
+                ))
+            else:
+                records.append(_record(
+                    relative, SKIPPED_DEX,
+                    reason=skipped_dex.get(relative, "dex_not_analyzed"), **base,
+                ))
             continue
         if entry.suffix in library_suffixes:
             records.append(_record(

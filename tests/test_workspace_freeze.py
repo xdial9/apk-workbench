@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from pathlib import Path
 
-from apkworkbench.database.workspace import WorkspaceDatabase
+import pytest
+
+from apkworkbench.database.workspace import DatabaseError, WorkspaceDatabase
 
 _BUNDLE_ID = "f" * 64
 
@@ -111,6 +114,115 @@ def test_verify_workspace_passes_on_untouched_bundle(tmp_path):
         assert result["mismatches"] == []
         assert result["missing"] == []
         assert result["extra"] == []
+        assert result["writable"] == []
+        assert not os.stat(bundle / "hashes.sha256").st_mode & 0o222
+    finally:
+        _unfreeze(tmp_path / "workspace")
+
+
+def test_freeze_and_verify_include_dotfiles(tmp_path):
+    bundle = _make_bundle(tmp_path / "workspace")
+    dotfile = bundle / "surface" / ".analysis-metadata"
+    dotfile.write_text("hidden evidence metadata", encoding="utf-8")
+    database = WorkspaceDatabase(tmp_path / "workspace")
+
+    try:
+        database.freeze_evidence(bundle)
+        hashed = {
+            line.split("  ", 1)[1]
+            for line in (bundle / "hashes.sha256").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+        result = database.verify_workspace(bundle)
+
+        assert "surface/.analysis-metadata" in hashed
+        assert result["status"] == "ok"
+        assert result["mismatches"] == []
+        assert result["missing"] == []
+        assert result["extra"] == []
+    finally:
+        _unfreeze(tmp_path / "workspace")
+
+
+def test_freeze_makes_nested_evidence_directories_read_only(tmp_path):
+    bundle = _make_bundle(tmp_path / "workspace")
+    nested_evidence_dirs = [
+        bundle / "apktool" / "smali" / "com" / "example",
+        bundle / "surface" / "shards",
+        bundle / "stages" / "surface",
+    ]
+    for path in nested_evidence_dirs:
+        path.mkdir(parents=True)
+
+    ai_analysis = bundle / "ai_analysis" / "attempt-01"
+    ai_analysis.mkdir(parents=True)
+    database = WorkspaceDatabase(tmp_path / "workspace")
+
+    try:
+        database.freeze_evidence(bundle)
+
+        for path in [bundle / "apktool", *nested_evidence_dirs]:
+            assert os.stat(path).st_mode & 0o222 == 0
+        assert os.stat(ai_analysis).st_mode & 0o222
+        assert database.verify_workspace(bundle)["writable"] == []
+    finally:
+        _unfreeze(tmp_path / "workspace")
+
+
+def test_freeze_fails_and_removes_hash_manifest_when_file_chmod_fails(
+    monkeypatch, tmp_path
+):
+    bundle = _make_bundle(tmp_path / "workspace")
+    target = bundle / "surface" / "static-analysis.json"
+    prior_files = [
+        bundle / "apktool" / "AndroidManifest.xml",
+        bundle / "surface" / "facts.jsonl",
+    ]
+    prior_modes = {path: stat.S_IMODE(path.stat().st_mode) for path in prior_files}
+    database = WorkspaceDatabase(tmp_path / "workspace")
+    real_chmod = os.chmod
+    fail_once = True
+
+    def fail_target_once(path, mode):
+        nonlocal fail_once
+        if Path(path) == target and fail_once:
+            fail_once = False
+            raise PermissionError("synthetic chmod failure")
+        real_chmod(path, mode)
+
+    monkeypatch.setattr(os, "chmod", fail_target_once)
+
+    with pytest.raises(DatabaseError, match="Cannot make frozen evidence read-only"):
+        database.freeze_evidence(bundle)
+
+    assert not (bundle / "hashes.sha256").exists()
+    assert os.stat(target).st_mode & 0o222
+    assert {
+        path: stat.S_IMODE(path.stat().st_mode) for path in prior_files
+    } == prior_modes
+
+
+def test_verify_workspace_detects_writable_evidence(tmp_path):
+    bundle = _make_bundle(tmp_path / "workspace")
+    target_dir = bundle / "surface" / "shards"
+    target_dir.mkdir()
+    database = WorkspaceDatabase(tmp_path / "workspace")
+    try:
+        database.freeze_evidence(bundle)
+        target_file = bundle / "surface" / "static-analysis.json"
+        os.chmod(bundle / "surface", 0o755)
+        os.chmod(target_file, 0o644)
+        os.chmod(target_dir, 0o755)
+
+        result = database.verify_workspace(bundle)
+
+        assert result["status"] == "failed"
+        assert {"path": "surface/static-analysis.json", "kind": "file"} in result["writable"]
+        assert {"path": "surface", "kind": "directory"} in result["writable"]
+        assert {"path": "surface/shards", "kind": "directory"} in result["writable"]
+        os.chmod(bundle / "hashes.sha256", 0o644)
+        result = database.verify_workspace(bundle)
+        assert {"path": "hashes.sha256", "kind": "file"} in result["writable"]
     finally:
         _unfreeze(tmp_path / "workspace")
 

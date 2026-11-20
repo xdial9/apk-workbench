@@ -7,10 +7,11 @@ oversized members produce a diagnostic and partial coverage without OOM.
 """
 from __future__ import annotations
 
+import json
 import zipfile
 from pathlib import Path
 
-from apkworkbench.analysis.apk_surface import analyze_apk_surface
+from apkworkbench.analysis import apk_surface
 from apkworkbench.analysis.surface import native
 from tests.test_native_analysis import make_tree
 
@@ -50,7 +51,7 @@ def test_zip_containing_dex_classes_cited_with_container_prefix(tmp_path):
         {"classes.dex": DEX_BYTES},
     )
 
-    result = analyze_apk_surface(root)
+    result = apk_surface.analyze_apk_surface(root)
 
     classes = _dex_classes(result)
     # The dexfixture APK has at least one class; check they carry dex_source.
@@ -71,6 +72,65 @@ def test_zip_containing_dex_classes_cited_with_container_prefix(tmp_path):
     ) is False
 
 
+def test_standalone_dex_assets_are_analyzed_and_cited(tmp_path):
+    """DEX files decoded from assets are first-class semantic inputs."""
+    root = make_tree(tmp_path)
+    asset_dir = root / "assets" / "audience_network"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "classes.dex").write_bytes(DEX_BYTES)
+    (asset_dir / "classes2.dex").write_bytes(DEX_BYTES)
+    output_dir = tmp_path / "surface"
+
+    result = apk_surface.analyze_apk_surface(root, output_dir=output_dir)
+
+    citations = {
+        entry.get("dex_source")
+        for entry in result["dex_analysis"]["class_model"]
+    }
+    assert citations & {
+        "assets/audience_network/classes.dex",
+        "assets/audience_network/classes2.dex",
+    }, "standalone asset DEX classes were not included in dex_analysis"
+    assert result["dex_analysis"]["metrics"]["dex_files"] == 2
+    assert result["coverage"]["dex_semantic_analysis"] == "success"
+    assert result["inventory"]["file_ledger"]["checked"] > 0
+    records = [
+        json.loads(line)
+        for line in (output_dir / "files.jsonl").read_text().splitlines()
+    ]
+    dex_records = [
+        record for record in records if record["path"].endswith(".dex")
+    ]
+    assert len(dex_records) == 2
+    assert all(record["status"] == "analysed_dex" for record in dex_records)
+    assert all(record["analysed_by"] == "androguard_dex" for record in dex_records)
+
+
+def test_standalone_dex_limit_is_counted_and_marks_partial(monkeypatch, tmp_path):
+    root = make_tree(tmp_path)
+    asset_dir = root / "assets"
+    asset_dir.mkdir(exist_ok=True)
+    (asset_dir / "classes.dex").write_bytes(DEX_BYTES)
+    monkeypatch.setattr(apk_surface, "MAX_EMBEDDED_LIBRARY_BYTES", 100)
+    output_dir = tmp_path / "surface"
+
+    result = apk_surface.analyze_apk_surface(root, output_dir=output_dir)
+
+    assert result["status"] == "partial"
+    assert result["coverage"]["dex_semantic_analysis"] == "partial"
+    assert any(
+        diagnostic["code"] == "code_standalone_dex_limit"
+        for diagnostic in result["diagnostics"]
+    )
+    records = [
+        json.loads(line)
+        for line in (output_dir / "files.jsonl").read_text().splitlines()
+    ]
+    dex_record = next(record for record in records if record["path"] == "assets/classes.dex")
+    assert dex_record["status"] == "skipped_dex"
+    assert dex_record["reason"] == "dex_analysis_limit"
+
+
 def test_container_nested_inside_container_resolves_to_depth_limit(tmp_path):
     """zip-in-zip: the inner .dex is cited with the full container chain."""
     root = make_tree(tmp_path)
@@ -84,7 +144,7 @@ def test_container_nested_inside_container_resolves_to_depth_limit(tmp_path):
         },
     )
 
-    result = analyze_apk_surface(root)
+    result = apk_surface.analyze_apk_surface(root)
 
     classes = result["dex_analysis"].get("class_model", [])
     cited = [
@@ -115,7 +175,7 @@ def test_depth_limit_produces_diagnostic_not_silent_stop(monkeypatch, tmp_path):
         },
     )
 
-    result = analyze_apk_surface(root)
+    result = apk_surface.analyze_apk_surface(root)
 
     assert any(
         d["code"] == "code_container_depth_limit" for d in result.get("diagnostics", [])
@@ -138,7 +198,7 @@ def test_oversized_embedded_member_diagnostic_and_partial(monkeypatch, tmp_path)
         {"classes.dex": b"\x00" * 1000},
     )
 
-    result = analyze_apk_surface(root)
+    result = apk_surface.analyze_apk_surface(root)
 
     assert any(
         d["code"] == "code_embedded_byte_limit" for d in result.get("diagnostics", [])
@@ -168,7 +228,7 @@ def test_embedded_code_temp_files_deleted_after_analysis(tmp_path):
     original = monkeypatch_target.tempfile.mkstemp
     monkeypatch_target.tempfile.mkstemp = spy
     try:
-        analyze_apk_surface(root)
+        apk_surface.analyze_apk_surface(root)
     finally:
         monkeypatch_target.tempfile.mkstemp = original
 

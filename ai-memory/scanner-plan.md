@@ -1,31 +1,45 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
-Current state (verified 2026-11-17): **P0-P7 DONE; M0-M3 DONE**. M3 used real
-Simple Calculator v85 evidence from run
-`b8e85b99-a5f9-496d-b3a4-e15cb1deca73`: all 4 APK components were verified;
-existing decoded and TruffleHog results were reused, then secret links and
-trace chains were refreshed. Per-artifact `status.json` files now cover
-download, verification, decompile, surface, and TruffleHog; run-level files
-cover discover, download, verification, decompile, surface, TruffleHog,
-report, reconciliation, freeze, and pipeline. A separate writable copy at
-`/home/dial9/APK-Workbench/workspace-m3-postfix-real` produced the post-fix
-report, froze all 4 bundles, and passed `verify-workspace` with zero
-mismatches, missing files, or extras. The fixed cross-APK JNI matcher mapped
-7 exports and left 0 unmapped; report and inventory agree. The three
-non-base splits have no DEX payload; Androguard correctly returns
-`not_applicable`, but the surface driver incorrectly marked any non-success
-DEX result as a partial analysis. The driver now preserves the not-applicable
-coverage and does not downgrade surface status. Cached successful reuse also
-no longer makes the run status partial. All four surface results now report
-success; DEX coverage is `success` for base and `not_applicable` for the
-three splits. Reconciliation accounts for 4/4 as complete. The original
-frozen bundles were not modified. The report is 758 MB JSON / 1.13 GB HTML
-and remains a scale constraint. No fresh download, decompile, or TruffleHog
-rescan was performed. P8 remains PARTIAL:
-handoff/freeze mechanics exist, but model dry-run, output-contract enforcement,
-and volume hierarchy are not validated. Full suite: **386 passed**. Current
-open work is tracked in
-[PRODUCT-RESCUE-BOARD.md](../docs/engineering/PRODUCT-RESCUE-BOARD.md).
+Current state (verified 2026-11-17): P0-P7 are implemented; P6/P7 audit
+corrections are in the current worktree and tested. M0-M3 are complete.
+Fresh run `fc75a20f-f08e-455c-a833-31806844280e` for
+`com.simplemobiletools.calculator` completed all stages in
+`/home/dial9/APK-Workbench/workspace-first-full-20261117`: 4 APK components
+were acquired, verified, decoded, scanned, reconciled (4/4 complete, 0
+warnings), frozen (4/4, 0 issues), and workspace-verified. Run-level report
+generation succeeded: JSON 757,972,011 bytes and HTML 1,125,800,064 bytes.
+The original frozen evidence remains untouched.
+
+The post-run mapping audit blocked 360 acceptance: the base decoded tree had
+two DEX assets (57,076 and 5,237,600 bytes) marked `skipped_container` while
+DEX coverage said success; 13 TruffleHog candidates had no proven method
+mapping, absolute paths prevented Smali mapping, and method-secret coverage
+said success with no edges/reasons. Current source fixes bounded standalone
+DEX analysis and ledger states, root-confined finding-path normalization,
+exact Smali method association, per-finding `usage_unverified` reasons, and
+partial coverage when findings cannot be linked. A real-payload test analyzed
+both Calculator asset DEX files (2 DEX files, 3,330 class entries, success
+coverage). A branching-graph regression exposed trace enumeration returning
+4,096 equivalent paths; trace generation now uses breadth-first traversal to
+emit one shortest cited path per reachable entry-point/secret pair, leaving
+every call edge in the link graph. An end-to-end regression then exposed that
+the runner overwrote standalone-DEX models with the APK-only model; it now
+merges both models and offsets DEX indexes. A regression proves asset methods
+and call edges survive. The merged pass then exposed raw Androguard objects in
+embedded-Dex permission records; these now use JSON-safe method/call-site
+records. The full suite passes (**402 tests**) and Ruff. A corrected
+copied-workspace reanalysis is running; reports, freeze, and verification
+remain pending.
+
+P8 remains PARTIAL: model dry-run, output-contract enforcement, location-map
+volume hierarchy, and split-component aggregation are unvalidated. The
+Androguard run transcript was about 159 MB due largely to vendor DEBUG output;
+noise reduction remains an explicit scale follow-up, not a closed fix. The
+first-fresh-pipeline run record and exact evidence are in
+[FIRST-FULL-PIPELINE-PLAN.md](../docs/engineering/FIRST-FULL-PIPELINE-PLAN.md).
+Earlier readiness fixes (refreshing Play delivery URLs, freeze dotfiles,
+recursive read-only permissions, fail-closed chmod, and file-only discovery)
+remain covered by their prior regression tests.
 The older 2026-11-16 status snapshots below are retained as history, not as the
 current state.
 This file is the resume point for the scanner track. Read it after
@@ -66,9 +80,9 @@ Everything below is the fix ladder. P0-P1 are done and verified.
 | P2b | Resource links: smali id cross-ref + decoded-XML file attribution | **DONE** | `133cb45` |
 | P2c | FileProvider `file_paths.xml` roots + layout/view inventory | **DONE** | `4adb6a5` |
 | P3 | Code model: class/method/field inventory, call graph v2, reflection sites | **DONE** | `3de13fe` |
-| P4 | Link graph: typed edges with two cites each + entry_points | **DONE** | `2c3d535` |
+| P4 | Link graph: typed edges with two cites each + entry_points | **DONE; secret mapping corrected in worktree** | `2c3d535` |
 | P5 | Detection breadth: 29 evidence-backed rules, endpoint/route rollups | **DONE** | implementation + fixtures |
-| P6 | Containers: bounded embedded `.dex`/`.jar`/`.apk` analysis | **DONE** | `a6c6826`, `c1854ea` |
+| P6 | Code-bearing containers and standalone decoded DEX assets | **DONE in source; full bundle reanalysis pending** | `a6c6826`, `c1854ea` |
 | P7 | Scale: streaming, checkpoint, shard by unit | **DONE** | `68fd6d6` |
 | P8 | Handoff: layout, bundle freeze, verification, workbook/prompts | **PARTIAL** | `72f2d7d`; model dry-run pending |
 
@@ -373,6 +387,17 @@ payloads to Androguard with `container!member` source citations. Container
 limits and unreadable/depth-limited members are diagnostics, not silent skips.
 This does not cover arbitrary non-zip encrypted/custom packers.
 
+**Audit correction (2026-11-17):** decoded standalone files whose observed
+content is DEX are now fed to the same Androguard payload analyzer, cited by
+their tree-relative path, and recorded as `analysed_dex` in `files.jsonl`.
+The existing extraction budgets also bound standalone inputs (32 files,
+128 MiB per file, 256 MiB total); cap/read failures are diagnosed, recorded as
+`skipped_dex`, and make DEX coverage partial. A real-payload test using the
+two Simple Calculator `assets/audience_network/classes*.dex` files parsed 2
+DEX files and 3,330 class entries with both citations and success coverage.
+The frozen full-run bundles still need reanalysis before this correction is
+present in the handoff.
+
 ### P7 — Scale
 Single-pass streaming writes, bounded memory, per-file checkpoint
 (`surface/checkpoint.py` exists and is unused), shard by natural unit.
@@ -398,6 +423,15 @@ kill. Measured baseline: 57,944/112,254 files at ~39 files/s, killed at
 - D15 audited: all 12 `read_text` call sites reviewed. Only the sweep loop
   (`apk_surface.py` per-file read) needed a size guard; others are bounded
   (config, markers, small manifests) or not in the sweep hot path.
+- Secret linkage now normalizes absolute TruffleHog paths only after they
+  resolve inside the bundle's `apktool/` root. A secret maps only to the
+  exact Smali method whose block contains the cited line and whose
+  class/name/descriptor exist in `method_model`; no class-wide edges are
+  invented. Unmapped findings have a per-finding `usage_unverified` status
+  and reason in `secret_usage`. Empty secret edge types are `not_applicable`;
+  present findings with no proven edge are `partial`, never success-shaped
+  empty output. This is fixture-tested; the frozen run still needs link
+  refresh and report regeneration.
 
 ### P8 — Handoff (partial)
 Implemented: `static-analysis.json` under `surface/` with legacy reader

@@ -723,7 +723,7 @@ def doctor() -> None:
 @click.option("--per-query", type=click.IntRange(min=1), default=516, show_default=True,
               help="Maximum search results collected per query.")
 @click.option("--packages-file", type=click.Path(exists=True, dir_okay=False, path_type=Path),
-              help="Optional UTF-8 file containing one Google Play package ID per line.")
+              help="UTF-8 package IDs; alone, skips broad chart/search discovery.")
 def discover(
     queries: tuple[str, ...],
     category_ids: tuple[str, ...],
@@ -768,23 +768,33 @@ def discover(
             existing[app.package_id] = app
         existing_channels.update(_read_catalog_channels(catalog))
     try:
-        apps, session_channels = source.discover(
-            queries=queries,
-            category_ids=category_ids or None,
-            per_category_limit=per_category,
-            per_query_limit=per_query,
-            total_limit=limit,
-            on_batch=persist_batch,
-        )
+        package_ids = []
         if packages_file:
-            session_packages = {app.package_id for app in apps}
-            packages_note = f"packages-file:{packages_file.name}"
             for raw in packages_file.read_text(encoding="utf-8").splitlines():
                 package_id = raw.strip()
-                if not package_id or package_id.startswith("#") or package_id in session_packages:
+                if not package_id or package_id.startswith("#"):
                     continue
                 if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package_id):
                     raise click.ClickException(f"Invalid Android package ID in {packages_file}: {package_id!r}")
+                package_ids.append(package_id)
+
+        if packages_file and not queries and not category_ids:
+            apps, session_channels = [], {}
+        else:
+            apps, session_channels = source.discover(
+                queries=queries,
+                category_ids=category_ids or None,
+                per_category_limit=per_category,
+                per_query_limit=per_query,
+                total_limit=limit,
+                on_batch=persist_batch,
+            )
+        if packages_file:
+            session_packages = {app.package_id for app in apps}
+            packages_note = f"packages-file:{packages_file.name}"
+            for package_id in package_ids:
+                if package_id in session_packages:
+                    continue
                 contributed = PlayApp(package_id, package_id, "", "", 0)
                 apps.append(contributed)
                 if package_id not in existing:
@@ -1151,6 +1161,9 @@ def verify_workspace(folder: Path) -> None:
     click.echo(f"  Extra: {len(result['extra'])}")
     for m in result["extra"]:
         click.echo(f"    - {m}")
+    click.echo(f"  Writable evidence: {len(result['writable'])}")
+    for item in result["writable"]:
+        click.echo(f"    - {item['kind']}: {item['path']}")
 
     if result["status"] != "ok":
         raise click.exceptions.Exit(1)

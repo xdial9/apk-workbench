@@ -82,7 +82,6 @@ def test_final_run_report_consolidates_every_stage_api_catalog_and_complete_find
     static_result = {
         "schema_version": 1,
         "status": "success",
-        "coverage": {"manifest_and_components": "success"},
         "inventory": {
             "endpoints": [{
                 "value": "https://api.example.test/v1",

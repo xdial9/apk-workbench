@@ -47,6 +47,9 @@ from apkworkbench.analysis.surface.deductions import (
 )
 from apkworkbench.analysis.surface.facts import FactStore, package_root_histogram
 from apkworkbench.analysis.surface.native import (
+    MAX_EMBEDDED_BYTES_TOTAL,
+    MAX_EMBEDDED_LIBRARIES,
+    MAX_EMBEDDED_LIBRARY_BYTES,
     NativeMethodIndex,
     analyze_native,
     extract_embedded_code,
@@ -89,6 +92,118 @@ SWEEP_STREAM_CHUNK_LINES = 10_000
 CHECKPOINT_EVERY_FILES = 25
 # Shard part record count (mirrors surface/shards.py DEFAULT_PART_RECORDS).
 SHARD_PART_RECORDS = 5_000
+
+_DEX_LIST_FIELDS = (
+    "class_model",
+    "method_model",
+    "external_method_references",
+    "internal_call_graph",
+    "dex_api_strings",
+    "reflection_sites",
+    "permission_api_usage",
+)
+_DEX_SUM_METRICS = (
+    "dex_files",
+    "classes",
+    "internal_methods",
+    "external_methods_referenced",
+    "external_methods_without_callers",
+    "internal_call_graph_edges",
+    "dex_api_string_candidates",
+    "permission_api_usage",
+    "class_model_count",
+    "method_model_count",
+    "string_class_index_entries",
+    "reflection_site_count",
+)
+
+
+def _merge_dex_analysis(
+    primary: dict[str, Any] | None,
+    additional: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if additional is None:
+        return primary
+    if primary is None:
+        return additional
+
+    primary_metrics = primary.setdefault("metrics", {})
+    additional_metrics = additional.get("metrics", {})
+    if not isinstance(primary_metrics, dict):
+        primary_metrics = {}
+        primary["metrics"] = primary_metrics
+    if not isinstance(additional_metrics, dict):
+        additional_metrics = {}
+    dex_index_offset = primary_metrics.get("dex_files", 0)
+    if not isinstance(dex_index_offset, int) or dex_index_offset < 0:
+        dex_index_offset = 0
+
+    def offset_record(record: dict[str, Any]) -> dict[str, Any]:
+        updated = dict(record)
+        for key in ("dex_index", "dex_class"):
+            index = updated.get(key)
+            if isinstance(index, int) and not isinstance(index, bool):
+                updated[key] = index + dex_index_offset
+        for key in ("call_sites", "references"):
+            nested = updated.get(key)
+            if isinstance(nested, list):
+                updated[key] = [
+                    offset_record(item) if isinstance(item, dict) else item
+                    for item in nested
+                ]
+        return updated
+
+    for key in _DEX_LIST_FIELDS:
+        extra_records = additional.get(key)
+        if not isinstance(extra_records, list):
+            continue
+        records = primary.setdefault(key, [])
+        if not isinstance(records, list):
+            records = []
+            primary[key] = records
+        records.extend(
+            offset_record(item) if isinstance(item, dict) else item
+            for item in extra_records
+        )
+
+    primary_index = primary.setdefault("string_class_index", {})
+    extra_index = additional.get("string_class_index", {})
+    if isinstance(primary_index, dict) and isinstance(extra_index, dict):
+        for value, classes in extra_index.items():
+            if not isinstance(classes, list):
+                continue
+            merged = set(primary_index.get(value, []))
+            merged.update(classes)
+            primary_index[value] = sorted(merged)
+
+    for key in _DEX_SUM_METRICS:
+        extra_count = additional_metrics.get(key, 0)
+        if isinstance(extra_count, int) and not isinstance(extra_count, bool):
+            primary_metrics[key] = primary_metrics.get(key, 0) + extra_count
+
+    primary_coverage = primary.setdefault("coverage", {})
+    extra_coverage = additional.get("coverage", {})
+    if isinstance(primary_coverage, dict) and isinstance(extra_coverage, dict):
+        for key, extra_status in extra_coverage.items():
+            current_status = primary_coverage.get(key)
+            if current_status is None or current_status in ("not_applicable", "not_run"):
+                primary_coverage[key] = extra_status
+            elif extra_status not in ("not_applicable", "not_run", current_status):
+                primary_coverage[key] = "partial"
+
+    for key in ("diagnostics", "limitations"):
+        extra_items = additional.get(key)
+        if isinstance(extra_items, list):
+            primary.setdefault(key, []).extend(extra_items)
+
+    primary_status = primary.get("status")
+    additional_status = additional.get("status")
+    if primary_status in (None, "success"):
+        primary["status"] = additional_status or primary_status or "success"
+    elif additional_status not in (None, "success", primary_status):
+        primary["status"] = "partial"
+    return primary
+
 
 SENSITIVE_PERMISSIONS = {
     "android.permission.READ_SMS", "android.permission.RECEIVE_SMS",
@@ -893,6 +1008,7 @@ def analyze_apk_surface(
         "code_container_unreadable", "code_container_member_limit",
         "code_container_depth_limit", "code_embedded_byte_limit",
         "code_container_member_unreadable",
+        "code_standalone_dex_limit", "code_standalone_dex_read_failed",
     }
     if symlink_count or any(item["code"] in partial_diagnostics for item in diagnostics):
         for area in ("endpoints_and_domains", "smali_security_indicators",
@@ -1187,11 +1303,63 @@ def analyze_apk_surface(
     deductions.sort(key=lambda item: item["id"])
     # Deduction facts now carry evidence from deductions.py directly. No post-hoc enrichment (re-adding would double-count).
     coverage.update(native_analysis.coverage)
+    standalone_dex_payloads: list[tuple[bytes, str]] = []
+    standalone_dex_skips: dict[str, str] = {}
+    standalone_dex_bytes = 0
+    standalone_dex_entries = [
+        entry for entry in tree.entries if entry.content_kind == "dex"
+    ]
+    for entry in standalone_dex_entries:
+        relative = entry.relative
+        if (
+            len(standalone_dex_payloads) >= MAX_EMBEDDED_LIBRARIES
+            or entry.size_bytes > MAX_EMBEDDED_LIBRARY_BYTES
+            or standalone_dex_bytes + entry.size_bytes > MAX_EMBEDDED_BYTES_TOTAL
+        ):
+            diagnostics.append({
+                "code": "code_standalone_dex_limit",
+                "message": (
+                    f"{relative}: standalone DEX exceeds the bounded analysis "
+                    f"budget ({entry.size_bytes} bytes; "
+                    f"{MAX_EMBEDDED_LIBRARIES} files, "
+                    f"{MAX_EMBEDDED_LIBRARY_BYTES} bytes per file, "
+                    f"{MAX_EMBEDDED_BYTES_TOTAL} bytes total)"
+                ),
+            })
+            standalone_dex_skips[relative] = "dex_analysis_limit"
+            continue
+        try:
+            with entry.path.open("rb") as handle:
+                payload = handle.read(MAX_EMBEDDED_LIBRARY_BYTES + 1)
+        except OSError as exc:
+            diagnostics.append({
+                "code": "code_standalone_dex_read_failed",
+                "message": f"{relative}: {type(exc).__name__}: {exc}",
+            })
+            standalone_dex_skips[relative] = "dex_read_failed"
+            continue
+        if len(payload) != entry.size_bytes or len(payload) > MAX_EMBEDDED_LIBRARY_BYTES:
+            diagnostics.append({
+                "code": "code_standalone_dex_read_failed",
+                "message": (
+                    f"{relative}: file size changed during bounded read "
+                    f"(classified {entry.size_bytes} bytes, read {len(payload)})"
+                ),
+            })
+            standalone_dex_skips[relative] = "dex_read_failed"
+            continue
+        standalone_dex_payloads.append((payload, relative))
+        standalone_dex_bytes += len(payload)
+
     # ---- P0: per-file coverage ledger ------------------------------------
     # Every tree entry gets one record with a status and, when not checked, a
     # reason. Counts alone could not prove what was skipped; this can.
     file_ledger = build_file_ledger(
         tree, scanned=scanned_relatives, read_failures=read_failures,
+        dex_analyzed={
+            citation for _payload, citation in standalone_dex_payloads
+        },
+        dex_skipped=standalone_dex_skips,
     )
     file_ledger_summary = summarize_file_ledger(file_ledger)
     if output_dir is not None:
@@ -1295,7 +1463,7 @@ def analyze_apk_surface(
         },
     }
 
-    # ---- P6: extract code-bearing members (.dex/.jar/.apk) from containers ----
+    # ---- P6: analyze standalone and container-nested DEX payloads ----------
     # Nested containers (.jar/.apk inside .zip) are recursed by
     # extract_embedded_code up to MAX_CONTAINER_DEPTH. Every extracted .dex is
     # fed to the DEX analyzer with container!member citations. Works whether or
@@ -1316,73 +1484,25 @@ def analyze_apk_surface(
             if item.member.lower().endswith(".dex")
         ]
         temp_paths.extend(item.path for item in embedded_code)
-        if embedded_dex:
+        dex_payloads = list(standalone_dex_payloads)
+        dex_payloads.extend(
+            (item.path.read_bytes(), item.citation) for item in embedded_dex
+        )
+        if dex_payloads:
             _emit_progress(
                 progress,
-                f"  [Androguard] Analyzing {len(embedded_dex)} embedded DEX member(s) from containers",
+                f"  [Androguard] Analyzing {len(dex_payloads)} standalone or embedded DEX payload(s)",
             )
-            embedded_payloads = [
-                (item.path.read_bytes(), item.citation) for item in embedded_dex
-            ]
             target_sdk = int(
                 result.get("manifest", {}).get("target_sdk") or 0
             )
             embedded_result = _analyze_dex_payloads(
-                embedded_payloads, target_sdk=target_sdk
+                dex_payloads, target_sdk=target_sdk
             )
-            dex_result = result.setdefault("dex_analysis", {
-                "status": "success",
-                "analyzer": {"id": "androguard-dex", "version": "4.1.4"},
-                "class_model": [], "method_model": [],
-                "external_method_references": [], "internal_call_graph": [],
-                "dex_api_strings": [], "reflection_sites": [],
-                "permission_api_usage": [], "string_class_index": {},
-                "metrics": {},
-                "diagnostics": [], "limitations": [],
-            })
-            for key in ("class_model", "method_model",
-                        "external_method_references", "internal_call_graph",
-                        "dex_api_strings", "reflection_sites",
-                        "permission_api_usage"):
-                dex_result.setdefault(key, []).extend(
-                    embedded_result.get(key, [])
-                )
-            top_sci = dex_result.setdefault("string_class_index", {})
-            for value, classes in embedded_result.get("string_class_index", {}).items():
-                if value in top_sci:
-                    merged = set(top_sci[value])
-                    merged.update(classes)
-                    top_sci[value] = sorted(merged)
-                else:
-                    top_sci[value] = list(classes)
-            top_metrics = dex_result.setdefault("metrics", {})
-            for key in ("dex_files", "classes", "internal_methods",
-                        "external_methods_referenced",
-                        "external_methods_without_callers",
-                        "internal_call_graph_edges",
-                        "dex_api_string_candidates",
-                        "permission_api_usage", "class_model_count",
-                        "method_model_count", "string_class_index_entries",
-                        "reflection_site_count"):
-                top_metrics[key] = (
-                    top_metrics.get(key, 0) + embedded_result.get("metrics", {}).get(key, 0)
-                )
-            dex_result.setdefault("diagnostics", []).extend(
-                embedded_result.get("diagnostics", [])
+            dex_result = _merge_dex_analysis(
+                result.get("dex_analysis"), embedded_result
             )
-            dex_result.setdefault("limitations", []).extend(
-                embedded_result.get("limitations", [])
-            )
-            # Keep dex_analysis status consistent: if either top-level or
-            # embedded analysis had issues, mark as partial.
-            if embedded_result.get("status") not in (None, "success"):
-                dex_result["status"] = embedded_result["status"]
-            elif dex_result.get("status") not in (None, "success"):
-                # embedded was success but top-level wasn't; keep top-level's
-                # non-success status.
-                pass
-            else:
-                dex_result["status"] = "success"
+            result["dex_analysis"] = dex_result
             if embedded_result.get("status") != "success":
                 result["status"] = "partial"
             # Combine coverage: embedded DEX analysis only adds to what the
@@ -1408,6 +1528,13 @@ def analyze_apk_surface(
     finally:
         for path in temp_paths:
             path.unlink(missing_ok=True)
+
+    if standalone_dex_skips:
+        if result["coverage"].get("dex_semantic_analysis") in (
+            None, "not_run", "not_applicable", "success",
+        ):
+            result["coverage"]["dex_semantic_analysis"] = "partial"
+        result["status"] = "partial"
 
     return finalize_result(result, tree_root=tree_root)
 
@@ -1904,8 +2031,10 @@ def refresh_secret_links(
         trufflehog_dir = bundle_dir / "trufflehog"
         static_path = surface_dir / "static-analysis.json"
         findings_path = trufflehog_dir / "findings.json"
+        apktool_root = bundle_dir / "apktool"
         for path in (
-            bundle_dir, surface_dir, trufflehog_dir, static_path, findings_path
+            bundle_dir, apktool_root, surface_dir, trufflehog_dir,
+            static_path, findings_path,
         ):
             if path.is_symlink():
                 raise ValueError(f"Refusing symlinked secret-link path: {path}")
@@ -1919,7 +2048,7 @@ def refresh_secret_links(
 
         result_value = json.loads(static_path.read_text(encoding="utf-8"))
         if not isinstance(result_value, dict):
-            raise ValueError(f"Surface result must be a JSON object: {static_path}")
+            raise TypeError(f"Surface result must be a JSON object: {static_path}")
         result = result_value
         scan = processing.get(digest, {})
         scan_status = scan.get("scan_status", "")
@@ -1963,14 +2092,17 @@ def refresh_secret_links(
         ]
         link_coverage: dict[str, str] = {}
         link_diagnostics: list[dict[str, str]] = []
+        secret_usage: list[dict[str, Any]] = []
         citation_root = f"{(bundle_dir / 'apktool').relative_to(bundle_dir).as_posix()}/"
         edges = build_link_graph(
             result,
             result.get("dex_analysis"),
             trufflehog_findings=findings,
             tree_root=citation_root,
+            finding_root=apktool_root,
             coverage=link_coverage,
             diagnostics=link_diagnostics,
+            secret_usage=secret_usage,
         )
         entry_points = build_entry_points(
             result, result.get("dex_analysis"), tree_root=citation_root
@@ -1979,7 +2111,7 @@ def refresh_secret_links(
         write_trace_chains_to_dir(bundle_dir, edges, entry_points)
         coverage = result.setdefault("coverage", {})
         if not isinstance(coverage, dict):
-            raise ValueError(f"Surface coverage must be a JSON object: {static_path}")
+            raise TypeError(f"Surface coverage must be a JSON object: {static_path}")
         for key in tuple(coverage):
             if isinstance(key, str) and key.startswith("link_type_"):
                 del coverage[key]
@@ -1988,6 +2120,27 @@ def refresh_secret_links(
         result["secret_linkage"] = {
             "status": linkage_status,
             "finding_count": len(findings) if findings is not None else None,
+        }
+        secret_usage_status = linkage_status
+        if linkage_status == "success" and any(
+            item["usage_status"] == "usage_unverified" for item in secret_usage
+        ):
+            secret_usage_status = "partial"
+        result["secret_usage"] = {
+            "status": secret_usage_status,
+            "finding_count": len(findings) if findings is not None else None,
+            "mapped_count": (
+                sum(item["usage_status"] == "mapped" for item in secret_usage)
+                if findings is not None else None
+            ),
+            "usage_unverified_count": (
+                sum(
+                    item["usage_status"] == "usage_unverified"
+                    for item in secret_usage
+                )
+                if findings is not None else None
+            ),
+            "findings": secret_usage if findings is not None else None,
         }
         result["diagnostics"].extend(link_diagnostics)
         if linkage_reason:
@@ -2212,6 +2365,7 @@ def run_static_surface_analysis(
                 output_dir=output_root,
                 apk_path=source_apk,
             )
+            embedded_dex_result = result.get("dex_analysis")
             _emit_progress(
                 progress,
                 f"  [Androguard] Parsing DEX, method references and API usage for {package_id}",
@@ -2221,6 +2375,9 @@ def run_static_surface_analysis(
                 timeout_seconds=dex_timeout_seconds,
                 progress=progress,
             )
+            dex_result = _merge_dex_analysis(dex_result, embedded_dex_result)
+            if dex_result is None:
+                raise RuntimeError("DEX analysis unexpectedly produced no result.")
             result["dex_analysis"] = dex_result
             dex_status = str(dex_result.get("status") or "failed")
             result["coverage"]["dex_semantic_analysis"] = dex_status

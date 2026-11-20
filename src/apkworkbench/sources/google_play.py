@@ -381,7 +381,10 @@ class GooglePlaySource:
         except (OSError, ValueError) as exc:
             raise GooglePlayError("Bundle directory resolves outside the downloads workspace") from exc
 
-        delivery_state: dict[str, Any] = {"downloader": play_download.Downloader(plan._delivery)}
+        delivery_state: dict[str, Any] = {
+            "delivery": plan._delivery,
+            "downloader": play_download.Downloader(plan._delivery),
+        }
         delivery_refreshed: list[str] = []
 
         def attempt_fresh_delivery() -> bool:
@@ -438,6 +441,7 @@ class GooglePlaySource:
                         "manifest was frozen. Re-run the pipeline to re-select; "
                         "nothing downloaded is trusted."
                     )
+            delivery_state["delivery"] = fresh_delivery
             delivery_state["downloader"] = play_download.Downloader(fresh_delivery)
             self._emit_progress("[Download] delivery refresh verified against the frozen plan")
             return True
@@ -451,7 +455,7 @@ class GooglePlaySource:
                 try:
                     upstream_file = next(
                         candidate for candidate in play_download.play_files(
-                            plan.app.package_id, plan._delivery
+                            plan.app.package_id, delivery_state["delivery"]
                         ) if candidate.name == item.name
                     )
                     self._emit_progress(

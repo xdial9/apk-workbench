@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 from click.testing import CliRunner
 
 cli = importlib.import_module("apkworkbench.cli.main")
@@ -90,3 +91,26 @@ def test_verify_workspace_reports_missing_hash_manifest_without_traceback(
     assert "Status: ERROR" in result.output
     assert "hashes.sha256 not found" in result.output
     assert "Traceback" not in result.output
+
+
+def test_verify_workspace_reports_writable_evidence(monkeypatch, tmp_path):
+    class ConfigStub:
+        def get(self, key, default=None):
+            return str(tmp_path) if key == "workspace" else default
+
+    monkeypatch.setattr(cli, "Config", ConfigStub)
+    bundle = tmp_path / "results" / "org.example.cli" / "1" / ("c" * 64)
+    surface = bundle / "surface"
+    surface.mkdir(parents=True)
+    evidence_file = surface / "static-analysis.json"
+    evidence_file.write_text("{}", encoding="utf-8")
+    database = WorkspaceDatabase(tmp_path)
+    database.freeze_evidence(bundle)
+    os.chmod(evidence_file, 0o644)
+
+    result = CliRunner().invoke(cli.main, ["verify-workspace", str(bundle)])
+
+    assert result.exit_code == 1
+    assert "Status: FAILED" in result.output
+    assert "Writable evidence: 1" in result.output
+    assert "file: surface/static-analysis.json" in result.output

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections import deque
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import Any
@@ -645,7 +646,12 @@ def _method_native_edges(
     return edges
 
 
-def _finding_path_line(finding: dict[str, Any]) -> tuple[str, int | None]:
+def _finding_path_line(
+    finding: dict[str, Any],
+    *,
+    finding_root: str | Path | None,
+    diagnostics: list[dict[str, str]] | None,
+) -> tuple[str, int | None]:
     """Same coordinate trufflehog.py reads: SourceMetadata.Data.Filesystem."""
     source = finding.get("SourceMetadata")
     if not isinstance(source, dict):
@@ -662,6 +668,27 @@ def _finding_path_line(finding: dict[str, Any]) -> tuple[str, int | None]:
         line = int(raw_line) if raw_line is not None else None
     except (TypeError, ValueError):
         line = None
+    if path and Path(path).is_absolute() and finding_root is None:
+        _record(
+            diagnostics,
+            "link_secret_finding_root_missing",
+            "absolute TruffleHog path cannot be safely mapped without the apktool root",
+        )
+        return "", line
+    if path and finding_root is not None:
+        try:
+            root = Path(finding_root).resolve(strict=True)
+            candidate = Path(path)
+            if not candidate.is_absolute():
+                candidate = root / candidate
+            path = candidate.resolve(strict=True).relative_to(root).as_posix()
+        except (OSError, RuntimeError, ValueError):
+            _record(
+                diagnostics,
+                "link_secret_finding_path_unresolved",
+                "TruffleHog path is missing or outside the apktool root; no link was created",
+            )
+            return "", line
     return path, line
 
 
@@ -683,6 +710,7 @@ def _native_secret_edges(
     trufflehog_findings: list[dict[str, Any]] | None,
     *,
     tree_root: str,
+    finding_root: str | Path | None,
     diagnostics: list[dict[str, str]] | None,
 ) -> list[dict[str, Any]]:
     libraries = [
@@ -711,7 +739,9 @@ def _native_secret_edges(
     for finding in trufflehog_findings:
         if not isinstance(finding, dict):
             continue
-        path, line = _finding_path_line(finding)
+        path, line = _finding_path_line(
+            finding, finding_root=finding_root, diagnostics=diagnostics
+        )
         library = _match_library(path, libraries) if path else None
         if library is None:
             continue
@@ -742,26 +772,63 @@ def _native_secret_edges(
     return edges
 
 
-def _file_path_to_class(file_path: str) -> str | None:
-    """Convert a smali file path to a class descriptor.
-    
-    e.g., smali/com/example/Foo.smali -> Lcom/example/Foo;
-    smali_classes2/com/example/Foo.smali -> Lcom/example/Foo;
-    """
-    if not file_path.endswith(".smali"):
-        return None
-    rel = file_path[:-len(".smali")]
-    if rel.startswith("smali/"):
-        rel = rel[len("smali/"):]
-    elif rel.startswith("smali_classes"):
-        parts = rel.split("/", 1)
-        if len(parts) == 2:
-            rel = parts[1]
-        else:
-            return None
-    else:
-        return None
-    return "L" + rel + ";"
+def _method_for_smali_finding(
+    path: str,
+    line: int | None,
+    dex_result: dict[str, Any],
+    finding_root: str | Path | None,
+) -> tuple[dict[str, Any] | None, str | None, int | None, str | None]:
+    if not isinstance(line, int) or line < 1:
+        return None, None, None, "finding_line_missing"
+    classes, methods = _class_index(dex_result)
+    class_name = _smali_path_to_class(path, classes)
+    if not class_name:
+        return None, None, None, "smali_path_unrecognized"
+    if class_name not in classes:
+        return None, class_name, None, "class_not_in_dex_model"
+    if finding_root is None:
+        return None, class_name, None, "apktool_root_missing"
+
+    current: tuple[str, str, int] | None = None
+    try:
+        source = (Path(finding_root) / path).open(
+            "r", encoding="utf-8", errors="replace"
+        )
+        with source:
+            for line_number, text in enumerate(source, start=1):
+                if line_number > line:
+                    break
+                stripped = text.strip()
+                if stripped == ".end method":
+                    current = None
+                elif stripped.startswith(".method "):
+                    signature = stripped.split()[-1]
+                    opening = signature.find("(")
+                    if opening > 0 and ")" in signature[opening:]:
+                        current = (
+                            signature[:opening],
+                            signature[opening:],
+                            line_number,
+                        )
+                    else:
+                        current = None
+                if line_number == line:
+                    break
+    except OSError:
+        return None, class_name, None, "smali_source_unreadable"
+    if current is None:
+        return None, class_name, None, "line_not_inside_method"
+
+    method_name, descriptor, declaration_line = current
+    method = next((
+        entry for entry in methods.values()
+        if entry.get("class_name") == class_name
+        and entry.get("method_name") == method_name
+        and entry.get("descriptor") == descriptor
+    ), None)
+    if method is None:
+        return None, class_name, declaration_line, "method_not_in_dex_model"
+    return method, class_name, declaration_line, None
 
 
 def _permission_secret_edges(
@@ -770,14 +837,10 @@ def _permission_secret_edges(
     trufflehog_findings: list[dict[str, Any]] | None,
     *,
     tree_root: str,
+    finding_root: str | Path | None,
     diagnostics: list[dict[str, str]] | None,
 ) -> list[dict[str, Any]]:
-    """Link permissions to TruffleHog secrets found in code files.
-    
-    For each TruffleHog finding found in a smali/Java file, find which
-    permission_api_usage entries have call_sites in that same class, and
-    create permission->secret edges.
-    """
+    """Link a secret only to permissions used by its exact containing method."""
     edges: list[dict[str, Any]] = []
 
     if trufflehog_findings is None:
@@ -788,8 +851,7 @@ def _permission_secret_edges(
     if not permission_usages:
         return edges
 
-    # Build a map from class name -> set of permissions
-    class_to_permissions: dict[str, set[str]] = {}
+    method_to_permissions: dict[str, set[str]] = {}
     for usage in permission_usages:
         if not isinstance(usage, dict):
             continue
@@ -800,29 +862,28 @@ def _permission_secret_edges(
             if not isinstance(site, dict):
                 continue
             caller = str(site.get("caller", ""))
-            if not caller:
-                continue
-            # caller format: Lcom/example/Foo; methodName (args)Ret
-            class_part = caller.split(";", 1)[0] + ";" if ";" in caller else ""
-            if class_part:
-                class_to_permissions.setdefault(class_part, set()).update(permissions)
+            if caller:
+                method_to_permissions.setdefault(caller, set()).update(permissions)
 
-    if not class_to_permissions:
+    if not method_to_permissions:
         return edges
 
     for finding in trufflehog_findings:
         if not isinstance(finding, dict):
             continue
-        path, line = _finding_path_line(finding)
+        path, line = _finding_path_line(
+            finding, finding_root=finding_root, diagnostics=diagnostics
+        )
         if not path:
             continue
 
-        # Extract class name from smali file path
-        class_name = _file_path_to_class(path)
-        if not class_name:
+        method, _class_name, declaration_line, reason = _method_for_smali_finding(
+            path, line, dex_result, finding_root
+        )
+        if method is None or reason:
             continue
-
-        perms = class_to_permissions.get(class_name, set())
+        full_name = str(method.get("full_name") or "")
+        perms = method_to_permissions.get(full_name, set())
         if not perms:
             continue
 
@@ -835,8 +896,12 @@ def _permission_secret_edges(
                 permission_node(permission),
                 secret_node(detector, _cite_path(path, tree_root), line),
                 EvidenceLocation(
-                    evidence_kind="permission_requirement",
+                    evidence_kind="permission_api_usage",
                     source_path=_cite_path(path, tree_root),
+                    line_start=declaration_line,
+                    line_end=line,
+                    dex_class=str(method.get("class_name") or ""),
+                    method_signature=full_name,
                     extractor_coordinate={"permission": permission},
                 ),
                 EvidenceLocation(
@@ -861,88 +926,91 @@ def _method_secret_edges(
     trufflehog_findings: list[dict[str, Any]] | None,
     *,
     tree_root: str,
+    finding_root: str | Path | None,
     diagnostics: list[dict[str, str]] | None,
+    secret_usage: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
-    """Link TruffleHog findings found in smali files to the methods they're in.
-
-    For each finding whose SourceMetadata points at a .smali file, map the file
-    to a class, find all methods in that class from the DEX model, and create
-    method->secret edges. This gives the AI concrete starting points: from any
-    exported component, walk class->method->...->method->secret.
-    """
+    """Map findings to the exact containing Smali method, never its whole class."""
     edges: list[dict[str, Any]] = []
 
     if trufflehog_findings is None:
         return edges
 
     dex_result = dex_result or {}
-    classes, methods = _class_index(dex_result)
-    if not classes or not methods:
-        return edges
-
-    # Build class name -> list of methods
-    class_to_methods: dict[str, list[dict[str, Any]]] = {}
-    for method in methods.values():
-        class_name = str(method.get("class_name") or "")
-        if class_name:
-            class_to_methods.setdefault(class_name, []).append(method)
-
-    for finding in trufflehog_findings:
+    for finding_index, finding in enumerate(trufflehog_findings):
         if not isinstance(finding, dict):
             continue
-        path, line = _finding_path_line(finding)
-        if not path:
-            continue
-        # Only smali files can be mapped to methods
-        if not path.endswith(".smali"):
-            continue
-        class_name = _smali_path_to_class(path)
-        if not class_name:
-            continue
-        class_methods = class_to_methods.get(class_name, [])
-        if not class_methods:
-            continue
+        path, line = _finding_path_line(
+            finding, finding_root=finding_root, diagnostics=diagnostics
+        )
         detector = str(
             finding.get("DetectorName") or finding.get("DetectorType") or "unknown"
         )
         verified = finding.get("Verified") is True
-        for method in class_methods:
-            full_name = str(method.get("full_name") or "")
-            if not full_name:
-                continue
-            edges.append(_make_edge(
-                "method->secret",
-                method_node(full_name),
-                secret_node(detector, _cite_path(path, tree_root), line),
-                EvidenceLocation(
-                    evidence_kind="dex_method",
-                    dex_class=class_name,
-                    method_signature=full_name,
-                    extractor_coordinate={
-                        "dex_index": method.get("dex_index"),
-                        "offset": line,
-                    },
-                ),
-                EvidenceLocation(
-                    evidence_kind="trufflehog_finding",
-                    source_path=_cite_path(path, tree_root),
-                    line_start=line,
-                    extractor_coordinate={
-                        "detector": detector,
-                        "detector_type": finding.get("DetectorType"),
-                        "decoder": finding.get("DecoderName"),
-                        "verification": "verified" if verified else "unverified",
-                    },
-                ),
-            ))
+        reason = "source_path_unresolved" if not path else None
+        method = None
+        class_name = None
+        declaration_line = None
+        if path and not path.endswith(".smali"):
+            reason = "non_smali_source"
+        elif path:
+            method, class_name, declaration_line, reason = _method_for_smali_finding(
+                path, line, dex_result, finding_root
+            )
+        mapped = method is not None and reason is None
+        record = {
+            "finding_index": finding_index,
+            "source_path": _cite_path(path, tree_root) if path else None,
+            "line": line,
+            "detector": detector,
+            "verification": "verified" if verified else "unverified",
+            "usage_status": "mapped" if mapped else "usage_unverified",
+            "method": method.get("full_name") if mapped else None,
+            "reason": None if mapped else reason,
+        }
+        if secret_usage is not None:
+            secret_usage.append(record)
+        if not mapped:
+            continue
+
+        full_name = str(method.get("full_name") or "")
+        edges.append(_make_edge(
+            "method->secret",
+            method_node(full_name),
+            secret_node(detector, _cite_path(path, tree_root), line),
+            EvidenceLocation(
+                evidence_kind="smali_method",
+                source_path=_cite_path(path, tree_root),
+                line_start=declaration_line,
+                line_end=line,
+                dex_class=class_name,
+                method_signature=full_name,
+                extractor_coordinate={"dex_index": method.get("dex_index")},
+            ),
+            EvidenceLocation(
+                evidence_kind="trufflehog_finding",
+                source_path=_cite_path(path, tree_root),
+                line_start=line,
+                extractor_coordinate={
+                    "detector": detector,
+                    "detector_type": finding.get("DetectorType"),
+                    "decoder": finding.get("DecoderName"),
+                    "verification": "verified" if verified else "unverified",
+                },
+            ),
+        ))
     return edges
 
 
-def _smali_path_to_class(smali_path: str) -> str | None:
+def _smali_path_to_class(
+    smali_path: str,
+    known_classes: dict[str, Any] | None = None,
+) -> str | None:
     """Convert a smali file path to a class descriptor.
 
     smali/com/example/Foo.smali -> Lcom/example/Foo;
     smali_classes2/com/example/Foo.smali -> Lcom/example/Foo;
+    smali_assets/<asset>/classes2/com/example/Foo.smali -> Lcom/example/Foo;
     """
     rel = smali_path
     if rel.startswith("smali/"):
@@ -953,6 +1021,22 @@ def _smali_path_to_class(smali_path: str) -> str | None:
             rel = parts[1]
         else:
             return None
+    elif rel.startswith("smali_assets/"):
+        parts = rel[len("smali_assets/"):].split("/")
+        candidates = {
+            "L" + "/".join(parts[index + 1:])[:-len(".smali")] + ";"
+            for index, part in enumerate(parts[:-1])
+            if (
+                part == "classes"
+                or (part.startswith("classes") and part[len("classes"):].isdigit())
+            )
+            and "/".join(parts[index + 1:]).endswith(".smali")
+        }
+        if known_classes is not None:
+            matches = candidates.intersection(known_classes)
+            if len(matches) == 1:
+                return next(iter(matches))
+        return next(iter(candidates)) if len(candidates) == 1 else None
     else:
         return None
     if not rel.endswith(".smali"):
@@ -967,9 +1051,11 @@ def build_link_graph(
     *,
     trufflehog_findings: list[dict[str, Any]] | None = None,
     tree_root: str = "apktool/",
+    finding_root: str | Path | None = None,
     manifest_relative: str = "AndroidManifest.xml",
     coverage: dict[str, str] | None = None,
     diagnostics: list[dict[str, str]] | None = None,
+    secret_usage: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Build every provable typed edge, sorted and de-duplicated.
 
@@ -1006,15 +1092,16 @@ def build_link_graph(
     ))
     edges.extend(_native_secret_edges(
         surface_result, trufflehog_findings,
-        tree_root=tree_root, diagnostics=diagnostics,
+        tree_root=tree_root, finding_root=finding_root, diagnostics=diagnostics,
     ))
     edges.extend(_method_secret_edges(
         surface_result, dex_result, trufflehog_findings,
-        tree_root=tree_root, diagnostics=diagnostics,
+        tree_root=tree_root, finding_root=finding_root, diagnostics=diagnostics,
+        secret_usage=secret_usage,
     ))
     edges.extend(_permission_secret_edges(
         surface_result, dex_result, trufflehog_findings,
-        tree_root=tree_root, diagnostics=diagnostics,
+        tree_root=tree_root, finding_root=finding_root, diagnostics=diagnostics,
     ))
 
     # asset->reader has no provable source yet. classify.py exposes the asset
@@ -1039,17 +1126,22 @@ def build_link_graph(
     ordered = [unique[key] for key in sorted(unique)]
 
     produced = {edge["edge_type"] for edge in ordered}
-    completed_secret_types = (
-        {"native->secret", "method->secret", "permission->secret"}
-        if trufflehog_findings is not None else set()
-    )
+    secret_edge_types = {"native->secret", "method->secret", "permission->secret"}
     for edge_type in EDGE_TYPES:
+        if edge_type in produced:
+            status = "success"
+        elif (
+            edge_type in secret_edge_types
+            and trufflehog_findings is not None
+            and trufflehog_findings
+        ):
+            status = "partial"
+        else:
+            status = "not_applicable"
         _mark(
             coverage,
             edge_type,
-            "success"
-            if edge_type in produced or edge_type in completed_secret_types
-            else "not_applicable",
+            status,
         )
     return ordered
 
@@ -1257,13 +1349,10 @@ def build_trace_chains(
     entry_points: list[dict[str, Any]],
     max_depth: int = 8,
 ) -> list[dict[str, Any]]:
-    """Find end-to-end trace chains from entry points to secrets.
+    """Find one deterministic shortest trace per reachable entry-point/secret pair.
 
-    Walks the link graph from each entry point (component node) to every
-    reachable secret node (native->secret or permission->secret target),
-    returning the full chain with edge types and citations at each hop.
-    Used by the AI to trace: URL → method → caller → entry point →
-    permission → native call → secret.
+    Breadth-first traversal preserves a concrete cited path without expanding
+    every alternate call path through a large, branching method graph.
     """
     # Build adjacency list: from_node -> list of (edge, to_node)
     adj: dict[str, list[tuple[dict[str, Any], str]]] = {}
@@ -1288,36 +1377,40 @@ def build_trace_chains(
         return []
 
     chains: list[dict[str, Any]] = []
-
-    def dfs(
-        node: str,
-        path: list[dict[str, Any]],
-        visited: set[str],
-        depth: int,
-    ) -> None:
-        if depth > max_depth:
-            return
-        if node in secret_nodes:
-            chains.append({
-                "chain_length": len(path),
-                "start_node": path[0]["from"] if path else node,
-                "end_node": node,
-                "edges": path,
-            })
-            return
-        for edge, to_node in adj.get(node, []):
-            if to_node in visited:
-                continue  # avoid cycles
-            visited.add(to_node)
-            path.append(edge)
-            dfs(to_node, path, visited, depth + 1)
-            path.pop()
-            visited.discard(to_node)
-
     for start in sorted(start_nodes):
-        dfs(start, [], {start}, 0)
+        parents: dict[str, tuple[str, dict[str, Any]] | None] = {start: None}
+        depths = {start: 0}
+        queue = deque([start])
+        while queue:
+            node = queue.popleft()
+            depth = depths[node]
+            if node in secret_nodes:
+                path: list[dict[str, Any]] = []
+                cursor = node
+                while parents[cursor] is not None:
+                    previous, edge = parents[cursor]
+                    path.append(edge)
+                    cursor = previous
+                path.reverse()
+                chains.append({
+                    "chain_length": len(path),
+                    "start_node": start,
+                    "end_node": node,
+                    "edges": path,
+                })
+                continue
+            if depth >= max_depth:
+                continue
+            for edge, to_node in adj.get(node, []):
+                if to_node in parents:
+                    continue
+                parents[to_node] = (node, edge)
+                depths[to_node] = depth + 1
+                queue.append(to_node)
 
-    chains.sort(key=lambda c: c["chain_length"])
+    chains.sort(key=lambda item: (
+        item["chain_length"], item["start_node"], item["end_node"]
+    ))
     return chains
 
 
