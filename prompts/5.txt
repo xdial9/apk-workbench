@@ -8,7 +8,9 @@ INPUTS
   ai_analysis/attempt-01/memory/*  everything from Stages 1-4
   trufflehog/                      findings-verified.json +
                                    findings-unverified.json (included in the
-                                   dossier with their confidence label)
+                                   dossier with their confidence label; check
+                                   scan.json + stages/trufflehog/status.json
+                                   when empty)
 
 DELIVERABLE 1: ai_analysis/attempt-01/dossier.md (human-facing; use this structure)
   # App Dossier: <package> v<version>
@@ -33,7 +35,7 @@ valid JSON — no comments or trailing commas)
   {
     "schema_version": 1,
     "package": "<pkg>",
-    "version_code": "<n>",
+    "version_code": "<n (matching artifact.version_code)>",
     "confidence_labels": ["tool_verified", "deduced", "hint", "open_question"],
     "findings": [
       {
@@ -45,7 +47,8 @@ valid JSON — no comments or trailing commas)
         "evidence": [
           "apktool/.../file.smali:123",
           "apktool/lib/arm64-v8a/libfoo.so@0x1a40",
-          "trufflehog/findings.json[0]"
+          "trufflehog/findings.json[0]",
+          "surface/static-analysis.json coverage.network_security_config"
         ],
         "narrative": "...",
         "related_findings": ["A2"],
@@ -57,7 +60,7 @@ valid JSON — no comments or trailing commas)
         "id": "D1",
         "narrative": "...",
         "confidence": "deduced|hint|open_question",
-        "facts": ["A1", "E5"],
+        "facts": ["A1", "FACT-<sha256>"],
         "cites": ["..."]
       }
     ],
@@ -67,9 +70,11 @@ valid JSON — no comments or trailing commas)
       "missed": ["...summary entries..."]
     }
   }
-  RULES: every finding id referenced elsewhere must exist; every evidence
-  path must be inside this bundle folder; unknowns remain entries with label
-  open_question rather than being dropped.
+  RULES: every AI finding id referenced in related_findings or
+  deductions[].facts must exist in findings[] (use FACT-<sha256> or
+  surface/facts.jsonl line N for surface facts); every evidence path must be
+  inside this bundle folder (apktool/<component>/... for split APKs); unknowns
+  remain entries with label open_question rather than being dropped.
 
 DELIVERABLE 3:
   - Compile ai_analysis/attempt-01/memory/lead_ledger.jsonl into strict valid

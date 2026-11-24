@@ -43,8 +43,11 @@ class FakePlayApi:
 
 @pytest.fixture(autouse=True)
 def no_account_environment(monkeypatch):
+    from goopdl import _account
+
     monkeypatch.delenv("GOOPDL_ACCOUNT_EMAIL", raising=False)
     monkeypatch.delenv("GOOPDL_AAS_TOKEN", raising=False)
+    monkeypatch.setattr(_account, "load", lambda: None)
     FakePlayApi.calls.clear()
 
 

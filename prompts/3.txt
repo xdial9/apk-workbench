@@ -7,11 +7,17 @@ the stage where your reasoning adds what static rules cannot.
 
 INPUTS
   ai_analysis/attempt-01/memory/all_leads.md  the merged lead list (from Stage 2)
-  folder evidence per lead citation (apktool/, manifest/, trufflehog/)
+  folder evidence per lead citation (apktool/, manifest/, trufflehog/, stages/)
+  surface/static-analysis.json                bounded subsections when needed
+                                              (coverage, findings, deductions,
+                                              inventory, dex_analysis — do NOT
+                                              load whole file)
   surface/facts.jsonl                         when a lead touches a fact kind
+  surface/resources.jsonl                     to resolve numeric @id resource refs
   surface/links.jsonl                         typed edges between components,
                                               classes, methods, endpoints,
                                               permissions, native, and secrets
+                                              (stream/filter — can exceed 100 MB)
   surface/entry_points.jsonl                  reachable component entry points
   surface/trace_chains.jsonl                  precomputed entry->secret chains
 
@@ -23,7 +29,11 @@ METHOD PER LEAD (one work file per lead: ai_analysis/attempt-01/memory/lead_<n>.
    you see the constructor + call site + branching. Follow calls via
    surface/links.jsonl or smali/native references: who passes the sensitive
    value where? (entry point -> caller -> uploader -> endpoint, or Java JNI ->
-   native .so@0xOFFSET is the classic chain worth stating when visible.)
+   native .so@0xOFFSET is the classic chain worth stating when visible.) When
+   apktool/smali*/ is absent (partial decompile), trace callers and constants
+   via surface/links.jsonl, dex_analysis (dex_api_strings,
+   permission_api_usage, external_method_references, internal_call_graph),
+   and apktool/res/ XMLs.
 4. APPLY JUDGMENT TEMPLATES where applicable — record which template and
    whether its conjunctive facts truly hold:
    - PERIODIC BEACONING: background component + sensitive permission +
@@ -41,13 +51,14 @@ METHOD PER LEAD (one work file per lead: ai_analysis/attempt-01/memory/lead_<n>.
    guesses as HINTS), embedded zips contents listing. Record decoded
    values + their citations as new facts; the decoder steps you ran go into
    ai_analysis/attempt-01/memory/NOTES.md.
-6. TRIAGE with documented honesty; record one entry per closed lead in
+6. TRIAGE with documented honesty; record one entry per lead (pursued,
+   dismissed, or open with explicit reason) in
    ai_analysis/attempt-01/memory/lead_ledger.jsonl (one JSON object per line,
    which you will compile into the strict JSON array
    ai_analysis/attempt-01/lead_ledger.json in Stage 5):
      {"id": "...", "question": "...", "status": "pursued|dismissed|open",
       "outcome_summary": "...",
-      "evidence": ["apktool/...:line or @0xOFFSET"],
+      "evidence": ["apktool/...:line or @0xOFFSET", "surface/... or manifest/..."],
       "confidence": "tool_verified|deduced|hint|open_question"}
    "dismissed" is a valid outcome WITH a reason; silence is not closure.
 7. UPDATE ai_analysis/attempt-01/memory/all_leads.md status marks as you go

@@ -29,11 +29,11 @@ from apkworkbench.analysis.apk_surface import (
     analyze_apk_surface,
     run_static_surface_analysis,
 )
-from apkworkbench.analysis.contracts import EvidenceLocation
 from apkworkbench.analysis.surface import links as link_module
 from apkworkbench.analysis.surface.links import (
     EDGE_KEYS,
     EDGE_TYPES,
+    EvidenceLocation,
     build_entry_points,
     build_link_graph,
     citation_to_dict,

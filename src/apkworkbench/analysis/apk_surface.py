@@ -565,7 +565,10 @@ def _save_sweep_checkpoint(
     coverage: dict[str, str],
 ) -> None:
     """Persist accumulated sweep state atomically before advancing the checkpoint."""
+    sorted_processed = sorted(processed_files)
     state_payload = {
+        "stage": stage,
+        "processed_files": sorted_processed,
         "dependency_evidence": sweep.dependency_evidence,
         "api_endpoints": sweep.api_endpoints,
         "endpoint_hosts": sorted(sweep.endpoint_hosts),
@@ -591,7 +594,7 @@ def _save_sweep_checkpoint(
         state_path,
         json.dumps(state_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
     )
-    checkpoint.save(stage, processed_files=sorted(processed_files))
+    checkpoint.save(stage, processed_files=sorted_processed)
 
 
 def _load_sweep_checkpoint(
@@ -606,17 +609,41 @@ def _load_sweep_checkpoint(
 ) -> tuple[set[str], int, int]:
     """Restore sweep state from checkpoint; returns (processed_files, scanned_bytes, code_scanned)."""
     loaded = checkpoint.load()
-    if loaded is None:
-        return set(), 0, 0
-    raw_files = loaded.get("processed_files")
-    if not isinstance(raw_files, list) or not raw_files:
-        return set(), 0, 0
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return set(), 0, 0
     if not isinstance(state, dict):
         return set(), 0, 0
+
+    # sweep_state.json is written atomically before checkpoint.save(); when it
+    # carries processed_files, treat it as the authoritative source of truth so
+    # a crash between the two writes never re-sweeps already-recorded files.
+    has_state_files = "processed_files" in state
+    if has_state_files:
+        raw_files = state.get("processed_files")
+    elif loaded is not None:
+        raw_files = loaded.get("processed_files")
+    else:
+        return set(), 0, 0
+
+    if not isinstance(raw_files, list) or not raw_files:
+        return set(), 0, 0
+    if not all(isinstance(item, str) for item in raw_files):
+        return set(), 0, 0
+
+    restored_files = set(raw_files)
+    if has_state_files:
+        checkpoint_files = loaded.get("processed_files") if loaded is not None else None
+        if (
+            not isinstance(checkpoint_files, list)
+            or not all(isinstance(item, str) for item in checkpoint_files)
+            or set(checkpoint_files) != restored_files
+        ):
+            stage = state.get("stage")
+            if not isinstance(stage, str) or not stage:
+                stage = str((loaded or {}).get("stage") or "sweep")
+            checkpoint.save(stage, processed_files=sorted(restored_files))
 
     if isinstance(state.get("dependency_evidence"), dict):
         for key, paths in state["dependency_evidence"].items():

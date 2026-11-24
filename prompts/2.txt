@@ -7,24 +7,31 @@ incomplete, (c) things the tool marked as unknown. Group (b) and (c) are the
 reasons you exist — record them prominently.
 
 INPUTS
-  surface/static-analysis.json   summary, manifest, identity, coverage,
-                                 metrics, inventory, dex_analysis, deductions,
-                                 workbook (NOTE: can be hundreds of MB; do not
-                                 dump whole file into context)
+  surface/static-analysis.json   status, artifact, manifest, identity,
+                                 coverage, metrics, sdk_histogram, inventory,
+                                 facts, findings, deductions, diagnostics,
+                                 limitations, dex_analysis, apk_inventory,
+                                 workbook, secret_linkage, secret_usage
+                                 (NOTE: can exceed 100 MB; NEVER dump whole
+                                 file into context — inspect bounded sections)
   surface/facts.jsonl            one line per extracted fact with full
                                  evidence (path/line/offset/cited occurrences)
   surface/location_map.json      generated index of every fact, finding, and
                                  deduction (exact file:line or @0xOFFSET)
   surface/files.jsonl            per-file coverage ledger (scanned vs skipped)
-  surface/resources.jsonl        streamed decoded ARSC resource table
+  surface/resources.jsonl        streamed decoded ARSC resource table (can be
+                                 multi-MB; query/grep by hex id, type, or name)
   surface/links.jsonl            typed link edges (component/class/method/
-                                 endpoint/permission/native/secret)
+                                 endpoint/permission/native/secret; can exceed
+                                 100 MB — stream/filter, never load whole)
   surface/entry_points.jsonl     component entry points + reachability
   surface/trace_chains.jsonl     shortest cited entry-point -> secret chains
+                                 (may be 0 bytes when none exist)
   surface/shards-index.json      (when present): read BEFORE any surface/shards/
   trufflehog/                    findings.json (all), findings-verified.json,
-                                 findings-unverified.json, scan.json (or
-                                 status.json if scan did not run)
+                                 findings-unverified.json, findings-all.txt,
+                                 scan.json; check stages/trufflehog/status.json
+                                 (or trufflehog/status.json if present)
   manifest/google-play-bundle.json (if present): delivery bundle components
   manifest/provenance.json       (or manifest/status.json if absent)
   handoff.json                   schema/tool/prompt versions + file hashes
@@ -36,14 +43,23 @@ INPUTS
 METHOD
 1. SKIM surface/static-analysis.json section headers first using targeted/
    bounded inspection (top-level keys: status, artifact, identity, manifest,
-   coverage, metrics, sdk_histogram, deductions, workbook.playbook.open_leads,
-   diagnostics, limitations; avoid loading huge lists like facts/findings/
-   dex_analysis.class_model/method_model/internal_call_graph/
-   inventory.file_ledger wholesale). Use surface/facts.jsonl,
-   surface/location_map.json, and surface/files.jsonl selectively for kinds
-   relevant to your leads, and follow cited locations into apktool/ files when
-   detail matters. If surface/shards-index.json exists, read the index first
-   and open only the shards you need.
+   coverage, metrics, sdk_histogram, inventory.dependencies, deductions,
+   workbook.playbook.open_leads, diagnostics, limitations, secret_linkage,
+   secret_usage; avoid loading huge lists/maps like facts, findings,
+   apk_inventory.members, inventory.resource_and_asset_paths,
+   dex_analysis.class_model, dex_analysis.method_model,
+   dex_analysis.string_class_index, dex_analysis.external_method_references,
+   dex_analysis.internal_call_graph, and dex_analysis.dex_api_strings
+   wholesale — note inventory.file_ledger is a summary pointing to
+   surface/files.jsonl). Use surface/facts.jsonl, surface/location_map.json,
+   and surface/files.jsonl selectively for kinds relevant to your leads, and
+   follow cited locations into apktool/ files when detail matters. If
+   surface/shards-index.json exists, read the index first and open only the
+   shards you need. If smali*/ was absent in Stage 1 (or sdk_histogram is
+   empty), compute the package root histogram from dex_analysis.class_model
+   and inspect inventory.dependencies. If AndroidManifest.xml had numeric
+   @<decimal_id> references, convert to hex (0x...) and query
+   surface/resources.jsonl by "id" to resolve them.
 2. CONFIRMATION PASS: for each tool claim you sampled in Stage 1 territory
    (permissions, components, endpoints, SDK inventory, native libs), verify
    against your raw map. Record agreement/disagreement into
@@ -67,13 +83,14 @@ METHOD
    You will work through this merged list in Stage 3.
 4. TOOL-VERIFIED & UNVERIFIED SECRETS: read BOTH
    trufflehog/findings-verified.json AND trufflehog/findings-unverified.json
-   (or trufflehog/findings.json, plus trufflehog/scan.json; if trufflehog did
-   not run, read trufflehog/status.json). Never ignore unverified findings.
-   Cross-reference each finding with your raw understanding (context of the
-   file, what system uses it) and any edges in surface/trace_chains.jsonl or
-   surface/links.jsonl; note the usage context — verified secret + usage
-   inference is one of the highest-value dossier items, and unverified hits
-   must be triaged honestly.
+   (or trufflehog/findings.json, plus trufflehog/scan.json; check
+   stages/trufflehog/status.json, or trufflehog/status.json if present, to
+   distinguish "ran with 0 findings" from "not run / skipped"). Never ignore
+   unverified findings. Cross-reference each finding with your raw
+   understanding (context of the file, what system uses it) and any edges in
+   surface/trace_chains.jsonl or surface/links.jsonl; note the usage context
+   — verified secret + usage inference is one of the highest-value dossier
+   items, and unverified hits must be triaged honestly.
 5. PROVENANCE + VERSION/DELIVERY NOTES: read manifest/google-play-bundle.json
    (if present: provenance.discovered_via, provenance.discovered_at, run_id,
    signer_sha256, files[]) and manifest/provenance.json (or

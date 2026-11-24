@@ -7,16 +7,23 @@ operator next.
 
 INPUTS
   ai_analysis/attempt-01/memory/ (all Stage 1..3 notes, raw map, leads, decoded)
-  surface/static-analysis.json   inventory, deductions, dex_analysis, metrics,
-                                 coverage (for correlation)
+  surface/static-analysis.json   bounded subsections only (inventory,
+                                 deductions, dex_analysis metrics/
+                                 permission_api_usage/dex_api_strings, metrics,
+                                 coverage — do NOT load whole >100 MB file)
   surface/links.jsonl + surface/entry_points.jsonl + surface/trace_chains.jsonl
+                                 (stream/filter links.jsonl — can exceed 100 MB)
   trufflehog/                    findings-verified.json + findings-unverified.json
-                                 (or findings.json; usage context from Stage 2)
+                                 (or findings.json; scan.json +
+                                 stages/trufflehog/status.json when empty; usage
+                                 context from Stage 2)
 
 METHOD
 1. BUILD THE BEHAVIOR MODEL (write ai_analysis/attempt-01/memory/behavior.md):
    - Identity & provenance: package lineage, signer, obfuscation level
-     (state the evidence pattern — short names ratio; never a guess).
+     (state the evidence pattern — short names ratio from smali*/ paths when
+     present or dex_analysis.class_model / method_model when smali*/ is
+     absent; never a guess).
    - Architecture: components that matter, background machinery, IPC
      surfaces, storage, custom Application class behavior, native libraries /
      JNI entry points (when present).

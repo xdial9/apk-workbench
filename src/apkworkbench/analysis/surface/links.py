@@ -41,17 +41,21 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import deque
-from dataclasses import fields as dataclass_fields
+from collections.abc import Mapping
+from dataclasses import dataclass, field, fields as dataclass_fields
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
-from apkworkbench.analysis.contracts import EvidenceLocation
 from apkworkbench.analysis.surface.manifest_v2 import deep_link_targets
 
 LINKS_FILENAME = "links.jsonl"
 ENTRY_POINTS_FILENAME = "entry_points.jsonl"
 LINKS_SCHEMA = 1
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 LAUNCHER_ACTION = "android.intent.action.MAIN"
 LAUNCHER_CATEGORY = "android.intent.category.LAUNCHER"
@@ -96,6 +100,53 @@ NON_PATH_CITE_PREFIXES = (
     "sdk_root:", "permission:", "coverage:", "endpoint:", "route:", "fact:",
     "apk:",
 )
+
+@dataclass(frozen=True)
+class EvidenceLocation:
+    """Typed citation anchor shared by facts, findings, and link edges."""
+
+    evidence_kind: str
+    container_path: str | None = None
+    source_path: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    byte_offset_start: int | None = None
+    byte_offset_end: int | None = None
+    dex_class: str | None = None
+    method_signature: str | None = None
+    resource_name: str | None = None
+    manifest_xpath: str | None = None
+    snippet_redacted: str | None = None
+    snippet_sha256: str | None = None
+    extractor_coordinate: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.evidence_kind.strip():
+            raise ValueError("evidence_kind must be non-empty.")
+        for name in ("line_start", "line_end"):
+            value = getattr(self, name)
+            if value is not None and value < 1:
+                raise ValueError(f"{name} must be at least 1.")
+        for name in ("byte_offset_start", "byte_offset_end"):
+            value = getattr(self, name)
+            if value is not None and value < 0:
+                raise ValueError(f"{name} cannot be negative.")
+        if (
+            self.line_start is not None and self.line_end is not None
+            and self.line_end < self.line_start
+        ):
+            raise ValueError("line_end cannot precede line_start.")
+        if (
+            self.byte_offset_start is not None and self.byte_offset_end is not None
+            and self.byte_offset_end < self.byte_offset_start
+        ):
+            raise ValueError("byte_offset_end cannot precede byte_offset_start.")
+        if self.snippet_sha256 is not None and not _SHA256_RE.fullmatch(self.snippet_sha256):
+            raise ValueError("snippet_sha256 must be a lowercase SHA-256 digest.")
+        object.__setattr__(
+            self, "extractor_coordinate", MappingProxyType(dict(self.extractor_coordinate))
+        )
+
 
 # EvidenceLocation fields in their declared order (evidence_kind first).
 EVIDENCE_FIELDS = tuple(

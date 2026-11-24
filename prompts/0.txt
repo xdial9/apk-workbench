@@ -15,27 +15,47 @@ WHAT YOU HAVE (folder-relative paths inside this bundle):
   apktool/     decoded application tree: AndroidManifest.xml, smali* sources,
                res/, assets/, lib/<abi>/*.so (native libs), META-INF/ — THIS IS
                THE RAW APP. It is your primary evidence.
-  surface/     the static analyzer's output:
-                 surface/static-analysis.json  summary, manifest, identity,
-                                               coverage, metrics, inventory,
-                                               dex_analysis, deductions, workbook
+               Note: split-APK bundles place each component under
+               apktool/<component>/ (e.g. apktool/base/). If
+               stages/decompile/status.json is "partial" or "failed", dirs such
+               as smali*/, res/values/, assets/, or META-INF/ may be absent
+               (see apktool.log; use surface/static-analysis.json dex_analysis
+               and surface/resources.jsonl in Stage 2).
+  apktool.log  (when present): decompiler log explaining partial/failed decode.
+  stages/      per-stage status.json files (download, verification, decompile,
+               surface, trufflehog).
+  surface/     the static analyzer's output (DO NOT dump static-analysis.json or
+               links.jsonl wholesale into context — both can exceed 100 MB;
+               inspect bounded keys/sections or stream/filter lines):
+                 surface/static-analysis.json  status, artifact, manifest,
+                                               identity, coverage, metrics,
+                                               sdk_histogram, inventory, facts,
+                                               findings, deductions,
+                                               diagnostics, limitations,
+                                               dex_analysis, apk_inventory,
+                                               workbook, secret_linkage,
+                                               secret_usage
                  surface/facts.jsonl           full deduplicated evidence (1 JSON/line)
                  surface/location_map.json     generated index of facts, findings, and
                                                deductions with exact file:line/@0xOFFSET
                  surface/files.jsonl           per-file coverage ledger
-                 surface/resources.jsonl       streamed decoded resource table
+                 surface/resources.jsonl       streamed decoded resource table (can be
+                                               multi-MB; query by id/type/name)
                  surface/links.jsonl           typed link graph (component->class->
-                                               method->endpoint->permission/native/secret)
+                                               method->endpoint->permission/native/secret;
+                                               stream/filter rather than loading whole)
                  surface/entry_points.jsonl    externally/internally reachable components
                  surface/trace_chains.jsonl    shortest cited entry-point->secret paths
+                                               (may be 0 bytes when none exist)
                  surface/shards/ + surface/shards-index.json
                                                present when native strings or facts
                                                overflowed (read surface/shards-index.json first)
   trufflehog/  secret scanner outputs: trufflehog/findings.json (all findings),
                trufflehog/findings-verified.json + trufflehog/findings-verified.txt
                (verified only), trufflehog/findings-unverified.json (unverified
-               hints retained for you — never ignore), trufflehog/scan.json,
-               or trufflehog/status.json if scan did not run.
+               hints retained for you — never ignore), trufflehog/findings-all.txt,
+               trufflehog/scan.json; check stages/trufflehog/status.json (or
+               trufflehog/status.json if present) for run status.
   manifest/    acquisition provenance: manifest/google-play-bundle.json (when
                acquired via Play: per-file hashes/sizes, signer_sha256,
                discovery provenance) and manifest/provenance.json (or
@@ -56,9 +76,11 @@ L1. DEDUCE FROM DATA, NEVER GUESS. Every claim you write must cite evidence
     OPEN QUESTION. Similarity is a HINT, never a conclusion.
 L2. RAW FIRST. Complete instruction file prompts/1.txt (mapping the decompiled
     app and writing your own observations) BEFORE reading surface/ or
-    trufflehog/ conclusions. This prevents the tool's conclusions from
-    anchoring yours. Mismatches you find between your raw read and the tool's
-    output are high-value findings — record them explicitly.
+    trufflehog/ conclusions. (Reading stages/decompile/status.json and
+    apktool.log in Stage 1 is allowed to check decompile completeness.) This
+    prevents the tool's conclusions from anchoring yours. Mismatches you find
+    between your raw read and the tool's output are high-value findings —
+    record them explicitly.
 L3. WRITE EVERYTHING in ai_analysis/attempt-01/memory/ (your working memory
     bank), which you create yourself in Stage 1. Save as much data as you need
     — disk is free, reading costs tokens. Top-level ai_analysis/attempt-01/
@@ -95,8 +117,11 @@ PIPELINE OUTPUT STAYS UNTOUCHED. Nothing outside ai_analysis/attempt-01/ is
 created or modified.
 
 HOW TO USE THIS FOLDER'S EVIDENCE: prefer citing exact paths + line or byte
-offset inside apktool/ (e.g. "apktool/smali/com/x/A.smali:118" or
-"apktool/lib/arm64-v8a/libfoo.so@0x1a40"). When citing machine output, cite the
+offset inside apktool/ (e.g. "apktool/smali/com/x/A.smali:118",
+"apktool/<component>/smali/..." for split APKs, or
+"apktool/lib/arm64-v8a/libfoo.so@0x1a40"). When smali*/ is absent due to
+partial decompile, cite the DEX class/method in surface/static-analysis.json
+dex_analysis or surface/links.jsonl. When citing machine output, cite the
 file and entry ("surface/static-analysis.json findings[i]",
 "surface/facts.jsonl line N", "trufflehog/findings.json[i]").
 

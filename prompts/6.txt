@@ -9,8 +9,10 @@ PHASE A — ADVERSARIAL AUDIT (structured; must complete)
 For each question, answer in ai_analysis/attempt-01/memory/closure_audit.md
 with citations:
   - Traversal: did Stage 1 truly cover 100% of the apktool/ tree? (cross-check
-    against surface/files.jsonl; spot check directories not in your notes —
-    do the deferred ones)
+    against surface/files.jsonl — note its paths are relative to the decoded
+    component root; spot check directories not in your notes — do the deferred
+    ones; if smali*/ was absent per stages/decompile/status.json, confirm all
+    present files in apktool/ were covered and DEX was covered via dex_analysis)
   - The ones that got away: any region you skipped as "boring"? Look again:
     assets, native .so strings, obscure res/ xml files, META-INF.
   - Cross-cutting misses: did any finding conclude WITHOUT its second
@@ -21,8 +23,8 @@ with citations:
   - Lead ledger completeness: every entry in lead_ledger.json has a status +
     reason?
   - Were there tool outputs you read only partially? (large surface/facts.jsonl
-    sweeps or surface/shards-index.json shards you skipped; do a targeted
-    re-sweep by fact kind or shard)
+    sweeps or surface/shards-index.json shards you skipped when present; do a
+    targeted re-sweep by fact kind or shard)
   - Anything in surface/location_map.json or trufflehog/findings-unverified.json
     you never opened or triaged?
 Fix what the audit finds: open new mini-leads, settle them with Stage 3
@@ -40,8 +42,9 @@ grounds (non-exclusive):
   - string-mine native libs for endpoints/keys (cross-check native shards if
     surface/shards-index.json exists)
   - call-graph hunting: pick 3 sensitive APIs in surface/links.jsonl (or
-    surface/static-analysis.json dex_analysis) and trace their call sites
-    end-to-end; note where static mappings pay off.
+    surface/static-analysis.json dex_analysis — stream/filter boundedly, do
+    not load >100 MB files wholesale) and trace their call sites end-to-end;
+    note where static mappings pay off.
 Anything new -> new leads -> Stage 3 method -> reflect in deliverables.
 
 PHASE C — CONVERGENCE (required stop condition; linear/finishable doctrine)
@@ -57,8 +60,9 @@ The stage is DONE only when ALL of these are true:
      (verified fixed / discovered now / still open + why) + resources used
  [ ] ai_analysis/attempt-01/decision_log.md final entries written
 STOP when the stop condition is met: no new lead deserves creation.
-END OF WORKLOAD. Leave apktool/, surface/, trufflehog/, manifest/, prompts/,
-handoff.json, hashes.sha256, and README.txt byte-identical to arrival (only
-ai_analysis/attempt-01/ is created/modified, so bundle verification passes).
+END OF WORKLOAD. Leave apktool/, apktool.log, surface/, trufflehog/, manifest/,
+stages/, prompts/, handoff.json, hashes.sha256, and README.txt byte-identical
+to arrival (only ai_analysis/attempt-01/ is created/modified, so bundle
+verification passes).
 ================================================================================
 EOF_MARKER
