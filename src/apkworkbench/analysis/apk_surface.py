@@ -1181,12 +1181,22 @@ def analyze_apk_surface(
     # dropped, only the report-facing finding is grouped.
     endpoint_groups: dict[str, dict[str, Any]] = {}
     for endpoint, metadata in sorted(api_endpoints.items()):
-        first = metadata["evidence"][0] if metadata["evidence"] else {}
+        if not isinstance(metadata, dict):
+            continue
+        endpoint_evidence = metadata.get("evidence") or []
+        first = (
+            endpoint_evidence[0]
+            if endpoint_evidence and isinstance(endpoint_evidence[0], dict)
+            else {}
+        )
+        first_line = first.get("line")
         nearby_limit_signals = [
             signal for signal in rate_limit_indicators
-            if signal["path"] == first.get("path")
-            and first.get("line") is not None
-            and abs(signal["line"] - first["line"]) <= 30
+            if isinstance(signal, dict)
+            and signal.get("path") == first.get("path")
+            and isinstance(first_line, int)
+            and isinstance(signal.get("line"), int)
+            and abs(signal["line"] - first_line) <= 30
         ]
         metadata["nearby_rate_limit_indicators"] = nearby_limit_signals
         metadata["client_rate_limit_status"] = (
@@ -1198,8 +1208,10 @@ def analyze_apk_surface(
             "endpoints": [], "occurrences": 0, "evidence": [], "first": first,
         })
         group["endpoints"].append(endpoint)
-        group["occurrences"] += metadata["occurrences"]
-        group["evidence"].extend(metadata["evidence"])
+        group["occurrences"] += int(metadata.get("occurrences") or 0)
+        group["evidence"].extend(
+            ev for ev in endpoint_evidence if isinstance(ev, dict)
+        )
     for pattern, group in sorted(endpoint_groups.items()):
         first = group["first"]
         evidence = group["evidence"]
@@ -1234,15 +1246,24 @@ def analyze_apk_surface(
         findings.append(finding)
     route_groups: dict[tuple[str | None, str], dict[str, Any]] = {}
     for route, metadata in sorted(api_routes.items()):
+        if not isinstance(metadata, dict):
+            continue
+        route_evidence = metadata.get("evidence") or []
         key = (metadata.get("http_method"), _path_pattern(route))
         group = route_groups.setdefault(key, {
             "routes": [], "occurrences": 0, "evidence": [], "first": None,
         })
         group["routes"].append(route)
-        group["occurrences"] += metadata["occurrences"]
-        group["evidence"].extend(metadata["evidence"])
+        group["occurrences"] += int(metadata.get("occurrences") or 0)
+        group["evidence"].extend(
+            ev for ev in route_evidence if isinstance(ev, dict)
+        )
         if group["first"] is None:
-            group["first"] = metadata["evidence"][0] if metadata["evidence"] else {}
+            group["first"] = (
+                route_evidence[0]
+                if route_evidence and isinstance(route_evidence[0], dict)
+                else {}
+            )
     for (method, pattern), group in sorted(
         route_groups.items(), key=lambda kv: (kv[0][0] or "", kv[0][1])
     ):
@@ -1328,9 +1349,17 @@ def analyze_apk_surface(
     resource_ids_resolved = 0
     resource_ids_unresolved = 0
     for literal in sweep.resource_id_literals:
-        value = f"{literal['id']:#010x}"
-        evidence = {"path": literal["path"], "line": literal["line"]}
-        entry = resource_index.get(literal["id"])
+        if not isinstance(literal, dict) or literal.get("id") is None:
+            continue
+        literal_id = literal["id"]
+        value = f"{literal_id:#010x}"
+        literal_path = literal.get("path")
+        evidence = (
+            {"path": literal_path, "line": literal.get("line")}
+            if literal_path
+            else None
+        )
+        entry = resource_index.get(literal_id)
         if entry is None:
             resource_ids_unresolved += 1
             fact_store.add(
@@ -1354,14 +1383,18 @@ def analyze_apk_surface(
             "success" if resource_ids_unresolved == 0 else "partial"
         )
     for record in api_endpoints.values():
+        if not isinstance(record, dict):
+            continue
         # CAP-FREE + EVIDENCE-COMPLETE: was evidence[0] only (count=1 even when
         # occurrences=9). Add once per evidence so count == occurrences and
         # ALL path:line pairs reach the AI. Also: extra used key "kind" which
         # FactStore.add() overwrote the fact's own kind ("endpoint" -> "url"/
         # "domain_candidate"). Renamed to "endpoint_kind" so fact kind stays "endpoint".
-        value = record.get("canonical") or record["value"]
+        value = record.get("canonical") or record.get("value")
+        if not value:
+            continue
         extra = {
-            "endpoint_kind": record["kind"], "host": record.get("host"),
+            "endpoint_kind": record.get("kind"), "host": record.get("host"),
             "host_class": record.get("host_class"), "flags": record.get("flags", []),
         }
         if record.get("evidence"):
@@ -1370,6 +1403,8 @@ def analyze_apk_surface(
         else:
             fact_store.add("endpoint", value, evidence=None, extra=dict(extra))
     for route, route_data in api_routes.items():
+        if not isinstance(route_data, dict):
+            continue
         route_value = f"{route_data.get('http_method') or '?'} {route}"
         if route_data.get("evidence"):
             for ev in route_data["evidence"]:
@@ -1378,24 +1413,52 @@ def analyze_apk_surface(
             fact_store.add("api_route", route_value, evidence=None)
     if isinstance(manifest_facts.get("deep_links"), list):
         for link in manifest_facts["deep_links"]:
+            if not isinstance(link, dict) or not link.get("scheme"):
+                continue
             fact_store.add(
-                "deep_link", f"{link['scheme']}://{link['host']}{link['path']}",
+                "deep_link",
+                f"{link['scheme']}://{link.get('host', '')}{link.get('path', '')}",
                 evidence={"path": manifest_relative}, extra={"component": link.get("component")},
             )
     for permission in manifest_facts.get("permissions", []) or []:
         fact_store.add("permission_requested", permission, evidence={"path": manifest_relative})
     for provider in manifest_facts.get("providers", []) or []:
-        for authority in provider.get("authorities", []):
+        if not isinstance(provider, dict):
+            continue
+        for authority in provider.get("authorities") or []:
             fact_store.add("provider_authority", authority, evidence={"path": manifest_relative}, extra={
                 "component": provider.get("name"),
             })
     for entry in manifest_facts.get("meta_data", []) or []:
-        if entry.get("value") and looks_like_key(entry["name"], entry["value"]):
+        if (
+            isinstance(entry, dict)
+            and entry.get("name")
+            and entry.get("value")
+            and looks_like_key(entry["name"], entry["value"])
+        ):
             fact_store.add("meta_data_key", f'{entry["name"]}={entry["value"]}', evidence={"path": manifest_relative})
     for item in sweep.decoded_strings:
-        fact_store.add("decoded_string", item["decoded"], evidence={
-            "path": item["path"], "line": item["line"],
-        }, extra={"encoded": item["encoded"], "reveals": item["reveals"]})
+        if not isinstance(item, dict) or item.get("decoded") is None:
+            continue
+        item_path = item.get("path")
+        if item_path:
+            item_evidence: dict[str, Any] | None = {
+                "path": item_path,
+                "line": item.get("line"),
+            }
+            if item.get("offset") is not None:
+                item_evidence["offset"] = item["offset"]
+        else:
+            item_evidence = None
+        fact_store.add(
+            "decoded_string",
+            item["decoded"],
+            evidence=item_evidence,
+            extra={
+                "encoded": item.get("encoded"),
+                "reveals": item.get("reveals", []),
+            },
+        )
     for dependency in dependencies:
         if dependency.get("evidence_paths"):
             for ev_path in dependency["evidence_paths"]:
@@ -1440,7 +1503,11 @@ def analyze_apk_surface(
             or (entry.content_kind is None and entry.suffix not in TEXT_SUFFIXES)
         )
     )
-    code_rule_hits = [finding["rule_id"] for finding in findings]
+    code_rule_hits = [
+        finding["rule_id"]
+        for finding in findings
+        if isinstance(finding, dict) and finding.get("rule_id")
+    ]
     short_name_smali_paths = sorted(
         entry.relative
         for entry in smali_entries
@@ -2013,6 +2080,8 @@ def cross_apk_native_jni_match(
             result = json.loads(target.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        if not isinstance(result, dict):
+            continue
 
         inventory = result.setdefault("inventory", {})
         if not isinstance(inventory, dict):
@@ -2133,6 +2202,9 @@ def cross_apk_native_jni_match(
 
         # Update metrics
         metrics = result.setdefault("metrics", {})
+        if not isinstance(metrics, dict):
+            metrics = {}
+            result["metrics"] = metrics
         metrics["native_jni_exports_mapped"] = len(jni_entries)
         metrics["native_jni_exports_unmapped"] = len(inventory["jni_unmapped"])
         metrics["native_jni_mapping_complete"] = (
@@ -2151,12 +2223,16 @@ def cross_apk_native_jni_match(
                 (finding.get("evidence") or {}).get("line"),
             )
             for finding in result["findings"]
+            if isinstance(finding, dict)
         }
         metrics["distinct_finding_count"] = len(distinct_findings)
         metrics["fact_count"] = len(result["facts"])
 
         # Update coverage
         coverage = result.setdefault("coverage", {})
+        if not isinstance(coverage, dict):
+            coverage = {}
+            result["coverage"] = coverage
         coverage["native_jni_mapping"] = (
             "mapped"
             if metrics["native_jni_mapping_complete"]
@@ -2869,8 +2945,9 @@ def run_static_surface_analysis(
                 target = results_root / artifact_pkg / artifact_ver / artifact_digest / "surface" / "static-analysis.json"
                 try:
                     updated = json.loads(target.read_text(encoding="utf-8"))
-                    artifact["coverage"] = updated.get("coverage", artifact.get("coverage", {}))
-                    artifact["finding_count"] = len(updated.get("findings", []))
+                    if isinstance(updated, dict):
+                        artifact["coverage"] = updated.get("coverage") or artifact.get("coverage", {})
+                        artifact["finding_count"] = len(updated.get("findings") or [])
                 except (OSError, ValueError):
                     pass
     if marker_path is not None:

@@ -602,6 +602,47 @@ def test_component_without_a_dex_class_is_named_not_guessed():
     assert entry_points[0]["class_citation"] is None
 
 
+def test_entry_points_and_native_secret_edges_tolerate_missing_filter_data_and_nonpositive_line(built):
+    """Audit regressions: intent_filter without 'data' key and TruffleHog finding with line <= 0."""
+    surface_with_action_only_filter = {
+        "manifest": {
+            "package": "com.example",
+            "permissions": [],
+            "components": [{
+                "type": "activity",
+                "name": "com.example.Main",
+                "exported": "true",
+                "has_intent_filter": True,
+                "intent_filters": [{"actions": ["android.intent.action.MAIN"]}],
+            }],
+        },
+        "facts": [],
+        "inventory": {},
+    }
+    eps = build_entry_points(surface_with_action_only_filter, built["dex_result"])
+    assert len(eps) == 1
+    assert eps[0]["deep_links"] == []
+
+    findings = [{
+        "DetectorName": "Generic API Key",
+        "DetectorType": 1,
+        "DecoderName": "PLAIN",
+        "Verified": False,
+        "SourceMetadata": {"Data": {"Filesystem": {
+            "file": str(built["apktool_root"] / "lib/arm64-v8a/libdexfixture.so"),
+            "line": -1,
+        }}},
+    }]
+    graph = build_link_graph(
+        built["surface_result"],
+        built["dex_result"],
+        trufflehog_findings=findings,
+        finding_root=built["apktool_root"],
+    )
+    edge = _one(_edges(graph, "native->secret"))
+    assert "line_start" not in edge["citations"][1]
+
+
 def test_write_links_is_atomic_and_leaves_the_facts_plane_alone(built, tmp_path):
     """Links are their own plane: writing them never rewrites facts.jsonl."""
     facts = tmp_path / "facts.jsonl"

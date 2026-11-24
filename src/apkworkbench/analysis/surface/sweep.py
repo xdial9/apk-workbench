@@ -341,7 +341,7 @@ class SweepState:
                     f"Credentials embedded in URL: {value}",
                     "user:pass@host URL form observed; verify where these credentials "
                     "are constructed and whether they are real.",
-                    evidence["path"], evidence.get("line"), value, 0.85,
+                    evidence.get("path", ""), evidence.get("line"), value, 0.85,
                 ))
         target_path = (parsed.path if parsed is not None else None) or ""
         lowered_path = target_path.lower()

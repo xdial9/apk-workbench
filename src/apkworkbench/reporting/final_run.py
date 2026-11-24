@@ -438,15 +438,17 @@ def _html_document(payload: dict[str, Any]) -> str:
     if endpoints:
         parts.append("<h3>Endpoint and domain candidates</h3><table><thead><tr><th>Endpoint</th><th>Kind</th><th>Occurrences</th><th>Evidence</th><th>Nearby client rate-limit clues</th></tr></thead><tbody>")
         for item in endpoints:
-            locations = item.get("evidence", [])
+            locations = item.get("evidence") or []
             evidence = "; ".join(
                 f"{html.escape(str(loc.get('path', '')))}:{html.escape(str(loc.get('line', '')))}"
                 for loc in locations
+                if isinstance(loc, dict)
             )
-            nearby = item.get("nearby_rate_limit_indicators", [])
+            nearby = item.get("nearby_rate_limit_indicators") or []
             signal_text = "; ".join(
                 f"{html.escape(str(sig.get('path', '')))}:{html.escape(str(sig.get('line', '')))}"
                 for sig in nearby
+                if isinstance(sig, dict)
             ) or "No nearby client-side clue found"
             parts.append(
                 "<tr>"
@@ -461,7 +463,8 @@ def _html_document(payload: dict[str, Any]) -> str:
         for item in routes:
             evidence = "; ".join(
                 f"{html.escape(str(loc.get('path', '')))}:{html.escape(str(loc.get('line', '')))}"
-                for loc in item.get("evidence", [])
+                for loc in (item.get("evidence") or [])
+                if isinstance(loc, dict)
             )
             parts.append(
                 "<tr>"
@@ -560,12 +563,14 @@ def _html_document(payload: dict[str, Any]) -> str:
     )
 
     parts.append("<h2>Artifact analysis and findings</h2>")
-    for artifact in payload.get("artifacts", []):
-        metadata = artifact.get("artifact", {})
-        static = artifact.get("static_analysis", {})
-        findings = artifact.get("findings", {})
-        static_items = findings.get("static_indicators", [])
-        verified_items = findings.get("trufflehog_verified_original_objects", [])
+    for artifact in payload.get("artifacts") or []:
+        if not isinstance(artifact, dict):
+            continue
+        metadata = artifact.get("artifact") if isinstance(artifact.get("artifact"), dict) else {}
+        static = artifact.get("static_analysis") if isinstance(artifact.get("static_analysis"), dict) else {}
+        findings = artifact.get("findings") if isinstance(artifact.get("findings"), dict) else {}
+        static_items = findings.get("static_indicators") or []
+        verified_items = findings.get("trufflehog_verified_original_objects") or []
         parts.append(
             f"<h3>{html.escape(str(metadata.get('package_id', 'unknown')))} "
             f"v{html.escape(str(metadata.get('version_code', 'unknown')))} "
@@ -573,7 +578,7 @@ def _html_document(payload: dict[str, Any]) -> str:
         )
         dex = static.get("dex_analysis", {})
         if isinstance(dex, dict):
-            metrics = dex.get("metrics", {})
+            metrics = dex.get("metrics") if isinstance(dex.get("metrics"), dict) else {}
             parts.append(
                 "<h4>Androguard DEX analysis</h4>"
                 f"<p>Status: {html.escape(str(dex.get('status', 'not_run')))} · "
@@ -586,10 +591,11 @@ def _html_document(payload: dict[str, Any]) -> str:
                 parts.append("<details><summary>Androguard diagnostics</summary><pre>")
                 parts.append(html.escape(json.dumps(dex.get("diagnostics"), ensure_ascii=False, indent=2)))
                 parts.append("</pre></details>")
-        parts.extend(_native_html_section(artifact.get("native_evidence", {})))
+        native_ev = artifact.get("native_evidence")
+        parts.extend(_native_html_section(native_ev if isinstance(native_ev, dict) else {}))
         parts.append("<h4>Static-analysis coverage</h4>")
-        coverage = static.get("coverage", {})
-        if coverage:
+        coverage = static.get("coverage")
+        if isinstance(coverage, dict) and coverage:
             parts.append("<table><thead><tr><th>Area</th><th>Status</th></tr></thead><tbody>")
             for area, status in sorted(coverage.items()):
                 parts.append(
@@ -601,7 +607,10 @@ def _html_document(payload: dict[str, Any]) -> str:
         parts.append(f"<h4>Static indicators ({len(static_items)})</h4>")
         if static_items:
             for finding in static_items:
-                evidence = finding.get("evidence", {})
+                if not isinstance(finding, dict):
+                    continue
+                raw_ev = finding.get("evidence")
+                evidence = raw_ev if isinstance(raw_ev, dict) else {}
                 parts.append(
                     "<div class='finding'>"
                     f"<strong>{html.escape(str(finding.get('severity', 'info')).upper())}: "
@@ -858,12 +867,13 @@ def generate_final_run_report(
                 "version_code": version_code,
                 "sha256": digest,
                 **entry,
-            } for entry in dex_analysis.get("dex_api_strings", [])
+            } for entry in (dex_analysis.get("dex_api_strings") or [])
                 if isinstance(entry, dict) and (
                     entry.get("rate_limit_or_retry_indicator")
                     or any(
-                        "ratelimit" in header.lower() or header.lower() == "retry-after"
-                        for header in entry.get("http_header_candidates", [])
+                        isinstance(header, str)
+                        and ("ratelimit" in header.lower() or header.lower() == "retry-after")
+                        for header in (entry.get("http_header_candidates") or [])
                     )
                 ))
             if static_analysis.get("status") == "failed":
@@ -900,9 +910,10 @@ def generate_final_run_report(
 
         verification_bundle = None
         if isinstance(verification, dict):
-            for item in verification.get("bundles", []):
+            for item in verification.get("bundles") or []:
                 if (
-                    item.get("package_id") == package_id
+                    isinstance(item, dict)
+                    and item.get("package_id") == package_id
                     and str(item.get("version_code")) == version_code
                 ):
                     verification_bundle = item

@@ -584,3 +584,72 @@ def test_final_run_report_reads_surface_links_and_trace_chains(tmp_path):
     assert native_evidence["trace_chains"] == [trace_chain]
     assert native_evidence["links"] == [native_link]
     assert payload["artifacts"][0]["acquisition"]["bundle_metadata"]["package_id"] == package_id
+
+
+def test_final_run_report_tolerates_null_evidence_metrics_and_bundles(tmp_path):
+    """Audit regression: explicit null fields in static-analysis.json / verification JSON must not crash."""
+    workspace = tmp_path / "workspace"
+    database = WorkspaceDatabase(workspace)
+    database.ensure()
+    run_id = "null-fields-run"
+    package_id = "com.example.nulls"
+    version_code = "1"
+    apk_bytes = b"null fields fixture"
+    digest = hashlib.sha256(apk_bytes).hexdigest()
+    apk_path = workspace / "downloads" / package_id / version_code / digest / "base.apk"
+    apk_path.parent.mkdir(parents=True)
+    apk_path.write_bytes(apk_bytes)
+    row = {
+        "run_id": run_id,
+        "selection_order": 1,
+        "selected_at": "2026-11-10T12:00:00+00:00",
+        "package_id": package_id,
+        "app_name": "Nulls App",
+        "version_code": version_code,
+        "version_name": "1.0",
+        "source": "google_play",
+        "download_url": "google-play://example/base.apk",
+        "sha256": digest,
+        "size": len(apk_bytes),
+        "signer_sha256": "a" * 64,
+        "local_path": str(apk_path),
+        "index_sha256": "b" * 64,
+    }
+    database.write_manifest(run_id, [row])
+    database.append_history({**row, "downloaded_at": "2026-11-10T12:01:00+00:00"})
+    database.update_processing_status({
+        "sha256": digest,
+        "package_id": package_id,
+        "version_code": version_code,
+        "apktool_status": "success",
+        "scan_status": "success",
+    })
+    artifact_root = workspace / "results" / package_id / version_code / digest
+    (artifact_root / "apktool").mkdir(parents=True)
+    (artifact_root / "trufflehog").mkdir(parents=True)
+    (artifact_root / "trufflehog" / "findings.json").write_text("[]", encoding="utf-8")
+    (artifact_root / "surface").mkdir(parents=True)
+    (artifact_root / "surface" / "static-analysis.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "status": "partial",
+            "coverage": None,
+            "inventory": {
+                "endpoints": [{"value": "https://a.example.test", "kind": "url", "evidence": None, "nearby_rate_limit_indicators": None}],
+                "api_routes": [{"path": "/v1/a", "http_method": None, "evidence": None}],
+            },
+            "dex_analysis": {"status": "partial", "metrics": None, "dex_api_strings": [{"value": "x", "http_header_candidates": None}]},
+            "findings": [{"rule_id": "test_rule", "evidence": None}],
+        }),
+        encoding="utf-8",
+    )
+    reports_root = workspace / "reports"
+    reports_root.mkdir(parents=True)
+    (reports_root / f"phase_one_verification_{run_id}.json").write_text(
+        json.dumps({"status": "verified", "bundles": None}),
+        encoding="utf-8",
+    )
+
+    result = generate_final_run_report(database, workspace, run_id)
+    assert Path(result["json_path"]).is_file()
+    assert Path(result["html_path"]).is_file()

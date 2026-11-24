@@ -50,7 +50,9 @@ def _deduction(
 def sdk_stack(facts: FactStore, histogram: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
     candidates = [
         {"root": root, **data} for root, data in histogram.items()
-        if data["owner"] == "third_party_candidate" and data["class_count"] >= 5
+        if isinstance(data, dict)
+        and data.get("owner") == "third_party_candidate"
+        and int(data.get("class_count") or 0) >= 5
     ]
     if not candidates:
         return None
@@ -255,13 +257,16 @@ def api_surface(
 ) -> dict[str, Any] | None:
     public_urls = [
         record for record in endpoints
-        if record.get("kind") == "url" and record.get("host_class") is None
+        if isinstance(record, dict)
+        and record.get("kind") == "url"
+        and record.get("host_class") is None
+        and (record.get("canonical") or record.get("value"))
     ]
     if not public_urls and not routes:
         return None
     fingerprints: list[str] = []
     for record in public_urls:
-        value = record.get("canonical") or record["value"]
+        value = record.get("canonical") or record.get("value")
         extra = {"host": record.get("host"), "host_class": record.get("host_class")}
         if record.get("evidence"):
             for ev in record["evidence"]:
@@ -269,8 +274,9 @@ def api_surface(
         else:
             fingerprints.append(facts.add("api_endpoint", value, evidence=None, extra=dict(extra)))
     fingerprints.extend(
-        facts.add("api_route", f"{route_data.get('http_method') or '?'} {route}")
+        facts.add("api_route", f"{(route_data or {}).get('http_method') or '?'} {route}")
         for route, route_data in sorted(routes.items())
+        if route_data is None or isinstance(route_data, dict)
     )
     hosts = sorted(
         {str(record.get("host")) for record in public_urls if record.get("host")}
@@ -300,7 +306,7 @@ def api_surface(
         ],
         # CAP-FREE: was capped at 12 endpoints, now all endpoints cited.
         cites=[
-            f"endpoint:{record.get('canonical') or record['value']}"
+            f"endpoint:{record.get('canonical') or record.get('value')}"
             for record in public_urls
         ],
     )

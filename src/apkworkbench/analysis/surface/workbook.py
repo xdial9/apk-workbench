@@ -83,11 +83,19 @@ FINISH_LINE = {
 def _fact_locations(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for fact in facts:
-        evidence = fact.get("evidence") or []
+        if not isinstance(fact, dict):
+            continue
+        raw_evidence = fact.get("evidence")
+        if isinstance(raw_evidence, dict):
+            evidence: list[Any] = [raw_evidence]
+        elif isinstance(raw_evidence, list):
+            evidence = raw_evidence
+        else:
+            evidence = []
         locations = [
             _render_local(item.get("path", ""), item.get("line"), item.get("offset"))
             for item in evidence
-            if item.get("path")
+            if isinstance(item, dict) and item.get("path")
         ]
         if not locations:
             continue
@@ -150,7 +158,7 @@ def _coverage_leads(coverage: dict[str, Any]) -> list[dict[str, Any]]:
         leads.append({
             "id": f"COV-{area}",
             "title": f"Coverage gap: {area} = {status}",
-            "priority": "normal" if status.startswith("not_") else "high",
+            "priority": "normal" if isinstance(status, str) and status.startswith("not_") else "high",
             "suggested_method": [
                 (
                     "Investigate this area directly in the raw tree; expand "
@@ -184,10 +192,17 @@ def _flagged_fact_leads(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
         if not interesting:
             continue
+        raw_evidence = fact.get("evidence")
+        if isinstance(raw_evidence, dict):
+            evidence_items: list[Any] = [raw_evidence]
+        elif isinstance(raw_evidence, list):
+            evidence_items = raw_evidence
+        else:
+            evidence_items = []
         locations = [
             _render_local(item.get("path", ""), item.get("line"), item.get("offset"))
-            for item in (fact.get("evidence") or [])
-            if item.get("path")
+            for item in evidence_items
+            if isinstance(item, dict) and item.get("path")
         ]
         leads.append({
             # CAP-FREE: was 12-char fingerprint prefix - collision risk, AI cannot match full fingerprint. Use FULL.

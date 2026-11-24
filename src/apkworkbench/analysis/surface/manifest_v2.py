@@ -80,7 +80,11 @@ def parse_intent_filter(child: ET.Element) -> dict[str, Any]:
 def deep_link_targets(filters: list[dict[str, Any]]) -> list[dict[str, str]]:
     targets: list[dict[str, str]] = []
     for entry in filters:
-        for data in entry["data"]:
+        if not isinstance(entry, dict):
+            continue
+        for data in entry.get("data") or []:
+            if not isinstance(data, dict):
+                continue
             scheme = data.get("scheme")
             if not scheme:
                 continue

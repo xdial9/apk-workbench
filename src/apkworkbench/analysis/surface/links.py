@@ -714,10 +714,16 @@ def _finding_path_line(
     if not isinstance(filesystem, dict):
         return "", None
     path = str(filesystem.get("file") or filesystem.get("File") or "")
-    raw_line = filesystem.get("line") or filesystem.get("Line")
+    raw_line = (
+        filesystem.get("line")
+        if filesystem.get("line") is not None
+        else filesystem.get("Line")
+    )
     try:
-        line = int(raw_line) if raw_line is not None else None
+        line = int(raw_line) if raw_line is not None and not isinstance(raw_line, bool) else None
     except (TypeError, ValueError):
+        line = None
+    if line is not None and line < 1:
         line = None
     if path and Path(path).is_absolute() and finding_root is None:
         _record(

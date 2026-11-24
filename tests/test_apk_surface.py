@@ -407,3 +407,141 @@ def test_sweep_checkpoint_cadence_avoids_quadratic_io_and_honors_overrides(tmp_p
     apk_surface.analyze_apk_surface(root, checkpoint_dir=tmp_path / "ckpt2")
     assert len(save_stages) == 27
     assert save_stages[-1] == ("sweep_done", 26)
+
+
+def test_native_so_base64_decoded_string_retargets_without_keyerror(tmp_path):
+    """Regression for Alliant crash: .so base64 string has 'line' popped by _retarget_native_evidence."""
+    import base64
+    from apkworkbench.analysis.surface.handoff import write_handoff
+
+    root = tmp_path / "apktool"
+    (root / "lib" / "arm64-v8a").mkdir(parents=True)
+    (root / "AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+        'package="org.alliant.mobile"><application/></manifest>',
+        encoding="utf-8",
+    )
+    hidden_url = "https://hidden-native.alliant.example.com/v1/bootstrap"
+    encoded = base64.b64encode(hidden_url.encode("ascii")).decode("ascii")
+    so_path = root / "lib" / "arm64-v8a" / "liballiant.so"
+    write_elf(so_path, symbols=(symbol("Java_org_alliant_Main_init"),))
+    # Append printable base64 literal + rate-limit string inside the .so binary
+    with so_path.open("ab") as handle:
+        handle.write(b"\x00" + encoded.encode("ascii") + b"\x00retry-after\x00")
+
+    result = analyze_apk_surface(root)
+
+    assert result["status"] == "success"
+    decoded_facts = [
+        fact for fact in result["facts"] if fact["kind"] == "decoded_string"
+    ]
+    matching = [fact for fact in decoded_facts if hidden_url in fact["value"]]
+    assert len(matching) == 1
+    ev = matching[0]["evidence"]
+    assert len(ev) == 1
+    assert ev[0]["path"] == "lib/arm64-v8a/liballiant.so"
+    assert ev[0]["line"] is None
+    assert isinstance(ev[0].get("offset"), int) and ev[0]["offset"] > 0
+
+    handoff_dir = tmp_path / "surface_out"
+    paths = write_handoff(handoff_dir, result)
+    assert paths["facts"].is_file()
+    assert paths["location_map"].is_file()
+
+
+def test_decoded_strings_missing_line_and_missing_path_still_record_facts(tmp_path, monkeypatch):
+    """Regression: decoded_strings items missing 'line' or 'path' never crash and keep facts."""
+    from apkworkbench.analysis import apk_surface
+    from apkworkbench.analysis.surface.sweep import SweepState
+
+    root = tmp_path / "apktool"
+    (root / "smali" / "com" / "example").mkdir(parents=True)
+    (root / "AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+        'package="com.example.missing"><application/></manifest>',
+        encoding="utf-8",
+    )
+    (root / "smali" / "com" / "example" / "A.smali").write_text(
+        '.class public Lcom/example/A;\n'
+        'const-string v0, "https://api.example.com/v1"\n',
+        encoding="utf-8",
+    )
+
+    real_retarget = apk_surface._retarget_native_evidence
+
+    def inject_partial_items(sweep: SweepState, findings, line_offsets):
+        real_retarget(sweep, findings, line_offsets)
+        # 1. Missing 'line' (has 'path')
+        sweep.decoded_strings.append({
+            "decoded": "https://missing-line.example.com/cfg",
+            "encoded": "aHR0cHM6Ly9taXNzaW5nLWxpbmUuZXhhbXBsZS5jb20vY2Zn",
+            "reveals": ["https://missing-line.example.com/cfg"],
+            "path": "AndroidManifest.xml",
+        })
+        # 2. Missing both 'path' and 'line' (and optional 'encoded'/'reveals')
+        sweep.decoded_strings.append({
+            "decoded": "https://missing-path.example.com/cfg",
+        })
+        # 3. Well-formed item (must keep exact shape)
+        sweep.decoded_strings.append({
+            "decoded": "https://well-formed.example.com/cfg",
+            "encoded": "d2VsbC1mb3JtZWQ=",
+            "reveals": ["https://well-formed.example.com/cfg"],
+            "path": "smali/com/example/A.smali",
+            "line": 2,
+        })
+        # 4. Rate-limit indicator missing 'line' on same path as endpoint
+        sweep.rate_limit_indicators.append({
+            "path": "smali/com/example/A.smali",
+            "snippet": "rate-limit",
+        })
+
+    monkeypatch.setattr(apk_surface, "_retarget_native_evidence", inject_partial_items)
+    result = apk_surface.analyze_apk_surface(root)
+
+    assert result["status"] == "success"
+    by_value = {
+        fact["value"]: fact
+        for fact in result["facts"]
+        if fact["kind"] == "decoded_string"
+    }
+    assert "https://missing-line.example.com/cfg" in by_value
+    assert by_value["https://missing-line.example.com/cfg"]["evidence"] == [
+        {"path": "AndroidManifest.xml", "line": None}
+    ]
+
+    assert "https://missing-path.example.com/cfg" in by_value
+    assert by_value["https://missing-path.example.com/cfg"]["evidence"] == []
+    assert by_value["https://missing-path.example.com/cfg"]["encoded"] is None
+    assert by_value["https://missing-path.example.com/cfg"]["reveals"] == []
+
+    assert "https://well-formed.example.com/cfg" in by_value
+    assert by_value["https://well-formed.example.com/cfg"]["evidence"] == [
+        {"path": "smali/com/example/A.smali", "line": 2}
+    ]
+    assert by_value["https://well-formed.example.com/cfg"]["encoded"] == "d2VsbC1mb3JtZWQ="
+    assert by_value["https://well-formed.example.com/cfg"]["reveals"] == [
+        "https://well-formed.example.com/cfg"
+    ]
+
+
+def test_workbook_tolerates_single_dict_fact_evidence_and_null_coverage():
+    """Audit regression: single-dict fact evidence and None coverage status must not crash."""
+    from apkworkbench.analysis.surface.workbook import build_workbook
+
+    wb = build_workbook({
+        "facts": [{
+            "kind": "decoded_string",
+            "value": "https://dict-ev.example.com",
+            "fingerprint": "abc123",
+            "count": 1,
+            "evidence": {"path": "lib/arm64-v8a/libfoo.so", "offset": 64},
+        }],
+        "findings": [],
+        "deductions": [],
+        "coverage": {"resource_model": None, "permissions": "success"},
+    })
+    assert wb["location_ledger"]["facts"][0]["locations"] == ["lib/arm64-v8a/libfoo.so@0x40"]
+    lead_ids = {lead["id"] for lead in wb["playbook"]["open_leads"]}
+    assert "COV-resource_model" in lead_ids
+    assert "FACT-abc123" in lead_ids
