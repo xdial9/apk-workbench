@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from apkworkbench.analysis import apk_surface
+from apkworkbench.analysis.surface import deductions, manifest_v2
 
 MANIFEST = """<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -161,3 +162,72 @@ def test_compat_fact_keys_survive(tmp_path):
     for key in ("package", "version_code", "version_name", "min_sdk",
                 "target_sdk", "permissions", "application", "components"):
         assert key in facts
+
+
+def test_canonical_sensitive_permissions_shared_and_immutable():
+    assert isinstance(manifest_v2.SENSITIVE_PERMISSIONS, frozenset)
+    assert isinstance(deductions.PERMISSION_MISMATCH_CANDIDATES, frozenset)
+    assert deductions.SENSITIVE_PERMISSIONS is manifest_v2.SENSITIVE_PERMISSIONS
+    expected_12 = frozenset({
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.READ_CONTACTS",
+        "android.permission.WRITE_CONTACTS",
+        "android.permission.READ_SMS",
+        "android.permission.RECEIVE_SMS",
+        "android.permission.SEND_SMS",
+        "android.permission.READ_CALL_LOG",
+        "android.permission.WRITE_CALL_LOG",
+        "android.permission.READ_PHONE_STATE",
+    })
+    excluded_4 = frozenset({
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.MANAGE_EXTERNAL_STORAGE",
+        "android.permission.BLUETOOTH_CONNECT",
+    })
+    assert deductions.PERMISSION_MISMATCH_CANDIDATES < manifest_v2.SENSITIVE_PERMISSIONS
+    assert deductions.PERMISSION_MISMATCH_CANDIDATES == expected_12
+    assert manifest_v2.SENSITIVE_PERMISSIONS == (expected_12 | excluded_4)
+
+
+def test_permission_findings_and_mismatch_use_canonical_set(tmp_path):
+    root = tmp_path / "decode"
+    root.mkdir(parents=True)
+    manifest_path = root / "AndroidManifest.xml"
+    manifest_path.write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+        'package="com.example.perms" android:versionCode="1">'
+        '<uses-permission android:name="android.permission.CAMERA"/>'
+        '<uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>'
+        '<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>'
+        '<uses-permission android:name="android.permission.INTERNET"/>'
+        '<uses-permission android:name="com.example.perms.CUSTOM"/>'
+        "<application/></manifest>"
+    )
+    findings: list[dict] = []
+    parsed = manifest_v2.parse_manifest_v2(manifest_path, "AndroidManifest.xml", findings)
+    perm_findings = [item for item in findings if item["category"] == "permissions"]
+    assert len(perm_findings) == 5
+    assert all(item["severity"] == "info" for item in perm_findings)
+    sensitive_titles = [
+        item["title"] for item in perm_findings if item["rule_id"] == "sensitive_permission"
+    ]
+    assert len(sensitive_titles) == 3
+    assert any("CAMERA" in t for t in sensitive_titles)
+    assert any("BLUETOOTH_CONNECT" in t for t in sensitive_titles)
+    assert any("READ_EXTERNAL_STORAGE" in t for t in sensitive_titles)
+    assert sum(1 for item in perm_findings if item["rule_id"] == "permission_requested") == 2
+
+    mismatch = deductions.permission_mismatch(
+        parsed["permissions"],
+        {"android.permission.INTERNET"},
+    )
+    assert mismatch is not None
+    assert "android.permission.CAMERA" in mismatch["narrative"]
+    assert "android.permission.BLUETOOTH_CONNECT" not in mismatch["narrative"]
+    assert "android.permission.READ_EXTERNAL_STORAGE" not in mismatch["narrative"]
+    assert "android.permission.INTERNET" not in mismatch["narrative"]
+    assert "com.example.perms.CUSTOM" not in mismatch["narrative"]

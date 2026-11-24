@@ -1,6 +1,7 @@
 """One consolidated evidence package for a complete APK Workbench run."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import html
 import json
 import os
@@ -729,6 +730,11 @@ def generate_final_run_report(
         bundle_dir = Path(acquired.get("local_path", "")).parent if acquired and acquired.get("local_path") else None
         bundle_path = bundle_dir / "google-play-bundle.json" if bundle_dir else None
         bundle_metadata = _read_json(bundle_path, root) if bundle_path else None
+        if bundle_metadata is None:
+            manifest_bundle_path = results_root / package_id / version_code / digest / "manifest" / "google-play-bundle.json"
+            bundle_metadata = _read_json(manifest_bundle_path, results_root)
+            if bundle_metadata is not None:
+                bundle_path = manifest_bundle_path
 
         artifact_root = results_root / package_id / version_code / digest
         # D-3: try the new surface/ path first; fall back to legacy root for backward
@@ -867,8 +873,20 @@ def generate_final_run_report(
             api_inventory = {}
             static_failed += 1
 
-        native_trace_path = artifact_root / "trace_chains.jsonl"
-        native_links_path = artifact_root / "links.jsonl"
+        surface_trace_path = surface_dir / "trace_chains.jsonl"
+        legacy_trace_path = artifact_root / "trace_chains.jsonl"
+        native_trace_path = (
+            surface_trace_path
+            if surface_trace_path.is_file() or surface_trace_path.is_symlink()
+            else legacy_trace_path
+        )
+        surface_links_path = surface_dir / "links.jsonl"
+        legacy_links_path = artifact_root / "links.jsonl"
+        native_links_path = (
+            surface_links_path
+            if surface_links_path.is_file() or surface_links_path.is_symlink()
+            else legacy_links_path
+        )
         native_evidence = _native_evidence(
             static_analysis if isinstance(static_analysis, dict) else None,
             _read_jsonl(native_trace_path, results_root, native_only=True),
@@ -959,9 +977,7 @@ def generate_final_run_report(
             "manifest_items": len(manifest),
             "manifest_entries": manifest,
             "download_attempts": run_attempts,
-            "created_for_report_at": __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ).isoformat(timespec="seconds"),
+            "created_for_report_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         },
         "stages": {
             "acquisition": {

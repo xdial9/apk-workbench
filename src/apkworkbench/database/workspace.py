@@ -722,6 +722,11 @@ class WorkspaceDatabase:
                 "surface/static-analysis.json",
                 "surface/facts.jsonl",
                 "surface/location_map.json",
+                "surface/files.jsonl",
+                "surface/links.jsonl",
+                "surface/entry_points.jsonl",
+                "surface/trace_chains.jsonl",
+                "manifest/google-play-bundle.json",
             )
             for rel in key_rels:
                 candidate = folder / rel
@@ -830,6 +835,65 @@ class WorkspaceDatabase:
             ) from exc
         return target
 
+    def _ensure_bundle_manifest(self, bundle_dir: Path) -> None:
+        """Ensure ``bundle_dir/manifest/`` exists and carries provenance before freeze."""
+        manifest_dir = bundle_dir / "manifest"
+        if manifest_dir.is_symlink():
+            raise DatabaseError(f"Refusing symlinked bundle manifest directory: {manifest_dir}")
+        if manifest_dir.is_dir() and any(
+            not entry.is_symlink() and entry.is_file() for entry in manifest_dir.iterdir()
+        ):
+            return
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        bundle_digest = bundle_dir.name.lower()
+        copied = False
+        if (
+            len(bundle_digest) == 64
+            and all(ch in "0123456789abcdef" for ch in bundle_digest)
+            and self.history_path.is_file()
+            and not self.history_path.is_symlink()
+        ):
+            try:
+                with self.history_path.open("r", encoding="utf-8", newline="") as handle:
+                    for row in csv.DictReader(handle):
+                        if (row.get("sha256") or "").strip().lower() != bundle_digest:
+                            continue
+                        local_path = row.get("local_path") or ""
+                        if not local_path:
+                            continue
+                        src = Path(local_path).expanduser().parent / "google-play-bundle.json"
+                        if not src.is_symlink() and src.is_file():
+                            dest = manifest_dir / "google-play-bundle.json"
+                            if dest.is_symlink():
+                                raise DatabaseError(f"Refusing symlinked bundle manifest file: {dest}")
+                            dest.write_bytes(src.read_bytes())
+                            os.chmod(dest, 0o600)
+                            copied = True
+                        break
+            except OSError as exc:
+                raise DatabaseError(f"Cannot populate bundle manifest directory: {exc}") from exc
+        if not copied and not any(manifest_dir.iterdir()):
+            status_dest = manifest_dir / "status.json"
+            if status_dest.is_symlink():
+                raise DatabaseError(f"Refusing symlinked bundle manifest status file: {status_dest}")
+            status_dest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "stage": "manifest",
+                        "status": "not_present",
+                        "reason": "Download bundle manifest was not present when evidence was frozen.",
+                        "bundle_id": bundle_dir.name,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(status_dest, 0o600)
+
     def freeze_evidence(self, bundle_dir: Path) -> None:
         """Make evidence directories read-only and write a sha256 manifest.
 
@@ -840,6 +904,9 @@ class WorkspaceDatabase:
         """
         bundle_dir = Path(bundle_dir)
         hash_path = bundle_dir / "hashes.sha256"
+
+        # 0. Ensure manifest/ is populated before handoff.json + hashing.
+        self._ensure_bundle_manifest(bundle_dir)
 
         # 1. Write handoff.json BEFORE hashing so it is part of the manifest.
         self.write_handoff_manifest(bundle_dir)

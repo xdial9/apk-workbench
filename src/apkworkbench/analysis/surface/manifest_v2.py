@@ -32,6 +32,16 @@ KEY_LIKE_NAME_MARKERS = (
     "api_key", "apikey", "api-key", "key", "token", "secret", "dsn",
     "application_id", "app_id", "client_id",
 )
+SENSITIVE_PERMISSIONS: frozenset[str] = frozenset({
+    "android.permission.READ_SMS", "android.permission.RECEIVE_SMS",
+    "android.permission.SEND_SMS", "android.permission.READ_CALL_LOG",
+    "android.permission.WRITE_CALL_LOG", "android.permission.READ_CONTACTS",
+    "android.permission.WRITE_CONTACTS", "android.permission.RECORD_AUDIO",
+    "android.permission.CAMERA", "android.permission.ACCESS_FINE_LOCATION",
+    "android.permission.ACCESS_COARSE_LOCATION", "android.permission.READ_PHONE_STATE",
+    "android.permission.READ_EXTERNAL_STORAGE", "android.permission.WRITE_EXTERNAL_STORAGE",
+    "android.permission.MANAGE_EXTERNAL_STORAGE", "android.permission.BLUETOOTH_CONNECT",
+})
 
 
 def local(tag: str) -> str:
@@ -289,13 +299,9 @@ def parse_manifest_v2(
             if not name:
                 continue
             facts["permissions"].append(name)
-            if name.startswith("android.permission."):
-                severity = "info"
-            else:
-                severity = "info"
             findings.append(build_finding(
                 "sensitive_permission" if name in SENSITIVE_PERMISSIONS else "permission_requested",
-                "permissions", severity,
+                "permissions", "info",
                 f"Permission requested: {name}",
                 "Permission request is an exposure indicator, not proof that the permission is used.",
                 relative, None, element_tostring(element), 0.99,
@@ -331,18 +337,6 @@ def parse_manifest_v2(
 
     facts["permissions"] = sorted(set(facts["permissions"]))
     return {"status": "success", **facts}
-
-
-SENSITIVE_PERMISSIONS = {
-    "android.permission.READ_SMS", "android.permission.RECEIVE_SMS",
-    "android.permission.SEND_SMS", "android.permission.READ_CALL_LOG",
-    "android.permission.WRITE_CALL_LOG", "android.permission.READ_CONTACTS",
-    "android.permission.WRITE_CONTACTS", "android.permission.RECORD_AUDIO",
-    "android.permission.CAMERA", "android.permission.ACCESS_FINE_LOCATION",
-    "android.permission.ACCESS_COARSE_LOCATION", "android.permission.READ_PHONE_STATE",
-    "android.permission.READ_EXTERNAL_STORAGE", "android.permission.WRITE_EXTERNAL_STORAGE",
-    "android.permission.MANAGE_EXTERNAL_STORAGE", "android.permission.BLUETOOTH_CONNECT",
-}
 
 
 def parse_queries_from_node(node: ET.Element) -> list[dict[str, Any]]:

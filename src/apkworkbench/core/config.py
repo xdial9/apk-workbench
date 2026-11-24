@@ -47,7 +47,11 @@ class Config:
                 },
             },
             "decompilation": {"timeout_seconds": 3600},
-            "analysis": {"timeout_seconds": 7200, "max_output_bytes": 536870912},
+            "analysis": {
+                "timeout_seconds": 7200,
+                "androguard_timeout_seconds": 1800,
+                "max_output_bytes": 536870912,
+            },
             "tools": {
                 "playstore_cli": "playstore-cli",
                 "java": "java",
@@ -94,7 +98,13 @@ class Config:
                         "Configuration 'sources.google_play.auth_mode' must be one of: auto, account, anonymous."
                     )
                 play_overrides["auth_mode"] = mode.strip().lower()
-            overrides["sources"] = {"google_play": play_overrides}
+            filtered_sources = {
+                key: value for key, value in source_overrides.items()
+                if key in self._defaults["sources"]
+            }
+            if "google_play" in source_overrides:
+                filtered_sources["google_play"] = play_overrides
+            overrides["sources"] = filtered_sources
         tool_overrides = overrides.get("tools")
         if tool_overrides is not None:
             if not isinstance(tool_overrides, dict):

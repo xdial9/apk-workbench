@@ -182,6 +182,214 @@ def _looks_like_relative_api_path(value: str) -> bool:
     return bool(RELATIVE_PATH_RE.fullmatch(value))
 
 
+def _build_reflection_sites(
+    external_references: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Collect reflection call sites from external method references."""
+    reflection_sites: list[dict[str, Any]] = []
+    reflection_callers: set[str] = set()
+    for entry in external_references:
+        api = f"{entry['owner']}->{entry['method']}"
+        if api not in REFLECTION_APIS:
+            continue
+        for call_site in entry["call_sites"]:
+            reflection_callers.add(call_site["caller"])
+            reflection_sites.append({
+                "caller": call_site["caller"],
+                "caller_class": call_site["caller_class"],
+                "api": api,
+                "offset": call_site["offset"],
+                "argument_resolved": False,
+                "resolved_target": None,
+                "resolution_kind": None,
+                "resolution_method": None,
+                "confidence": "open_question",
+                "unresolved_reason": None,
+            })
+    return reflection_sites, reflection_callers
+
+
+def _collect_dex_api_strings(
+    dx: Any,
+    dex_objects: list[Any],
+    dex_index_by_vm: dict[int, int],
+    network_caller_names: set[str],
+    reflection_callers: set[str],
+    dex_sources: dict[int, str | None] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, list[str]], dict[str, list[tuple[int, str]]]]:
+    """Extract API-related DEX strings with per-DEX origin and caller xrefs."""
+    dex_api_strings: list[dict[str, Any]] = []
+    entries_by_value: dict[str, dict[str, Any]] = {}
+    dex_indices_by_value: dict[str, set[int]] = {}
+    string_class_index: dict[str, list[str]] = {}
+    string_evidence_by_caller: dict[str, list[tuple[int, str]]] = {}
+
+    # CAP-FREE: no cap on string candidates. Every candidate is preserved.
+    for string_item in dx.get_strings():
+        value = str(string_item.get_value())
+        url_matches = [match.group(0).rstrip(".,);]}:") for match in URL_RE.finditer(value)]
+        domain_matches = [match.group(0).lower().rstrip(".") for match in DOMAIN_RE.finditer(value)]
+        if _is_static_asset_path(value):
+            domain_matches = []
+        ip_matches = [match.group(0) for match in IPV4_RE.finditer(value)]
+        string_xrefs = list(string_item.get_xref_from(with_offset=True))
+        caller_names = {_method_name(caller) for _class_obj, caller, _offset in string_xrefs}
+        network_call_context = bool(caller_names & network_caller_names)
+        # Deduction link (P3): string value -> every class that references it.
+        # Built before the endpoint filter below, so class-name literals passed to
+        # Class.forName are indexed too. A value missing from this index is a value
+        # no internal class references — never a dropped one.
+        if string_xrefs:
+            referencing_classes = sorted(
+                (
+                    set(string_class_index.get(value, ()))
+                    | {
+                        str(getattr(caller, "class_name", ""))
+                        for _class_obj, caller, _offset in string_xrefs
+                    }
+                )
+                - {""}
+            )
+            if referencing_classes:
+                string_class_index[value] = referencing_classes
+            # One-hop reflection evidence: constants seen in a method that also
+            # calls a reflection API, with the offset that orders them.
+            for _class_obj, caller, offset in string_xrefs:
+                caller_name = _method_name(caller)
+                if caller_name in reflection_callers:
+                    string_evidence_by_caller.setdefault(caller_name, []).append(
+                        (int(offset), value)
+                    )
+        relative_path_candidate = (
+            network_call_context and _looks_like_relative_api_path(value)
+        )
+        is_route = bool(ROUTE_RE.search(value)) or relative_path_candidate
+        is_limit = bool(RATE_LIMIT_RE.search(value))
+        headers = sorted({match.group(1).lower() for match in HEADER_RE.finditer(value)})
+        if not (
+            url_matches or domain_matches or ip_matches or is_route or is_limit or headers
+        ):
+            continue
+
+        references: list[dict[str, Any]] = []
+        item_dex_indices = dex_indices_by_value.setdefault(value, set())
+        # CAP-FREE: was capped at 100 callers per string — that dropped callers. Keep ALL callers.
+        # Deduction link: string value -> every method that references it.
+        for _class_obj, caller, offset in string_xrefs:
+            caller_dex = _method_dex_index(dex_index_by_vm, caller)
+            if caller_dex is not None:
+                item_dex_indices.add(caller_dex)
+            ref: dict[str, Any] = {
+                "caller": _method_name(caller),
+                "caller_class": str(getattr(caller, "class_name", "")),
+                "offset": int(offset),
+                "dex_index": caller_dex,
+            }
+            if dex_sources is not None:
+                ref["dex_source"] = dex_sources.get(
+                    id(dex_objects[caller_dex]) if caller_dex is not None else None
+                )
+            references.append(ref)
+
+        existing = entries_by_value.get(value)
+        if existing is None:
+            entry: dict[str, Any] = {
+                "value": value,
+                "urls": url_matches,
+                "domains": sorted(set(domain_matches)),
+                "ip_addresses": sorted(set(ip_matches)),
+                "route_candidate": is_route,
+                "relative_path_candidate": relative_path_candidate,
+                "network_call_context": network_call_context,
+                "rate_limit_or_retry_indicator": is_limit,
+                "http_header_candidates": headers,
+                "references": references,
+                "reference_count": len(string_xrefs),
+                "dex_index": None,
+                "dex_indices": [],
+            }
+            if dex_sources is not None:
+                entry["dex_source"] = None
+                entry["dex_sources"] = []
+            entries_by_value[value] = entry
+            dex_api_strings.append(entry)
+        else:
+            existing["references"].extend(references)
+            existing["reference_count"] += len(string_xrefs)
+            existing["network_call_context"] = (
+                existing["network_call_context"] or network_call_context
+            )
+            existing["relative_path_candidate"] = (
+                existing["relative_path_candidate"] or relative_path_candidate
+            )
+            existing["route_candidate"] = existing["route_candidate"] or is_route
+
+    # Also record DEX-pool origin for strings declared in each DEX file's string
+    # table (even if referenced in only one DEX or unreferenced across DEX files).
+    if entries_by_value:
+        for dex_index, vm in enumerate(dex_objects):
+            get_strings = getattr(vm, "get_strings", None)
+            if not callable(get_strings):
+                continue
+            for raw_string in get_strings():
+                text = str(raw_string)
+                if text in entries_by_value:
+                    dex_indices_by_value[text].add(dex_index)
+
+        for value, entry in entries_by_value.items():
+            indices = sorted(dex_indices_by_value.get(value, ()))
+            entry["dex_indices"] = indices
+            entry["dex_index"] = indices[0] if len(indices) == 1 else None
+            if dex_sources is not None:
+                sources = sorted({
+                    source
+                    for idx in indices
+                    if (source := dex_sources.get(id(dex_objects[idx]))) is not None
+                })
+                entry["dex_sources"] = sources
+                entry["dex_source"] = sources[0] if len(sources) == 1 else None
+
+    return dex_api_strings, string_class_index, string_evidence_by_caller
+
+
+def _resolve_reflection_sites(
+    reflection_sites: list[dict[str, Any]],
+    string_evidence_by_caller: dict[str, list[tuple[int, str]]],
+) -> None:
+    """One-hop reflection resolution via nearest preceding string constant heuristic.
+
+    Picks the string constant with the largest offset strictly below the call
+    offset in the same caller method. Because control flow and register flow
+    are not traced, resolved targets carry ``confidence="hint"`` and
+    ``resolution_method="nearest_preceding_string_heuristic"`` rather than
+    claiming a proven link.
+    """
+    for site in reflection_sites:
+        resolution_kind = REFLECTION_APIS[site["api"]]
+        if resolution_kind is None:
+            site["unresolved_reason"] = "no_literal_argument"
+            site["confidence"] = "open_question"
+            site["resolution_method"] = None
+            continue
+        preceding = [
+            (offset, target)
+            for offset, target in string_evidence_by_caller.get(site["caller"], [])
+            if offset < site["offset"]
+        ]
+        if not preceding:
+            site["unresolved_reason"] = "no_string_constant_before_call_site"
+            site["confidence"] = "open_question"
+            site["resolution_method"] = None
+            continue
+        preceding.sort(key=lambda item: (-item[0], item[1]))
+        site["argument_resolved"] = True
+        site["resolved_target"] = preceding[0][1]
+        site["resolution_kind"] = resolution_kind
+        site["resolution_method"] = "nearest_preceding_string_heuristic"
+        site["confidence"] = "hint"
+    reflection_sites.sort(key=lambda site: (site["caller"], site["offset"], site["api"]))
+
+
 def _analyze_dex_payloads(
     dex_payloads: list[tuple[bytes, str | None]],
     target_sdk: int,
@@ -364,111 +572,17 @@ def _analyze_dex_payloads(
             entry["dex_source"] = entry["call_sites"][0]["dex_source"]
         external_references.append(entry)
 
-    # ---- P3 reflection sites (one-hop, never guessed) -------------------------
-    reflection_sites: list[dict[str, Any]] = []
-    reflection_callers: set[str] = set()
-    string_evidence_by_caller: dict[str, list[tuple[int, str]]] = {}
-    for entry in external_references:
-        api = f"{entry['owner']}->{entry['method']}"
-        if api not in REFLECTION_APIS:
-            continue
-        for call_site in entry["call_sites"]:
-            reflection_callers.add(call_site["caller"])
-            reflection_sites.append({
-                "caller": call_site["caller"],
-                "caller_class": call_site["caller_class"],
-                "api": api,
-                "offset": call_site["offset"],
-                "argument_resolved": False,
-                "resolved_target": None,
-                "resolution_kind": None,
-                "unresolved_reason": None,
-            })
-
-    dex_api_strings: list[dict[str, Any]] = []
-    seen_strings: set[str] = set()
-    string_class_index: dict[str, list[str]] = {}
-    # CAP-FREE: no cap on string candidates. Every candidate is preserved.
-    for string_item in dx.get_strings():
-        value = str(string_item.get_value())
-        url_matches = [match.group(0).rstrip(".,);]}:") for match in URL_RE.finditer(value)]
-        domain_matches = [match.group(0).lower().rstrip(".") for match in DOMAIN_RE.finditer(value)]
-        if _is_static_asset_path(value):
-            domain_matches = []
-        ip_matches = [match.group(0) for match in IPV4_RE.finditer(value)]
-        string_xrefs = list(string_item.get_xref_from(with_offset=True))
-        caller_names = {_method_name(caller) for _class_obj, caller, _offset in string_xrefs}
-        network_call_context = bool(caller_names & network_caller_names)
-        if string_xrefs:
-            referencing_classes = sorted(
-                {
-                    str(getattr(caller, "class_name", ""))
-                    for _class_obj, caller, _offset in string_xrefs
-                }
-                - {""}
-            )
-            if referencing_classes:
-                string_class_index[value] = referencing_classes
-            for _class_obj, caller, offset in string_xrefs:
-                caller_name = _method_name(caller)
-                if caller_name in reflection_callers:
-                    string_evidence_by_caller.setdefault(caller_name, []).append(
-                        (int(offset), value)
-                    )
-        relative_path_candidate = (
-            network_call_context and _looks_like_relative_api_path(value)
-        )
-        is_route = bool(ROUTE_RE.search(value)) or relative_path_candidate
-        is_limit = bool(RATE_LIMIT_RE.search(value))
-        headers = sorted({match.group(1).lower() for match in HEADER_RE.finditer(value)})
-        if not (
-            url_matches or domain_matches or ip_matches or is_route or is_limit or headers
-        ):
-            continue
-        if value in seen_strings:
-            continue
-        seen_strings.add(value)
-        references = []
-        # CAP-FREE: keep ALL callers per string.
-        for class_obj, caller, offset in string_xrefs:
-            references.append({
-                "caller": _method_name(caller),
-                "caller_class": str(getattr(caller, "class_name", "")),
-                "offset": int(offset),
-            })
-        dex_api_strings.append({
-            "value": value,
-            "urls": url_matches,
-            "domains": sorted(set(domain_matches)),
-            "ip_addresses": sorted(set(ip_matches)),
-            "route_candidate": is_route,
-            "relative_path_candidate": relative_path_candidate,
-            "network_call_context": network_call_context,
-            "rate_limit_or_retry_indicator": is_limit,
-            "http_header_candidates": headers,
-            "references": references,
-            "reference_count": len(string_xrefs),
-        })
-
-    # One-hop reflection resolution.
-    for site in reflection_sites:
-        resolution_kind = REFLECTION_APIS[site["api"]]
-        if resolution_kind is None:
-            site["unresolved_reason"] = "no_literal_argument"
-            continue
-        preceding = [
-            (offset, target)
-            for offset, target in string_evidence_by_caller.get(site["caller"], [])
-            if offset < site["offset"]
-        ]
-        if not preceding:
-            site["unresolved_reason"] = "no_string_constant_before_call_site"
-            continue
-        preceding.sort(key=lambda item: (-item[0], item[1]))
-        site["argument_resolved"] = True
-        site["resolved_target"] = preceding[0][1]
-        site["resolution_kind"] = resolution_kind
-    reflection_sites.sort(key=lambda site: (site["caller"], site["offset"], site["api"]))
+    # ---- P3 reflection sites (one-hop heuristic, explicitly labeled) ---------
+    reflection_sites, reflection_callers = _build_reflection_sites(external_references)
+    dex_api_strings, string_class_index, string_evidence_by_caller = _collect_dex_api_strings(
+        dx,
+        dex_objects,
+        dex_index_by_vm,
+        network_caller_names,
+        reflection_callers,
+        dex_sources=dex_sources,
+    )
+    _resolve_reflection_sites(reflection_sites, string_evidence_by_caller)
 
     permission_api_usage = []
     permission_mapping_status = "success"
@@ -709,120 +823,16 @@ def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
             entry["dex_class"] = entry["call_sites"][0]["dex_class"]
         external_references.append(entry)
 
-    # ---- P3 reflection sites (one-hop, never guessed) -------------------------
-    reflection_sites: list[dict[str, Any]] = []
-    reflection_callers: set[str] = set()
-    string_evidence_by_caller: dict[str, list[tuple[int, str]]] = {}
-    for entry in external_references:
-        api = f"{entry['owner']}->{entry['method']}"
-        if api not in REFLECTION_APIS:
-            continue
-        for call_site in entry["call_sites"]:
-            reflection_callers.add(call_site["caller"])
-            reflection_sites.append({
-                "caller": call_site["caller"],
-                "caller_class": call_site["caller_class"],
-                "api": api,
-                "offset": call_site["offset"],
-                "argument_resolved": False,
-                "resolved_target": None,
-                "resolution_kind": None,
-                "unresolved_reason": None,
-            })
-
-    dex_api_strings: list[dict[str, Any]] = []
-    seen_strings: set[str] = set()
-    string_class_index: dict[str, list[str]] = {}
-    # CAP-FREE: no cap on string candidates. Every candidate is preserved.
-    for string_item in dx.get_strings():
-        value = str(string_item.get_value())
-        url_matches = [match.group(0).rstrip(".,);]}:") for match in URL_RE.finditer(value)]
-        domain_matches = [match.group(0).lower().rstrip(".") for match in DOMAIN_RE.finditer(value)]
-        if _is_static_asset_path(value):
-            domain_matches = []
-        ip_matches = [match.group(0) for match in IPV4_RE.finditer(value)]
-        string_xrefs = list(string_item.get_xref_from(with_offset=True))
-        caller_names = {_method_name(caller) for _class_obj, caller, _offset in string_xrefs}
-        network_call_context = bool(caller_names & network_caller_names)
-        # Deduction link (P3): string value -> every class that references it.
-        # Built before the endpoint filter below, so class-name literals passed to
-        # Class.forName are indexed too. A value missing from this index is a value
-        # no internal class references — never a dropped one.
-        if string_xrefs:
-            referencing_classes = sorted(
-                {
-                    str(getattr(caller, "class_name", ""))
-                    for _class_obj, caller, _offset in string_xrefs
-                }
-                - {""}
-            )
-            if referencing_classes:
-                string_class_index[value] = referencing_classes
-            # One-hop reflection evidence: constants seen in a method that also
-            # calls a reflection API, with the offset that orders them.
-            for _class_obj, caller, offset in string_xrefs:
-                caller_name = _method_name(caller)
-                if caller_name in reflection_callers:
-                    string_evidence_by_caller.setdefault(caller_name, []).append(
-                        (int(offset), value)
-                    )
-        relative_path_candidate = (
-            network_call_context and _looks_like_relative_api_path(value)
-        )
-        is_route = bool(ROUTE_RE.search(value)) or relative_path_candidate
-        is_limit = bool(RATE_LIMIT_RE.search(value))
-        headers = sorted({match.group(1).lower() for match in HEADER_RE.finditer(value)})
-        if not (
-            url_matches or domain_matches or ip_matches or is_route or is_limit or headers
-        ):
-            continue
-        if value in seen_strings:
-            continue
-        seen_strings.add(value)
-        references = []
-        # CAP-FREE: was capped at 100 callers per string — that dropped callers. Keep ALL callers.
-        # Deduction link: string value -> every method that references it.
-        for class_obj, caller, offset in string_xrefs:
-            references.append({
-                "caller": _method_name(caller),
-                "caller_class": str(getattr(caller, "class_name", "")),
-                "offset": int(offset),
-            })
-        dex_api_strings.append({
-            "value": value,
-            "urls": url_matches,
-            "domains": sorted(set(domain_matches)),
-            "ip_addresses": sorted(set(ip_matches)),
-            "route_candidate": is_route,
-            "relative_path_candidate": relative_path_candidate,
-            "network_call_context": network_call_context,
-            "rate_limit_or_retry_indicator": is_limit,
-            "http_header_candidates": headers,
-            "references": references,
-            "reference_count": len(string_xrefs),
-        })
-
-    # One-hop reflection resolution: only APIs whose first string argument is a
-    # literal are resolved, using the nearest preceding string constant in the same
-    # method. Everything else stays unresolved WITH a reason — never a guessed target.
-    for site in reflection_sites:
-        resolution_kind = REFLECTION_APIS[site["api"]]
-        if resolution_kind is None:
-            site["unresolved_reason"] = "no_literal_argument"
-            continue
-        preceding = [
-            (offset, target)
-            for offset, target in string_evidence_by_caller.get(site["caller"], [])
-            if offset < site["offset"]
-        ]
-        if not preceding:
-            site["unresolved_reason"] = "no_string_constant_before_call_site"
-            continue
-        preceding.sort(key=lambda item: (-item[0], item[1]))
-        site["argument_resolved"] = True
-        site["resolved_target"] = preceding[0][1]
-        site["resolution_kind"] = resolution_kind
-    reflection_sites.sort(key=lambda site: (site["caller"], site["offset"], site["api"]))
+    # ---- P3 reflection sites (one-hop heuristic, explicitly labeled) ---------
+    reflection_sites, reflection_callers = _build_reflection_sites(external_references)
+    dex_api_strings, string_class_index, string_evidence_by_caller = _collect_dex_api_strings(
+        dx,
+        dex_objects,
+        dex_index_by_vm,
+        network_caller_names,
+        reflection_callers,
+    )
+    _resolve_reflection_sites(reflection_sites, string_evidence_by_caller)
 
     permission_api_usage = []
     permission_mapping_status = "success"
@@ -905,9 +915,9 @@ def _analyze_in_worker(apk_path: str) -> dict[str, Any]:
             "Android API-to-permission mapping is version-specific and can be incomplete.",
             "Native libraries, reflection, obfuscated strings, dynamically loaded code, and server behavior require separate analysis.",
             "No application code was executed and no discovered API was contacted.",
-            "reflection_sites resolves only literal string arguments (nearest preceding const-string in the same method); java/lang/reflect/Method->invoke arguments are objects, so its target stays unresolved with a reason.",
+            "reflection_sites uses a nearest-preceding-string heuristic (confidence='hint', resolution_method='nearest_preceding_string_heuristic') rather than dataflow proof; java/lang/reflect/Method->invoke arguments are objects, so its target stays unresolved with confidence='open_question'.",
             "string_class_index lists only values that at least one internal class references; a value absent from it is unreferenced, not dropped.",
-            "DEX strings and classes are keyed by value/name across DEX files (Androguard D5), so a value declared in two DEX files keeps one entry.",
+            "DEX strings and classes are keyed by value/name across DEX files; dex_api_strings preserves all origin DEX indices in dex_indices (and dex_index when unique).",
         ],
     }
 

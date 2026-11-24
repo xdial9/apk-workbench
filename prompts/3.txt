@@ -1,23 +1,29 @@
 3.txt — STAGE 3: TRACE EVERY HINT (the core analytical work)
 ================================================================================
 GOAL
-Work through EVERY lead in ai_analysis/memory/all_leads.md until each one is
-truly resolved or honestly Triaged as open with a reason. This is the stage
-where your reasoning adds what static rules cannot.
+Work through EVERY lead in ai_analysis/attempt-01/memory/all_leads.md until
+each one is truly resolved or honestly triaged as open with a reason. This is
+the stage where your reasoning adds what static rules cannot.
 
 INPUTS
-  ai_analysis/memory/all_leads.md    the merged lead list (from stage 2)
-  folder evidence per lead citation
-  surface/facts.jsonl                when a lead touches a fact kind
+  ai_analysis/attempt-01/memory/all_leads.md  the merged lead list (from Stage 2)
+  folder evidence per lead citation (apktool/, manifest/, trufflehog/)
+  surface/facts.jsonl                         when a lead touches a fact kind
+  surface/links.jsonl                         typed edges between components,
+                                              classes, methods, endpoints,
+                                              permissions, native, and secrets
+  surface/entry_points.jsonl                  reachable component entry points
+  surface/trace_chains.jsonl                  precomputed entry->secret chains
 
-METHOD PER LEAD (one work file per lead: ai_analysis/memory/lead_<n>.md)
+METHOD PER LEAD (one work file per lead: ai_analysis/attempt-01/memory/lead_<n>.md)
 1. STATE the lead as a question ("does the app exfiltrate location?").
-2. ENUMERATE the evidence it touches (cited paths/lines from the lead).
+2. ENUMERATE the evidence it touches (cited paths/lines or @0xOFFSET from the lead).
 3. WORK the evidence: open the cited files with context (cite surrounding
    relevant lines, not just matched lines) — static regex only sees flags;
-   you see the constructor + call site + branching. Follow calls: who
-   passes the sensitive value where? (service -> uploader -> endpoint is
-   the classic chain worth stating when visible.)
+   you see the constructor + call site + branching. Follow calls via
+   surface/links.jsonl or smali/native references: who passes the sensitive
+   value where? (entry point -> caller -> uploader -> endpoint, or Java JNI ->
+   native .so@0xOFFSET is the classic chain worth stating when visible.)
 4. APPLY JUDGMENT TEMPLATES where applicable — record which template and
    whether its conjunctive facts truly hold:
    - PERIODIC BEACONING: background component + sensitive permission +
@@ -33,18 +39,26 @@ METHOD PER LEAD (one work file per lead: ai_analysis/memory/lead_<n>.md)
 5. DECODE opportunistically (capability permitting): base64/hex candidate
    strings, JWT segments (header/payload), protobuf-ish blobs (note magic
    guesses as HINTS), embedded zips contents listing. Record decoded
-   values + their  as new facts; the decoder steps you ran go into NOTES.md.
-6. TRIAGE with documented honesty; append one line per lead to
-   ai_analysis/lead_ledger.json as you close it:
-     {id, question, status: pursued|dismissed|open, outcome_summary,
-      evidence: [paths/lines inside the folder], confidence: label}
+   values + their citations as new facts; the decoder steps you ran go into
+   ai_analysis/attempt-01/memory/NOTES.md.
+6. TRIAGE with documented honesty; record one entry per closed lead in
+   ai_analysis/attempt-01/memory/lead_ledger.jsonl (one JSON object per line,
+   which you will compile into the strict JSON array
+   ai_analysis/attempt-01/lead_ledger.json in Stage 5):
+     {"id": "...", "question": "...", "status": "pursued|dismissed|open",
+      "outcome_summary": "...",
+      "evidence": ["apktool/...:line or @0xOFFSET"],
+      "confidence": "tool_verified|deduced|hint|open_question"}
    "dismissed" is a valid outcome WITH a reason; silence is not closure.
-7. UPDATE all_leads.md status marks as you go (progress + resume aid).
+7. UPDATE ai_analysis/attempt-01/memory/all_leads.md status marks as you go
+   (progress + resume aid).
 
 DEFINITION-OF-DONE
  [ ] every lead in all_leads.md has a lead file or consolidated annotation
- [ ] lead_ledger.json has one entry per lead, no missing status
+ [ ] memory/lead_ledger.jsonl has one entry per lead, no missing status
  [ ] new facts discovered are recorded (NOTES.md or their own memory file)
- [ ] disputed/missed items from stage 2 cross_check.md all addressed
-NOW READ 4.txt.
+ [ ] disputed/missed items from Stage 2 cross_check.md all addressed
+
+NOW READ prompts/4.txt.
 ================================================================================
+EOF_MARKER

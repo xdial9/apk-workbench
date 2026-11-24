@@ -1,7 +1,12 @@
 # SCANNER PLAN — surface analyzer to 360° (canonical track file)
 
-Current state (verified 2026-11-17): P0-P7 are implemented; P6/P7 audit
-corrections are in the current worktree and tested. M0-M3 are complete.
+Current state (verified 2026-11-23): P0-P8 scanner defects from the 2026-11-22 audit are closed on `main` (post-`dc1872e`) and tested (**431 passed, 0 failed** in both `.venv` and a fresh `pip install -e '.[dev]'` venv).
+- **Layout & Handoff (Unit 1 + P8)**: All surface outputs (`static-analysis.json`, `facts.jsonl`, `location_map.json`, `files.jsonl`, `resources.jsonl`, `links.jsonl`, `entry_points.jsonl`, `trace_chains.jsonl`, `shards/`) write under `surface/`; `manifest/` (`google-play-bundle.json`, `provenance.json`/`status.json`) is populated before freeze/`verify-workspace`; `workbook.py` and `final_run.py` match disk paths. Prompts `0.txt..6.txt` were dry-run against real frozen `com.simplemobiletools.calculator` v85 bundles (`base` and `arm64_v8a`) and updated to match the exact bundle layout, keys, `trufflehog/` files, and `ai_analysis/attempt-01/` paths.
+- **Native ELF (D6 + 14a/14b)**: `native_elf.py` falls back to `PT_DYNAMIC` / `PT_LOAD` (`DT_SYMTAB`, `DT_STRTAB`, `DT_STRSZ`, `DT_SYMENT`, `DT_HASH`, `DT_GNU_HASH`) for section-stripped `.so` files (verified on stripped `calculator-85` arm64 libraries: 2,004 exports, 160 imports, 7 JNI exports recovered). Renamed `native_strings_scanned` -> `native_libraries_strings_scanned`; wired `native_skipped` into `build_file_ledger`.
+- **Resume & CLI**: Wired `checkpoint_dir = surface_dir / ".checkpoint"` + `sweep_state.json` (insertion-ordered; `CHECKPOINT_EVERY_FILES = 2000`, `CHECKPOINT_EVERY_SECONDS = 15.0`) into `run_static_surface_analysis`; added `apkworkbench surface`, `run --force-surface`, and fixed `force_surface.py`. Verified mid-sweep and post-sweep `SIGKILL` + resume on `calculator-85` (`4/4` complete, `verify-workspace` 0 mismatches).
+- **DEX & Cleanup (D5, D10, D12, D14, 14c/e/f/g/h/i)**: `dex_api_strings` preserves `dex_index` / `dex_indices`; reflection sites carry explicit `confidence="hint"` / `resolution_method="nearest_preceding_string_heuristic"`; consolidated canonical `SENSITIVE_PERMISSIONS` in `manifest_v2.py` (with `PERMISSION_MISMATCH_CANDIDATES` in `deductions.py`); removed duplicate `finalize_result`, dead `if/else`, stale CLI/script/requirements text, inline `__import__("datetime")`; narrowed `runner.py` `accepted_codes`; preserved `defaults["sources"]` keys and added `androguard_timeout_seconds: 1800` in `config.py`; added venv executable fallback for `androguard` in `detector.py`; added `pythonpath = ["."]` to `pyproject.toml`.
+- **Open operator decisions**: Defect 12 (`security/__init__.py` documented as retired placeholder; >200-LOC crypto verifier deferred), Defect 13 (delete dormant `registry.py`/`executor.py`/`trufflehog_adapter.py`/`database/evidence.py` recommended; left untouched), Defect 14(d) (`sources/google_play.py:58` stray docstring left untouched per DO NOT TOUCH).
+
 Fresh run `fc75a20f-f08e-455c-a833-31806844280e` for
 `com.simplemobiletools.calculator` completed all stages in
 `/home/dial9/APK-Workbench/workspace-first-full-20261117`: 4 APK components
@@ -470,16 +475,16 @@ An AI can answer these **from the bundle alone, with a citation**:
 | D2 | `packed_indicator` deduction has no evidence | **FIXED** P5 |
 | D3 | `obfuscation_metric` deduction has no evidence | **FIXED** P5 |
 | D4 | external methods without callers dropped, metric hides it | **FIXED** P3 (emitted with `call_sites=[]`, counted in `external_methods_without_callers`) |
-| D5 | DEX strings deduped by value, DEX-of-origin lost | **OPEN** (recheck whether current `dex_source` handling closes this for all top-level DEX strings) |
-| D6 | stripped-section ELF yields no symbols despite `PT_DYNAMIC` | open (P3/native) |
+| D5 | DEX strings deduped by value, DEX-of-origin lost | **FIXED** (`dex_indices`/`dex_index` + per-ref `dex_index` in `androguard_dex.py`) |
+| D6 | stripped-section ELF yields no symbols despite `PT_DYNAMIC` | **FIXED** (`PT_DYNAMIC` + `PT_LOAD` symbol/strtab fallback in `native_elf.py`) |
 | D7 | load-site map keyed on basename only | **FIXED** P7 (full relative path plus basename fallback) |
 | D8 | `text_file_limit` / `finding_limit` referenced, never emitted | **FIXED** P0 |
 | D9 | one finding per endpoint/route (inventory noise) | **FIXED** P5 (rollup: one finding per pattern + occurrence_count + citation sample; facts plane unchanged) |
-| D10 | `SENSITIVE_PERMISSIONS` dead duplicate in `apk_surface.py:53` | open |
+| D10 | `SENSITIVE_PERMISSIONS` dead duplicate in `apk_surface.py:53` | **FIXED** (removed dead copy; canonical `SENSITIVE_PERMISSIONS` in `manifest_v2.py`, `PERMISSION_MISMATCH_CANDIDATES` in `deductions.py`) |
 | D11 | unhardened `DOMAIN_RE` (ReDoS) x2 | **FIXED** P0c |
-| D12 | `manifest_v2.py` severity if/else identical | open |
-| D13 | run marker writes `eligible=0` before computing it | **FIXED** (refresh immediately after eligible list is computed) |
-| D14 | `finalize_result` runs twice per artifact | open |
+| D12 | `manifest_v2.py` severity if/else identical | **FIXED** (dead branch removed) |
+| D13 | run marker writes `eligible=0` before computing it | **FIXED** (premature initial `eligible=0` write removed; refreshed after `eligible` computed) |
+| D14 | `finalize_result` runs twice per artifact | **FIXED** (`finalize=False` in `run_static_surface_analysis`) |
 | D15 | whole-file `read_text`, no size guard, no streaming | **FIXED for sweep hot path** P7; remaining reads are bounded/outside sweep per audit |
 | D16 | no per-file status ledger | **FIXED** P0 |
 | D17 | facts/ledger written at artifact root, not `surface/` | **FIXED** (surface outputs relocated; legacy root readers retained) |

@@ -519,3 +519,68 @@ def test_final_run_report_still_fails_when_surface_succeeded_but_missing(tmp_pat
 
     with pytest.raises(FinalRunReportError, match="static-analysis.json is missing"):
         generate_final_run_report(database, workspace, run_id)
+
+
+def test_final_run_report_reads_surface_links_and_trace_chains(tmp_path):
+    workspace = tmp_path / "workspace"
+    database = WorkspaceDatabase(workspace)
+    database.ensure()
+    run_id = "surface-layout-run"
+    package_id = "com.example.surface"
+    version_code = "3"
+    apk_bytes = b"surface layout fixture"
+    digest = hashlib.sha256(apk_bytes).hexdigest()
+    apk_path = workspace / "downloads" / package_id / version_code / digest / "base.apk"
+    apk_path.parent.mkdir(parents=True)
+    apk_path.write_bytes(apk_bytes)
+    row = {
+        "run_id": run_id,
+        "selection_order": 1,
+        "selected_at": "2026-11-10T12:00:00+00:00",
+        "package_id": package_id,
+        "app_name": "Surface App",
+        "version_code": version_code,
+        "version_name": "3.0",
+        "source": "google_play",
+        "download_url": "google-play://example/base.apk",
+        "sha256": digest,
+        "size": len(apk_bytes),
+        "signer_sha256": "a" * 64,
+        "local_path": str(apk_path),
+        "index_sha256": "b" * 64,
+    }
+    database.write_manifest(run_id, [row])
+    database.append_history({**row, "downloaded_at": "2026-11-10T12:01:00+00:00"})
+    database.update_processing_status({
+        "sha256": digest,
+        "package_id": package_id,
+        "version_code": version_code,
+        "apktool_status": "success",
+        "scan_status": "success",
+    })
+
+    artifact_root = workspace / "results" / package_id / version_code / digest
+    (artifact_root / "apktool").mkdir(parents=True)
+    (artifact_root / "trufflehog").mkdir(parents=True)
+    (artifact_root / "trufflehog" / "findings.json").write_text("[]", encoding="utf-8")
+    surface_dir = artifact_root / "surface"
+    surface_dir.mkdir(parents=True)
+    (surface_dir / "static-analysis.json").write_text(
+        json.dumps({"schema_version": 1, "status": "success", "findings": [], "coverage": {"native_libraries": "partial"}}),
+        encoding="utf-8",
+    )
+    trace_chain = {"chain_length": 1, "edges": [{"edge_type": "method->native", "citations": []}]}
+    native_link = {"edge_type": "method->native", "from": "m", "to": "n", "citations": []}
+    (surface_dir / "trace_chains.jsonl").write_text(json.dumps(trace_chain) + "\n", encoding="utf-8")
+    (surface_dir / "links.jsonl").write_text(json.dumps(native_link) + "\n", encoding="utf-8")
+    (artifact_root / "manifest").mkdir(parents=True)
+    (artifact_root / "manifest" / "google-play-bundle.json").write_text(
+        json.dumps({"source": "google_play", "package_id": package_id}), encoding="utf-8"
+    )
+
+    result = generate_final_run_report(database, workspace, run_id)
+    payload = json.loads(Path(result["json_path"]).read_text(encoding="utf-8"))
+    native_evidence = payload["artifacts"][0]["native_evidence"]
+    assert native_evidence["trace_chains"] == [trace_chain]
+    assert native_evidence["links"] == [native_link]
+    assert payload["artifacts"][0]["acquisition"]["bundle_metadata"]["package_id"] == package_id

@@ -500,6 +500,8 @@ def test_reflection_sites_keep_literal_and_dynamic_for_name(fixture_result):
     assert literal["argument_resolved"] is True
     assert literal["resolved_target"] == "com.example.Secret"
     assert literal["resolution_kind"] == "class_name"
+    assert literal["resolution_method"] == "nearest_preceding_string_heuristic"
+    assert literal["confidence"] == "hint"
     assert literal["unresolved_reason"] is None
     assert literal["caller_class"] == "Lcom/example/Main;"
 
@@ -509,6 +511,8 @@ def test_reflection_sites_keep_literal_and_dynamic_for_name(fixture_result):
     )
     assert dynamic["argument_resolved"] is False
     assert dynamic["resolved_target"] is None
+    assert dynamic["resolution_method"] is None
+    assert dynamic["confidence"] == "open_question"
     assert dynamic["unresolved_reason"] == "no_string_constant_before_call_site"
 
 
@@ -521,6 +525,8 @@ def test_reflection_sites_cover_get_method_and_invoke(fixture_result):
     assert declared["argument_resolved"] is True
     assert declared["resolved_target"] == "load"
     assert declared["resolution_kind"] == "member_name"
+    assert declared["resolution_method"] == "nearest_preceding_string_heuristic"
+    assert declared["confidence"] == "hint"
 
     invoke_sites = [
         site for site in sites if site["api"] == "Ljava/lang/reflect/Method;->invoke"
@@ -530,6 +536,8 @@ def test_reflection_sites_cover_get_method_and_invoke(fixture_result):
         # invoke takes objects, not literals: never a guessed target.
         assert site["argument_resolved"] is False
         assert site["resolved_target"] is None
+        assert site["resolution_method"] is None
+        assert site["confidence"] == "open_question"
         assert site["unresolved_reason"] == "no_literal_argument"
 
 
@@ -541,3 +549,223 @@ def test_string_class_index_links_values_to_referencing_classes(fixture_result):
     # Unreferenced pool strings are absent (unreferenced, not dropped silently):
     # the class-name literal is the piece Class.forName resolution depends on.
     assert all(isinstance(classes, list) and classes for classes in index.values())
+
+
+def test_dex_api_strings_preserve_multi_dex_origin(monkeypatch):
+    import androguard.core.analysis.analysis as analysis_module
+    import androguard.core.apk as apk_module
+    import androguard.core.dex as dex_module
+
+    class MultiFakeDex:
+        def __init__(self, data, using_api=None):
+            assert using_api == 35
+            self.data = data
+            if data == b"dex0":
+                self._strings = [
+                    "https://dex0.example.test/a",
+                    "https://shared.example.test/common",
+                    "https://pool-shared.example.test/only-ref-in-0",
+                ]
+            else:
+                self._strings = [
+                    "https://dex1.example.test/b",
+                    "https://shared.example.test/common",
+                    "https://pool-shared.example.test/only-ref-in-0",
+                ]
+
+        def get_strings(self):
+            return list(self._strings)
+
+    class MultiFakeMethod(FakeMethod):
+        def __init__(self, *args, vm=None, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._vm = vm
+
+        def get_vm(self):
+            return self._vm
+
+    class MultiFakeString:
+        def __init__(self, value, xrefs):
+            self._value = value
+            self._xrefs = xrefs
+
+        def get_value(self):
+            return self._value
+
+        def get_xref_from(self, with_offset=False):
+            assert with_offset is True
+            return list(self._xrefs)
+
+    class MultiFakeApk(FakeApk):
+        def get_all_dex(self):
+            return [b"dex0", b"dex1"]
+
+    dex_vms: list[MultiFakeDex] = []
+    caller_dex0: list[MultiFakeMethod] = []
+    caller_dex1: list[MultiFakeMethod] = []
+
+    class MultiFakeAnalysis:
+        def add(self, vm):
+            dex_vms.append(vm)
+            if vm.data == b"dex0":
+                caller_dex0.append(
+                    MultiFakeMethod("Lcom/example/Dex0;", "run", "()V", vm=vm)
+                )
+            else:
+                caller_dex1.append(
+                    MultiFakeMethod("Lcom/example/Dex1;", "run", "()V", vm=vm)
+                )
+
+        def create_xref(self):
+            pass
+
+        def get_internal_methods(self):
+            return caller_dex0 + caller_dex1
+
+        def get_external_methods(self):
+            return []
+
+        def get_internal_classes(self):
+            return []
+
+        def get_external_classes(self):
+            return []
+
+        def get_strings(self):
+            return [
+                MultiFakeString(
+                    "https://dex0.example.test/a",
+                    [(object(), caller_dex0[0], 10)],
+                ),
+                MultiFakeString(
+                    "https://dex1.example.test/b",
+                    [(object(), caller_dex1[0], 20)],
+                ),
+                MultiFakeString(
+                    "https://shared.example.test/common",
+                    [(object(), caller_dex0[0], 30), (object(), caller_dex1[0], 40)],
+                ),
+                MultiFakeString(
+                    "https://pool-shared.example.test/only-ref-in-0",
+                    [(object(), caller_dex0[0], 50)],
+                ),
+            ]
+
+        def get_permissions(self, _api_level):
+            return []
+
+    monkeypatch.setattr(apk_module, "APK", MultiFakeApk)
+    monkeypatch.setattr(dex_module, "DEX", MultiFakeDex)
+    monkeypatch.setattr(analysis_module, "Analysis", MultiFakeAnalysis)
+
+    worker_result = androguard_dex._analyze_in_worker("fixture.apk")
+    by_val = {item["value"]: item for item in worker_result["dex_api_strings"]}
+
+    assert by_val["https://dex0.example.test/a"]["dex_index"] == 0
+    assert by_val["https://dex0.example.test/a"]["dex_indices"] == [0]
+    assert by_val["https://dex0.example.test/a"]["references"][0]["dex_index"] == 0
+
+    assert by_val["https://dex1.example.test/b"]["dex_index"] == 1
+    assert by_val["https://dex1.example.test/b"]["dex_indices"] == [1]
+    assert by_val["https://dex1.example.test/b"]["references"][0]["dex_index"] == 1
+
+    shared = by_val["https://shared.example.test/common"]
+    assert shared["dex_index"] is None
+    assert shared["dex_indices"] == [0, 1]
+    assert [ref["dex_index"] for ref in shared["references"]] == [0, 1]
+
+    pool_shared = by_val["https://pool-shared.example.test/only-ref-in-0"]
+    assert pool_shared["dex_index"] is None
+    assert pool_shared["dex_indices"] == [0, 1]
+    assert [ref["dex_index"] for ref in pool_shared["references"]] == [0]
+
+    dex_vms.clear()
+    caller_dex0.clear()
+    caller_dex1.clear()
+    payload_result = androguard_dex._analyze_dex_payloads(
+        [(b"dex0", "assets/a.dex"), (b"dex1", "assets/b.dex")],
+        target_sdk=35,
+    )
+    payload_by_val = {item["value"]: item for item in payload_result["dex_api_strings"]}
+    assert payload_by_val["https://dex0.example.test/a"]["dex_source"] == "assets/a.dex"
+    assert payload_by_val["https://dex0.example.test/a"]["dex_sources"] == ["assets/a.dex"]
+    assert payload_by_val["https://shared.example.test/common"]["dex_source"] is None
+    assert payload_by_val["https://shared.example.test/common"]["dex_sources"] == [
+        "assets/a.dex",
+        "assets/b.dex",
+    ]
+    assert [
+        ref["dex_source"]
+        for ref in payload_by_val["https://shared.example.test/common"]["references"]
+    ] == ["assets/a.dex", "assets/b.dex"]
+
+
+def test_reflection_heuristic_picks_nearest_preceding_string_and_labels_hint(monkeypatch):
+    import androguard.core.analysis.analysis as analysis_module
+    import androguard.core.apk as apk_module
+    import androguard.core.dex as dex_module
+
+    caller = FakeMethod("Lcom/example/Main;", "loadDynamic", "()V")
+    for_name = FakeMethod(
+        "Ljava/lang/Class;",
+        "forName",
+        "(Ljava/lang/String;)Ljava/lang/Class;",
+        external=True,
+        android_api=True,
+        xref_from=[(object(), caller, 40)],
+    )
+
+    class HeuristicString:
+        def __init__(self, value, offset):
+            self._value = value
+            self._offset = offset
+
+        def get_value(self):
+            return self._value
+
+        def get_xref_from(self, with_offset=False):
+            assert with_offset is True
+            return [(object(), caller, self._offset)]
+
+    class HeuristicAnalysis:
+        def add(self, _vm):
+            pass
+
+        def create_xref(self):
+            pass
+
+        def get_internal_methods(self):
+            return [caller]
+
+        def get_external_methods(self):
+            return [for_name]
+
+        def get_internal_classes(self):
+            return []
+
+        def get_external_classes(self):
+            return []
+
+        def get_strings(self):
+            return [
+                HeuristicString("com.example.Earlier", 12),
+                HeuristicString("com.example.Nearest", 36),
+                HeuristicString("com.example.AfterCall", 60),
+            ]
+
+        def get_permissions(self, _api_level):
+            return []
+
+    monkeypatch.setattr(apk_module, "APK", FakeApk)
+    monkeypatch.setattr(dex_module, "DEX", FakeDex)
+    monkeypatch.setattr(analysis_module, "Analysis", HeuristicAnalysis)
+
+    result = androguard_dex._analyze_in_worker("fixture.apk")
+    assert len(result["reflection_sites"]) == 1
+    site = result["reflection_sites"][0]
+    assert site["argument_resolved"] is True
+    assert site["resolved_target"] == "com.example.Nearest"
+    assert site["resolution_kind"] == "class_name"
+    assert site["resolution_method"] == "nearest_preceding_string_heuristic"
+    assert site["confidence"] == "hint"
+    assert site["unresolved_reason"] is None

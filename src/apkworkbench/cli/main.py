@@ -64,7 +64,7 @@ def _workspace_locked(command):
     """Hold the workspace process lock for each command and the full pipeline."""
     @wraps(command)
     def wrapped(*args, **kwargs):
-        workspace = Config().get("workspace")
+        workspace = kwargs.get("workspace") or Config().get("workspace")
         database = WorkspaceDatabase(workspace)
         with database._write_lock():
             return command(*args, **kwargs)
@@ -1225,6 +1225,61 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
 
 @main.command()
 @click.option(
+    "--force",
+    is_flag=True,
+    help="Re-run surface analysis even when prior static-analysis output exists.",
+)
+@click.option(
+    "--run-id",
+    type=str,
+    default=None,
+    help="Restrict static surface analysis to artifacts in this frozen download manifest.",
+)
+@click.option(
+    "--workspace",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Override the configured workspace directory.",
+)
+@_workspace_locked
+def surface(force: bool, run_id: str | None, workspace: Path | None) -> None:
+    """Run static APK surface analysis against Apktool-decoded output."""
+    config = Config()
+    logger = setup_logging(config)
+    target_workspace = str(workspace) if workspace is not None else config.get("workspace")
+    database = WorkspaceDatabase(target_workspace)
+    dex_timeout = int(config.get("analysis.androguard_timeout_seconds", 1800))
+    click.echo(BANNER)
+    click.echo("Starting static APK surface analysis.")
+    try:
+        summary = run_static_surface_analysis(
+            database,
+            target_workspace,
+            run_id=run_id,
+            force=force,
+            dex_timeout_seconds=dex_timeout,
+            progress=click.echo,
+        )
+    except (DatabaseError, OSError, ValueError, RuntimeError) as exc:
+        logger.error("Static surface analysis failed: %s", exc)
+        click.echo(f"Static surface analysis failed: {exc}", err=True)
+        raise click.exceptions.Exit(1) from exc
+
+    click.echo("SURFACE ANALYSIS SUMMARY")
+    if run_id:
+        click.echo(f"  Run ID: {run_id}")
+    click.echo(f"  Eligible: {summary.get('eligible', 0)}")
+    click.echo(f"  Completed: {summary['completed']}")
+    click.echo(f"  Partial: {summary['partial']}")
+    click.echo(f"  Failed: {summary['failed']}")
+    click.echo(f"  Skipped: {summary['skipped']}")
+    click.echo(f"  Static indicators: {summary['finding_count']}")
+    if summary["failed"]:
+        raise click.exceptions.Exit(1)
+
+
+@main.command()
+@click.option(
     "--limit",
     type=click.IntRange(min=0),
     default=0,
@@ -1244,7 +1299,7 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
 )
 @_workspace_locked
 def analyze(limit: int, force: bool, run_id: str | None) -> None:
-    """Scan Apktool-decoded output and retain verified findings."""
+    """Scan Apktool-decoded output with TruffleHog and retain all findings."""
     config = Config()
     logger = setup_logging(config)
     database = WorkspaceDatabase(config.get("workspace"))
@@ -1258,7 +1313,7 @@ def analyze(limit: int, force: bool, run_id: str | None) -> None:
         progress=click.echo,
     )
     click.echo(BANNER)
-    click.echo("Starting TruffleHog analysis with verified-result selection (--results=verified).")
+    click.echo("Starting TruffleHog analysis with full-result selection (--results=all).")
     try:
         summary = scanner.run(limit=limit or None, force=force, run_id=run_id)
     except (AnalysisError, DatabaseError, OSError, ValueError) as exc:
@@ -1275,12 +1330,29 @@ def analyze(limit: int, force: bool, run_id: str | None) -> None:
         click.echo(f"Secret-link refresh failed: {exc}", err=True)
         raise click.exceptions.Exit(1) from exc
 
-    click.echo("COMPLETE ORIGINAL TRUFFLEHOG FINDINGS")
+    click.echo("TRUFFLEHOG FINDING COUNTS BY TYPE")
     if not summary.finding_records:
         click.echo("  No findings were emitted by the scans performed in this run.")
-    for record in summary.finding_records:
-        click.echo(f"\nAPK: {record['package_id']}  VERSION: {record['version_code']}  SHA256: {record['sha256']}")
-        click.echo(json.dumps(record["finding"], ensure_ascii=False, indent=2))
+    else:
+        counts_by_type: dict[str, dict[str, int]] = {}
+        for record in summary.finding_records:
+            finding = record.get("finding") or {}
+            detector = str(finding.get("DetectorName") or "unknown")
+            bucket = counts_by_type.setdefault(
+                detector, {"total": 0, "verified": 0, "unverified": 0}
+            )
+            bucket["total"] += 1
+            if finding.get("Verified") is True:
+                bucket["verified"] += 1
+            else:
+                bucket["unverified"] += 1
+        for detector, bucket in sorted(
+            counts_by_type.items(), key=lambda item: (-item[1]["total"], item[0])
+        ):
+            click.echo(
+                f"  {detector}: {bucket['total']} "
+                f"(verified: {bucket['verified']}, unverified: {bucket['unverified']})"
+            )
 
     click.echo("\nANALYSIS SUMMARY")
     if run_id:
@@ -1397,12 +1469,14 @@ def status() -> None:
     help="Restrict the acquisition to this exact Android package ID.",
 )
 @click.option("--force-decompile", is_flag=True, help="Re-run completed decompilations.")
+@click.option("--force-surface", is_flag=True, help="Re-run completed static surface analysis.")
 @click.option("--force-analyze", is_flag=True, help="Re-run successful TruffleHog scans.")
 @_workspace_locked
 def run(
     apk_count: int,
     package_id: str | None,
     force_decompile: bool,
+    force_surface: bool,
     force_analyze: bool,
 ) -> None:
     """Acquire from the saved discovery catalog (or one exact package), then process the batch."""
@@ -1453,6 +1527,7 @@ def run(
                     WorkspaceDatabase(Config().get("workspace")),
                     Config().get("workspace"),
                     run_id=run_id,
+                    force=force_surface,
                     dex_timeout_seconds=int(Config().get("analysis.androguard_timeout_seconds", 1800)),
                     progress=click.echo,
                 )

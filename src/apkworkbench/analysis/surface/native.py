@@ -910,7 +910,7 @@ def _analyze_targets(
             })
             reports.append(report)
             continue
-        if parsed.section(".dynsym") is None and not parsed.exports:
+        if parsed.section(".dynsym") is None and not parsed.exports and not parsed.imports:
             report.state = "stripped_symbols"
             report.reason = "stripped_symbols"
 
@@ -1444,7 +1444,7 @@ def _empty_metrics() -> dict[str, Any]:
         "native_strings_total": 0,
         "native_strings_emitted": 0,
         "native_strings_dropped": 0,
-        "native_strings_scanned": 0,
+        "native_libraries_strings_scanned": 0,
         "native_strings_bytes": 0,
         "native_libraries_with_load_site": 0,
         "native_libraries_without_load_site": 0,
@@ -1512,7 +1512,9 @@ def _build_metrics(
             strings_total - string_fact_count - sharded_strings, 0
         ),
         "native_strings_processed": string_processed,
-        "native_strings_scanned": sum(1 for report in reports if report.strings and report.strings.bytes_scanned),
+        "native_libraries_strings_scanned": sum(
+            1 for report in reports if report.strings and report.strings.bytes_scanned
+        ),
         "native_strings_bytes": bytes_scanned,
         "native_strings_matches": strings_matches,
         "native_findings_emitted": native_findings_emitted,

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# End-to-end Google Play acquisition and Apktool -> TruffleHog processing.
-# TruffleHog is not invoked unless all selected Apktool jobs finish successfully.
+# End-to-end Google Play acquisition and sequential processing via 'apkworkbench run'.
+# 'run' executes surface analysis and TruffleHog on any artifact with saved usable Apktool output (complete or partial), rather than waiting for every Apktool job to succeed.
 set -Eeuo pipefail
 umask 077
 

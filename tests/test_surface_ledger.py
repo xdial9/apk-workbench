@@ -29,7 +29,10 @@ def _make_tree(tmp_path):
 
 
 def test_ledger_accounts_for_every_entry(tmp_path):
+    from tests.elf_fixtures import build_elf
+
     root = _make_tree(tmp_path)
+    (root / "assets" / "libvalid.so").write_bytes(build_elf())
     (root / "smali" / "link.smali").symlink_to(root / "smali" / "com" / "x" / "A.smali")
 
     out = tmp_path / "artifact"
@@ -54,10 +57,13 @@ def test_ledger_accounts_for_every_entry(tmp_path):
     assert by_path["smali/com/x/A.smali"]["status"] == ledger.SCANNED_TEXT
     assert by_path["res/values/strings.xml"]["status"] == ledger.SCANNED_TEXT
     assert by_path["assets/config.json"]["status"] == ledger.SCANNED_TEXT
-    assert by_path["assets/libcore.so"]["status"] == ledger.ANALYSED_NATIVE
-    assert by_path["assets/libcore.so"]["analysed_by"] == "native_elf"
-    # A .so that is really a zip is still owned by the native pass.
-    assert by_path["assets/packed.so"]["status"] == ledger.ANALYSED_NATIVE
+    assert by_path["assets/libvalid.so"]["status"] == ledger.ANALYSED_NATIVE
+    assert by_path["assets/libvalid.so"]["analysed_by"] == "native_elf"
+    # Truncated <16-byte ELF and <16-byte packed.so both fail ELF parse (Defect 14b).
+    assert by_path["assets/libcore.so"]["status"] == ledger.UNDECODABLE
+    assert by_path["assets/libcore.so"]["reason"] == "native_elf_parse_failed"
+    assert by_path["assets/packed.so"]["status"] == ledger.UNDECODABLE
+    assert by_path["assets/packed.so"]["reason"] == "native_elf_parse_failed"
     assert by_path["assets/bundle.zip"]["status"] == ledger.SKIPPED_CONTAINER
     assert by_path["assets/bundle.zip"]["reason"] == "container_not_extracted"
     assert by_path["assets/blob"]["status"] == ledger.SKIPPED_UNSUPPORTED
@@ -157,3 +163,40 @@ def test_analyzer_does_not_write_ledger_without_directory(tmp_path):
     assert summary["written"] is False
     assert not (root / "files.jsonl").exists()
     assert summary["total"] > 0
+
+
+def test_ledger_records_failed_and_non_elf_libraries_with_honest_status(tmp_path):
+    root = _make_tree(tmp_path)
+    (root / "assets" / "libgood.so").write_bytes(b"\x7fELF" + b"\x00" * 64)
+    (root / "assets" / "libbad.so").write_bytes(b"\xde\xad\xbe\xef")
+    tree = classify.classify_decoded_tree(root)
+
+    records = ledger.build_file_ledger(
+        tree,
+        scanned=set(),
+        native_skipped={
+            "assets/libcore.so": "native_elf_parse_failed",
+            "assets/packed.so": "native_not_elf_archive",
+            "assets/libbad.so": "native_not_elf",
+        },
+    )
+    by_path = {item["path"]: item for item in records}
+
+    assert by_path["assets/libgood.so"]["status"] == ledger.ANALYSED_NATIVE
+    assert by_path["assets/libgood.so"]["reason"] is None
+    assert by_path["assets/libgood.so"]["analysed_by"] == "native_elf"
+
+    assert by_path["assets/libcore.so"]["status"] == ledger.UNDECODABLE
+    assert by_path["assets/libcore.so"]["reason"] == "native_elf_parse_failed"
+    assert by_path["assets/libcore.so"]["analysed_by"] is None
+
+    assert by_path["assets/packed.so"]["status"] == ledger.SKIPPED_CONTAINER
+    assert by_path["assets/packed.so"]["reason"] == "native_not_elf_archive"
+    assert by_path["assets/packed.so"]["analysed_by"] is None
+
+    assert by_path["assets/libbad.so"]["status"] == ledger.SKIPPED_BINARY
+    assert by_path["assets/libbad.so"]["reason"] == "native_not_elf"
+    assert by_path["assets/libbad.so"]["analysed_by"] is None
+
+    summary = ledger.summarize(records)
+    assert summary["checked"] == 1  # only assets/libgood.so was actually analysed

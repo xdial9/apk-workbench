@@ -54,7 +54,8 @@ DURING: register risks/hallucination doubts as VERIFY notes immediately.
 END: update STATE (phase item moved? decisions? VERIFYs resolved?) + tick
 surface.txt/plan.txt checkboxes if applicable.
 
-## STATE (current as of 2026-11-17; fresh pipeline audited)
+## STATE (current as of 2026-11-23; post-`dc1872e` audit fixes verified)
+- **2026-11-23 audit-defect closure (`main` post-`dc1872e`)**: Completed `surface/` + `manifest/` bundle layout (including `files.jsonl`, `resources.jsonl`, `shards/`, `links.jsonl`, `entry_points.jsonl`, `trace_chains.jsonl`, `manifest/google-play-bundle.json`, `workbook.py`, `final_run.py`); wired `run_static_surface_analysis` checkpoint resume (`CHECKPOINT_EVERY_FILES=2000`, `CHECKPOINT_EVERY_SECONDS=15.0`) + `apkworkbench surface` + `run --force-surface` + `force_surface.py`; added `PT_DYNAMIC`/`PT_LOAD` stripped-ELF dynamic symbol recovery in `native_elf.py`; preserved `dex_index`/`dex_indices` and explicit reflection heuristic confidence (`hint`) in `androguard_dex.py`; consolidated `SENSITIVE_PERMISSIONS`, removed dead `manifest_v2.py` branch, single `finalize_result`, fixed stale CLI/script/requirements text, config/detector/runner/ledger warts, and dry-ran `prompts/0.txt..6.txt` against real frozen `calculator-85` E2E bundles (`base` and `arm64_v8a`). Full suite: **431 passed, 0 failed** (both `.venv` and fresh temp venv with `pip install -e '.[dev]'`). Open operator decisions: Defect 12 (`security/`), Defect 13 (delete dormant Phase-C framework), Defect 14d (`sources/google_play.py:58` stray docstring).
 - Fresh run `fc75a20f-f08e-455c-a833-31806844280e` for
   `com.simplemobiletools.calculator` completed in
   `/home/dial9/APK-Workbench/workspace-first-full-20261117`. All four APK

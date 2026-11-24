@@ -618,3 +618,29 @@ def test_keyboard_interrupt_terminates_apktool_process_group(monkeypatch, tmp_pa
     assert terminated == [424242]
     assert b"INTERRUPTED: process group terminated" in log_path.read_bytes()
 
+
+def test_partial_mode_accepts_unix_exit_codes_and_publishes_signal_as_partial(monkeypatch, tmp_path):
+    runner, database, digest, _ = make_runner(tmp_path)
+    recorded_accepted = []
+    original_run_tool = runner._run_tool
+
+    def spy_run_tool(command, log_path, label, *, accepted_return_codes=(0,)):
+        recorded_accepted.append(accepted_return_codes)
+        return original_run_tool(
+            command, log_path, label, accepted_return_codes=accepted_return_codes
+        )
+
+    monkeypatch.setattr(runner, "_run_tool", spy_run_tool)
+
+    def killed_by_signal(command, **kwargs):
+        successful_tool(command, kwargs, "partial output before SIGKILL")
+        return FakeProcess(-signal.SIGKILL)
+
+    monkeypatch.setattr(subprocess, "Popen", killed_by_signal)
+    summary = runner.run()
+
+    assert recorded_accepted == [tuple(range(256))]
+    assert summary.failed == 0
+    assert summary.partial == 1
+    assert database.read_processing_status()[digest]["apktool_status"] == "partial"
+

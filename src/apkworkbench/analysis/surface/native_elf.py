@@ -70,6 +70,7 @@ DT_HASH = 4
 DT_STRTAB = 5
 DT_SYMTAB = 6
 DT_STRSZ = 10
+DT_SYMENT = 11
 DT_SONAME = 14
 DT_RPATH = 15
 DT_SYMBOLIC = 16
@@ -89,6 +90,7 @@ DYNAMIC_TAG_NAMES = {
     DT_STRTAB: "STRTAB",
     DT_SYMTAB: "SYMTAB",
     DT_STRSZ: "STRSZ",
+    DT_SYMENT: "SYMENT",
     DT_SONAME: "SONAME",
     DT_RPATH: "RPATH",
     16: "SYMBOLIC",
@@ -281,6 +283,8 @@ class ElfDynamic:
     strtab_vaddr: int | None = None
     strtab_size: int | None = None
     symtab_vaddr: int | None = None
+    syment: int | None = None
+    hash_vaddr: int | None = None
     gnu_hash_vaddr: int | None = None
     entries: list[dict[str, object]] = field(default_factory=list)
 
@@ -638,12 +642,56 @@ def _read_notes(reader: _Reader, result: ElfParseResult, endian: str) -> None:
                 result.build_id = description.hex()
 
 
+def _vaddr_to_file_offset(
+    program_headers: list[dict[str, int]], vaddr: int
+) -> tuple[int, int] | None:
+    """Translate a virtual address to ``(file_offset, remaining_filesz)`` via PT_LOAD."""
+    if vaddr < 0:
+        return None
+    for ph in program_headers:
+        if ph["type"] != PT_LOAD:
+            continue
+        p_vaddr = ph["vaddr"]
+        p_filesz = ph["filesz"]
+        if p_filesz <= 0:
+            continue
+        if p_vaddr <= vaddr < p_vaddr + p_filesz:
+            offset_in_seg = vaddr - p_vaddr
+            return ph["offset"] + offset_in_seg, p_filesz - offset_in_seg
+    return None
+
+
+def _read_dynamic_strtab(
+    reader: _Reader,
+    result: ElfParseResult,
+    strtab_section: ElfSection | None,
+    dynamic: ElfDynamic,
+) -> bytes:
+    """Read the dynamic string table from its section or via DT_STRTAB + PT_LOAD."""
+    if strtab_section is not None:
+        return (
+            reader.read(strtab_section.offset, min(strtab_section.size, MAX_STRINGTABLE_BYTES))
+            or b""
+        )
+    if not dynamic.strtab_vaddr:
+        return b""
+    mapped = _vaddr_to_file_offset(result.program_headers, dynamic.strtab_vaddr)
+    if mapped is None:
+        return b""
+    strtab_offset, seg_avail = mapped
+    length = dynamic.strtab_size if dynamic.strtab_size is not None else seg_avail
+    length = min(length, seg_avail, MAX_STRINGTABLE_BYTES)
+    if length <= 0:
+        return b""
+    return reader.read(strtab_offset, length) or b""
+
+
 def _read_dynamic(reader: _Reader, result: ElfParseResult, endian: str) -> None:
     header = result.header
     assert header is not None
     section = next((item for item in result.sections if item.type == SHT_DYNAMIC), None)
     if section is None:
-        # Fall back to PT_DYNAMIC location; strtab resolution still needs sections.
+        # Fall back to PT_DYNAMIC location; strtab resolves via DT_STRTAB + PT_LOAD.
         program = next(
             (item for item in result.program_headers if item["type"] == PT_DYNAMIC), None
         )
@@ -677,11 +725,8 @@ def _read_dynamic(reader: _Reader, result: ElfParseResult, endian: str) -> None:
         })
         return
 
-    strings = b""
-    if strtab_section is not None:
-        strings = reader.read(strtab_section.offset, min(strtab_section.size, MAX_STRINGTABLE_BYTES)) or b""
-
     dynamic = ElfDynamic()
+    raw_entries: list[tuple[int, int]] = []
     count = len(blob) // entsize
     fmt = endian + ("qQ" if header.class_type == "ELF64" else "iI")
     for index in range(min(count, MAX_DYNAMIC_ENTRIES)):
@@ -696,15 +741,8 @@ def _read_dynamic(reader: _Reader, result: ElfParseResult, endian: str) -> None:
         })
         if tag == DT_NULL:
             break
-        if tag == DT_NEEDED:
-            dynamic.needed.append(_cstring(strings, value))
-        elif tag == DT_SONAME:
-            dynamic.soname = _cstring(strings, value)
-        elif tag == DT_RPATH:
-            dynamic.rpath = _cstring(strings, value)
-        elif tag == DT_RUNPATH:
-            dynamic.runpath = _cstring(strings, value)
-        elif tag == DT_FLAGS:
+        raw_entries.append((tag, value))
+        if tag == DT_FLAGS:
             dynamic.flags = value
         elif tag == DT_FLAGS_1:
             dynamic.flags_1 = value
@@ -714,17 +752,246 @@ def _read_dynamic(reader: _Reader, result: ElfParseResult, endian: str) -> None:
             dynamic.strtab_size = value
         elif tag == DT_SYMTAB:
             dynamic.symtab_vaddr = value
+        elif tag == DT_SYMENT:
+            dynamic.syment = value
+        elif tag == DT_HASH:
+            dynamic.hash_vaddr = value
         elif tag == DT_GNU_HASH:
             dynamic.gnu_hash_vaddr = value
+
+    strings = _read_dynamic_strtab(reader, result, strtab_section, dynamic)
+    for tag, value in raw_entries:
+        if tag == DT_NEEDED:
+            dynamic.needed.append(_cstring(strings, value))
+        elif tag == DT_SONAME:
+            dynamic.soname = _cstring(strings, value)
+        elif tag == DT_RPATH:
+            dynamic.rpath = _cstring(strings, value)
+        elif tag == DT_RUNPATH:
+            dynamic.runpath = _cstring(strings, value)
     result.dynamic = dynamic
+
+
+def _parse_symbol_table(
+    blob: bytes,
+    count: int,
+    stride: int,
+    entry_size: int,
+    table_offset: int,
+    table_name: str,
+    strings: bytes,
+    class_type: str,
+    endian: str,
+    result: ElfParseResult,
+) -> None:
+    """Decode ``count`` symbol records from ``blob`` into ``result.exports`` / ``imports``."""
+    unresolved_names = 0
+    for index in range(count):
+        chunk = blob[index * stride:index * stride + entry_size]
+        if len(chunk) != entry_size:
+            break
+        if class_type == "ELF32":
+            name_offset, value, sym_size, info, other, shndx = struct.unpack(
+                endian + "IIIBBH", chunk
+            )
+        else:
+            name_offset, info, other, shndx, value, sym_size = struct.unpack(
+                endian + "IBBHQQ", chunk
+            )
+        if index == 0:
+            continue  # null symbol, never a real export/import
+        bind = info >> 4
+        sym_type = info & 0xF
+        symbol = ElfSymbol(
+            name=_cstring(strings, name_offset),
+            name_offset=name_offset,
+            value=value,
+            size=sym_size,
+            bind=bind,
+            bind_name=SYMBOL_BIND_NAMES.get(bind, f"BIND_{bind}"),
+            type=sym_type,
+            type_name=SYMBOL_TYPE_NAMES.get(sym_type, f"TYPE_{sym_type}"),
+            visibility=other & 0x3,
+            shndx=shndx,
+            table=table_name,
+            file_offset=table_offset + index * stride,
+        )
+        if symbol.is_export:
+            result.exports.append(symbol)
+        elif symbol.is_import:
+            result.imports.append(symbol)
+        elif symbol.name == "" and name_offset:
+            unresolved_names += 1
+    if unresolved_names:
+        result.warnings.append({
+            "code": "symbol_name_unresolved",
+            "message": f"{table_name}: {unresolved_names} symbol name(s) point outside {table_name} string table",
+        })
+
+
+def _dynamic_symbol_count(
+    reader: _Reader, result: ElfParseResult, endian: str
+) -> int | None:
+    """Deduce ``DT_SYMTAB`` entry count from ``DT_HASH`` or ``DT_GNU_HASH``."""
+    header = result.header
+    dynamic = result.dynamic
+    assert header is not None and dynamic is not None
+
+    if dynamic.hash_vaddr:
+        mapped = _vaddr_to_file_offset(result.program_headers, dynamic.hash_vaddr)
+        if mapped is not None:
+            hash_offset, seg_avail = mapped
+            if seg_avail >= 8:
+                hdr = reader.read(hash_offset, 8)
+                if hdr is not None:
+                    _nbucket, nchain = struct.unpack(endian + "II", hdr)
+                    if nchain > 0:
+                        return nchain
+
+    if dynamic.gnu_hash_vaddr:
+        mapped = _vaddr_to_file_offset(result.program_headers, dynamic.gnu_hash_vaddr)
+        if mapped is not None:
+            gnu_offset, seg_avail = mapped
+            hdr = reader.read(gnu_offset, 16) if seg_avail >= 16 else None
+            if hdr is not None:
+                nbuckets, symoffset, bloom_size, _bloom_shift = struct.unpack(
+                    endian + "IIII", hdr
+                )
+                word_size = 8 if header.class_type == "ELF64" else 4
+                if (
+                    nbuckets > MAX_SYMBOLS
+                    or bloom_size > MAX_SYMBOLS
+                    or symoffset > MAX_SYMBOLS
+                ):
+                    result.warnings.append({
+                        "code": "symbol_count_invalid",
+                        "message": (
+                            f"dynsym gnu_hash header exceeds {MAX_SYMBOLS}: "
+                            f"nbuckets={nbuckets} symoffset={symoffset} bloom_size={bloom_size}"
+                        ),
+                    })
+                    return None
+                buckets_offset = gnu_offset + 16 + bloom_size * word_size
+                buckets_bytes = nbuckets * 4
+                header_plus_buckets = 16 + bloom_size * word_size + buckets_bytes
+                if header_plus_buckets <= seg_avail:
+                    if nbuckets == 0:
+                        return symoffset
+                    buckets_blob = reader.read(buckets_offset, buckets_bytes)
+                    if buckets_blob is not None:
+                        buckets = struct.unpack(endian + ("I" * nbuckets), buckets_blob)
+                        max_sym = max(buckets)
+                        if max_sym == 0:
+                            return symoffset
+                        if max_sym < symoffset:
+                            result.warnings.append({
+                                "code": "symbol_table_unreadable",
+                                "message": (
+                                    f"dynsym gnu_hash bucket {max_sym} < symoffset {symoffset}"
+                                ),
+                            })
+                            return None
+                        chains_offset = buckets_offset + buckets_bytes
+                        chains_avail = seg_avail - header_plus_buckets
+                        start_chain_idx = max_sym - symoffset
+                        pos = chains_offset + start_chain_idx * 4
+                        remaining = chains_avail - start_chain_idx * 4
+                        sym_idx = max_sym
+                        while remaining >= 4 and sym_idx <= MAX_SYMBOLS:
+                            chunk_len = min(remaining, 4096)
+                            chunk_len -= chunk_len % 4
+                            chunk = reader.read(pos, chunk_len)
+                            if not chunk:
+                                break
+                            values = struct.unpack(
+                                endian + ("I" * (len(chunk) // 4)), chunk
+                            )
+                            for val in values:
+                                if val & 1:
+                                    return sym_idx + 1
+                                sym_idx += 1
+                                if sym_idx > MAX_SYMBOLS:
+                                    return sym_idx
+                            pos += len(chunk)
+                            remaining -= len(chunk)
+    return None
+
+
+def _read_dynamic_symbols_fallback(
+    reader: _Reader, result: ElfParseResult, endian: str
+) -> None:
+    """Recover dynamic symbols via PT_DYNAMIC + PT_LOAD when section headers are absent."""
+    header = result.header
+    dynamic = result.dynamic
+    assert header is not None
+    if dynamic is None or not dynamic.symtab_vaddr:
+        return
+
+    entry_size = 16 if header.class_type == "ELF32" else 24
+    if dynamic.syment is not None and dynamic.syment < entry_size:
+        result.warnings.append({
+            "code": "symbol_entry_size_invalid",
+            "message": f"dynsym DT_SYMENT={dynamic.syment}",
+        })
+        return
+    stride = dynamic.syment or entry_size
+
+    mapped = _vaddr_to_file_offset(result.program_headers, dynamic.symtab_vaddr)
+    if mapped is None:
+        result.warnings.append({
+            "code": "symbol_table_unreadable",
+            "message": f"dynsym DT_SYMTAB={dynamic.symtab_vaddr:#x} outside PT_LOAD",
+        })
+        return
+    symtab_offset, symtab_seg_avail = mapped
+
+    count = _dynamic_symbol_count(reader, result, endian)
+    if count is None:
+        if not any(item["code"] in {"symbol_count_invalid", "symbol_table_unreadable"} for item in result.warnings):
+            result.warnings.append({
+                "code": "dynamic_symbol_count_unavailable",
+                "message": "DT_SYMTAB present without resolvable DT_HASH or DT_GNU_HASH",
+            })
+        return
+    if count <= 0:
+        return
+    if count > MAX_SYMBOLS:
+        result.warnings.append({
+            "code": "symbol_count_invalid",
+            "message": f"dynsym count={count} exceeds {MAX_SYMBOLS}",
+        })
+        return
+    if count * stride > symtab_seg_avail:
+        result.warnings.append({
+            "code": "symbol_table_unreadable",
+            "message": f"dynsym offset={symtab_offset} size={count * stride} exceeds PT_LOAD",
+        })
+        return
+
+    blob = reader.read(symtab_offset, count * stride)
+    if blob is None:
+        result.warnings.append({
+            "code": "symbol_table_unreadable",
+            "message": f"dynsym offset={symtab_offset} size={count * stride}",
+        })
+        return
+
+    strings = _read_dynamic_strtab(reader, result, None, dynamic)
+    _parse_symbol_table(
+        blob, count, stride, entry_size, symtab_offset, "dynsym",
+        strings, header.class_type, endian, result,
+    )
 
 
 def _read_symbols(reader: _Reader, result: ElfParseResult, endian: str) -> None:
     header = result.header
     assert header is not None
+    has_dynsym_section = False
     for section in result.sections:
         if section.type not in (SHT_DYNSYM, SHT_SYMTAB):
             continue
+        if section.type == SHT_DYNSYM:
+            has_dynsym_section = True
         table_name = "dynsym" if section.type == SHT_DYNSYM else "symtab"
         entry_size = 16 if header.class_type == "ELF32" else 24
         if section.entsize and section.entsize < entry_size:
@@ -753,45 +1020,9 @@ def _read_symbols(reader: _Reader, result: ElfParseResult, endian: str) -> None:
                 "message": f"{table_name} offset={section.offset} size={section.size}",
             })
             continue
-        unresolved_names = 0
-        for index in range(count):
-            chunk = blob[index * entry_size:(index + 1) * entry_size]
-            if len(chunk) != entry_size:
-                break
-            if header.class_type == "ELF32":
-                name_offset, value, sym_size, info, other, shndx = struct.unpack(
-                    endian + "IIIBBH", chunk
-                )
-            else:
-                name_offset, info, other, shndx, value, sym_size = struct.unpack(
-                    endian + "IBBHQQ", chunk
-                )
-            if index == 0:
-                continue  # null symbol, never a real export/import
-            bind = info >> 4
-            sym_type = info & 0xF
-            symbol = ElfSymbol(
-                name=_cstring(strings, name_offset),
-                name_offset=name_offset,
-                value=value,
-                size=sym_size,
-                bind=bind,
-                bind_name=SYMBOL_BIND_NAMES.get(bind, f"BIND_{bind}"),
-                type=sym_type,
-                type_name=SYMBOL_TYPE_NAMES.get(sym_type, f"TYPE_{sym_type}"),
-                visibility=other & 0x3,
-                shndx=shndx,
-                table=table_name,
-                file_offset=section.offset + index * entry_size,
-            )
-            if symbol.is_export:
-                result.exports.append(symbol)
-            elif symbol.is_import:
-                result.imports.append(symbol)
-            elif symbol.name == "" and name_offset:
-                unresolved_names += 1
-        if unresolved_names:
-            result.warnings.append({
-                "code": "symbol_name_unresolved",
-                "message": f"{table_name}: {unresolved_names} symbol name(s) point outside {table_name} string table",
-            })
+        _parse_symbol_table(
+            blob, count, entry_size, entry_size, section.offset, table_name,
+            strings, header.class_type, endian, result,
+        )
+    if not has_dynsym_section:
+        _read_dynamic_symbols_fallback(reader, result, endian)

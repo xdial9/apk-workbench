@@ -11,8 +11,20 @@ from __future__ import annotations
 from typing import Any
 
 from apkworkbench.analysis.surface.facts import FactStore
+from apkworkbench.analysis.surface.manifest_v2 import SENSITIVE_PERMISSIONS
 
 DYNAMIC_CODE_LOADING_RULE = "dynamic_code_loading"
+
+# Subset of SENSITIVE_PERMISSIONS checked for DEX API-to-permission mismatch.
+# Storage and Bluetooth permissions are excluded because Androguard's bundled
+# API-permission mappings lack complete coverage for them and would produce
+# false mismatch hints.
+PERMISSION_MISMATCH_CANDIDATES: frozenset[str] = SENSITIVE_PERMISSIONS - frozenset({
+    "android.permission.READ_EXTERNAL_STORAGE",
+    "android.permission.WRITE_EXTERNAL_STORAGE",
+    "android.permission.MANAGE_EXTERNAL_STORAGE",
+    "android.permission.BLUETOOTH_CONNECT",
+})
 
 
 def _deduction(
@@ -199,23 +211,9 @@ def permission_mismatch(
     """Requested sensitive permissions with no DEX-API usage evidence."""
     if facts is None:
         facts = FactStore()
-    sensitive = {
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.RECORD_AUDIO",
-        "android.permission.CAMERA",
-        "android.permission.READ_CONTACTS",
-        "android.permission.WRITE_CONTACTS",
-        "android.permission.READ_SMS",
-        "android.permission.RECEIVE_SMS",
-        "android.permission.SEND_SMS",
-        "android.permission.READ_CALL_LOG",
-        "android.permission.WRITE_CALL_LOG",
-        "android.permission.READ_PHONE_STATE",
-    }
     unused = sorted(
         name for name in requested
-        if name in sensitive and not any(name in perms for perms in used_permissions)
+        if name in PERMISSION_MISMATCH_CANDIDATES and not any(name in perms for perms in used_permissions)
     )
     if not unused:
         return None

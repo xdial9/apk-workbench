@@ -58,6 +58,9 @@ REASONS = {
     "dex_analysis_limit": SKIPPED_DEX,
     "dex_read_failed": SKIPPED_DEX,
     "dex_not_analyzed": SKIPPED_DEX,
+    "native_not_elf": SKIPPED_BINARY,
+    "native_not_elf_archive": SKIPPED_CONTAINER,
+    "native_elf_parse_failed": UNDECODABLE,
     "elf_without_library_suffix": SKIPPED_BINARY,
     "binary_content": SKIPPED_BINARY,
     "no_text_suffix": SKIPPED_UNSUPPORTED,
@@ -100,6 +103,7 @@ def build_file_ledger(
     read_failures: dict[str, str] | None = None,
     dex_analyzed: set[str] | None = None,
     dex_skipped: dict[str, str] | None = None,
+    native_skipped: dict[str, str] | None = None,
     library_suffixes: frozenset[str] = LIBRARY_SUFFIXES,
 ) -> list[dict[str, Any]]:
     """One record per tree entry, sorted by path.
@@ -107,10 +111,13 @@ def build_file_ledger(
     ``scanned`` holds the relative paths the text sweep actually read;
     ``read_failures`` holds the ones it tried and could not. A text candidate
     that is in neither is reported as undecodable rather than assumed read.
+    ``native_skipped`` maps failed/non-ELF library paths to a closed skip
+    reason so parse failures are not recorded as ``analysed_native``.
     """
     failures = read_failures or {}
     analyzed_dex = dex_analyzed or set()
     skipped_dex = dex_skipped or {}
+    skipped_native = native_skipped or {}
     records: list[dict[str, Any]] = []
     for entry in tree.entries:
         relative = entry.relative
@@ -141,9 +148,17 @@ def build_file_ledger(
                 ))
             continue
         if entry.suffix in library_suffixes:
-            records.append(_record(
-                relative, ANALYSED_NATIVE, analysed_by="native_elf", **base,
-            ))
+            if relative in skipped_native:
+                reason = skipped_native[relative]
+                if reason not in REASONS:
+                    reason = "native_elf_parse_failed"
+                records.append(_record(
+                    relative, REASONS[reason], reason=reason, **base,
+                ))
+            else:
+                records.append(_record(
+                    relative, ANALYSED_NATIVE, analysed_by="native_elf", **base,
+                ))
             continue
         if entry.content_kind == "unreadable":
             records.append(_record(

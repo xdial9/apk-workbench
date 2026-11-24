@@ -356,7 +356,7 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
         "status": "success",
         "finding_count": 2,
     }
-    link_path = workspace / "results/org.example.integration/1" / digest / "links.jsonl"
+    link_path = bundle_dir / "surface/links.jsonl"
     links = [json.loads(line) for line in link_path.read_text().splitlines()]
     secret_edges = [
         edge for edge in links if edge["edge_type"] == "method->secret"
@@ -386,7 +386,7 @@ def test_real_subprocess_pipeline_completes_and_reconciles_one_artifact(monkeypa
     assert chains[0]["start_node"] == "component:activity:com.example.Main"
     assert chains[0]["end_node"] == secret_edges[0]["to"]
 
-    findings_path = link_path.parent / "trufflehog/findings.json"
+    findings_path = bundle_dir / "trufflehog/findings.json"
     findings = json.loads(findings_path.read_text(encoding="utf-8"))
     findings_path.write_text("[]\n", encoding="utf-8")
     refresh_secret_links(database, workspace, run_id=run_id)

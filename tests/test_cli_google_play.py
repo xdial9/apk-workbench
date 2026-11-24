@@ -430,3 +430,193 @@ def test_download_records_provenance_and_rerun_hygiene(monkeypatch, tmp_path):
     assert provenance.get("run_manifest", "").endswith(".csv")
     assert provenance.get("phase_one_verification_report", "").endswith(".json")
     assert provenance.get("pipeline_version") == cli.__version__
+
+
+def test_surface_command_invokes_static_surface_analysis_with_force_and_workspace(
+    monkeypatch, tmp_path
+):
+    config = _config(tmp_path)
+    override_ws = tmp_path / "override-workspace"
+    override_ws.mkdir()
+    captured = {}
+
+    def fake_surface(
+        database, workspace, *, run_id=None, force=False,
+        dex_timeout_seconds=1800, progress=None,
+    ):
+        captured["database_root"] = str(database.root)
+        captured["workspace"] = workspace
+        captured["run_id"] = run_id
+        captured["force"] = force
+        captured["dex_timeout_seconds"] = dex_timeout_seconds
+        return {
+            "eligible": 2,
+            "completed": 2,
+            "partial": 0,
+            "failed": 0,
+            "skipped": 0,
+            "finding_count": 5,
+        }
+
+    monkeypatch.setattr(cli, "Config", lambda: config)
+    monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-surface"))
+    monkeypatch.setattr(cli, "run_static_surface_analysis", fake_surface)
+
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "surface",
+            "--force",
+            "--run-id",
+            "surf-run-1",
+            "--workspace",
+            str(override_ws),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "database_root": str(override_ws),
+        "workspace": str(override_ws),
+        "run_id": "surf-run-1",
+        "force": True,
+        "dex_timeout_seconds": 1800,
+    }
+    assert "SURFACE ANALYSIS SUMMARY" in result.output
+    assert "Static indicators: 5" in result.output
+
+
+def test_run_command_passes_force_surface_flag(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    captured_force = []
+
+    def fake_download(apk_count, package_id):
+        __import__("click").get_current_context().meta["apkworkbench_run_id"] = "force-run"
+
+    def fake_decompile(limit, force, run_id):
+        pass
+
+    def fake_analyze(limit, force, run_id):
+        pass
+
+    def fake_surface(
+        database, workspace, *, run_id=None, force=False,
+        dex_timeout_seconds=1800, progress=None,
+    ):
+        captured_force.append(force)
+        return {
+            "completed": 1, "partial": 0, "failed": 0, "skipped": 0,
+            "finding_count": 0,
+        }
+
+    monkeypatch.setattr(cli, "Config", lambda: config)
+    monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-run-force-surface"))
+    monkeypatch.setattr(cli, "download", fake_download)
+    monkeypatch.setattr(cli, "decompile", fake_decompile)
+    monkeypatch.setattr(cli, "analyze", fake_analyze)
+    monkeypatch.setattr(cli, "run_static_surface_analysis", fake_surface)
+    monkeypatch.setattr(cli, "report", lambda run_id=None: None)
+    monkeypatch.setattr(
+        cli,
+        "verify_google_play_run",
+        lambda workspace, run_id, progress=None: {
+            "verified_bundles": 1,
+            "apk_components": 1,
+            "obb_components": 0,
+            "report_path": str(tmp_path / "verify.json"),
+        },
+    )
+    monkeypatch.setattr(cli, "_count_usable_apktool_outputs", lambda workspace, run_id: 1)
+    monkeypatch.setattr(
+        WorkspaceDatabase,
+        "reconcile_run",
+        lambda self, run_id: {"total": 1, "complete": 1, "counts": {"complete": 1}},
+    )
+    monkeypatch.setattr(
+        cli,
+        "_write_bundle_stage_statuses",
+        lambda *_a, **_k: {"frozen_skipped": 0, "missing": 0},
+    )
+    monkeypatch.setattr(cli, "_write_run_stage_statuses", lambda *_a, **_k: None)
+
+    result = CliRunner().invoke(cli.main, ["run", "--apk-count", "1", "--force-surface"])
+
+    assert result.exit_code == 0, result.output
+    assert captured_force == [True]
+
+
+def test_analyze_command_prints_results_all_and_concise_type_counts(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+
+    class FakeScanner:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, **_kwargs):
+            return SimpleNamespace(
+                scanned=1,
+                findings=3,
+                failed=0,
+                skipped=0,
+                finding_records=(
+                    {
+                        "package_id": "com.example.app",
+                        "version_code": "1",
+                        "sha256": "a" * 64,
+                        "finding": {"DetectorName": "AWS", "Verified": True, "Raw": "AKIA_TEST_SECRET"},
+                    },
+                    {
+                        "package_id": "com.example.app",
+                        "version_code": "1",
+                        "sha256": "a" * 64,
+                        "finding": {"DetectorName": "AWS", "Verified": False, "Raw": "AKIA_UNVERIFIED"},
+                    },
+                    {
+                        "package_id": "com.example.app",
+                        "version_code": "1",
+                        "sha256": "a" * 64,
+                        "finding": {"DetectorName": "Slack", "Verified": False, "Raw": "xoxb-secret"},
+                    },
+                ),
+            )
+
+    monkeypatch.setattr(cli, "Config", lambda: config)
+    monkeypatch.setattr(cli, "setup_logging", lambda _config: logging.getLogger("test-analyze"))
+    monkeypatch.setattr(cli, "TruffleHogScanner", FakeScanner)
+    monkeypatch.setattr(
+        cli,
+        "refresh_secret_links",
+        lambda *_args, **_kwargs: {
+            "updated": 1, "failed": 0, "missing_surface": 0, "frozen": 0
+        },
+    )
+
+    result = CliRunner().invoke(cli.main, ["analyze"])
+
+    assert result.exit_code == 0, result.output
+    assert "--results=all" in result.output
+    assert "--results=verified" not in result.output
+    assert "TRUFFLEHOG FINDING COUNTS BY TYPE" in result.output
+    assert "AWS: 2 (verified: 1, unverified: 1)" in result.output
+    assert "Slack: 1 (verified: 0, unverified: 1)" in result.output
+    assert "AKIA_TEST_SECRET" not in result.output
+    assert "xoxb-secret" not in result.output
+
+
+def test_force_surface_script_forwards_to_surface_with_force():
+    import force_surface
+
+    assert force_surface.build_force_surface_argv(["--run-id", "run-42"]) == [
+        "surface",
+        "--force",
+        "--run-id",
+        "run-42",
+    ]
+    assert force_surface.build_force_surface_argv(
+        ["surface", "--force", "--workspace", "/tmp/ws"]
+    ) == [
+        "surface",
+        "--force",
+        "--workspace",
+        "/tmp/ws",
+    ]

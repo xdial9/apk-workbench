@@ -703,8 +703,8 @@ def test_pipeline_writes_links_and_entry_points(tmp_path):
     assert surface["failed"] == 0
 
     bundle = workspace / "results" / package_id / str(version_code) / digest
-    links_path = bundle / "links.jsonl"
-    entry_path = bundle / "entry_points.jsonl"
+    links_path = bundle / "surface" / "links.jsonl"
+    entry_path = bundle / "surface" / "entry_points.jsonl"
     assert links_path.is_file(), sorted(item.name for item in bundle.iterdir())
     assert entry_path.is_file()
 

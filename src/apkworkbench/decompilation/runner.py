@@ -365,7 +365,7 @@ class DecompilationRunner:
         """
         try:
             staged_output.mkdir(mode=0o700)
-            accepted_codes = tuple(range(-255, 256)) if allow_partial else (0,)
+            accepted_codes = tuple(range(256)) if allow_partial else (0,)
             try:
                 returncode = self._run_tool(
                     command,

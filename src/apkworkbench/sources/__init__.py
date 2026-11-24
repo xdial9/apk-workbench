@@ -1,1 +1,1 @@
-"""Upstream APK repository adapters."""
+"""Google Play Store APK acquisition adapter."""

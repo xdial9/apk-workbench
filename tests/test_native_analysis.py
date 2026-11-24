@@ -619,3 +619,44 @@ def test_cross_apk_jni_match_reconciles_inventory_and_unmapped_metrics(tmp_path)
     assert len(resumed["inventory"]["jni_entries"]) == 1
     assert len([fact for fact in resumed["facts"] if fact["kind"] == "native_jni_entry"]) == 1
     assert resumed["metrics"]["native_jni_exports_mapped"] == 1
+
+
+def test_section_stripped_so_recovers_jni_exports_and_metrics(tmp_path):
+    from tests.test_native_elf import build_section_stripped_elf
+
+    root = make_tree(tmp_path)
+    write_native_method(root, "run")
+    blob, dynsym_off = build_section_stripped_elf(
+        bits=64,
+        little=True,
+        symbols=(
+            symbol("Java_com_example_Main_run", value=0x810),
+            symbol("malloc", shndx=0, value=0),
+        ),
+        soname="libstripped.so",
+        needed=("libc.so",),
+        hash_style="gnu",
+    )
+    (root / "lib/arm64-v8a/libstripped.so").write_bytes(blob)
+
+    result = analyze_apk_surface(root)
+
+    inv = {item["path"]: item for item in result["inventory"]["native_analysis"]}
+    entry = inv["lib/arm64-v8a/libstripped.so"]
+    assert entry["state"] == "parsed"
+    assert entry["exports_total"] == 1
+    assert entry["imports_total"] == 1
+    assert entry["soname"] == "libstripped.so"
+    assert entry["needed"] == ["libc.so"]
+
+    jni_facts = facts_of(result, "native_jni_entry")
+    assert len(jni_facts) == 1
+    assert jni_facts[0]["value"] == "lib/arm64-v8a/libstripped.so::Java_com_example_Main_run"
+    offset_cite = next(item for item in jni_facts[0]["evidence"] if "offset" in item)
+    # Index 0 is null, index 1 is malloc (import), index 2 is the export (24 bytes each).
+    assert offset_cite["offset"] == dynsym_off + 2 * 24
+
+    # Defect 14(a): library string-scan count uses native_libraries_strings_scanned,
+    # not the misleading native_strings_scanned name.
+    assert result["metrics"]["native_libraries_strings_scanned"] == 1
+    assert "native_strings_scanned" not in result["metrics"]

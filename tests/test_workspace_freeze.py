@@ -254,3 +254,68 @@ def test_verify_workspace_detects_extra_file(tmp_path):
         assert "surface/injected.txt" in result["extra"]
     finally:
         _unfreeze(tmp_path / "workspace")
+
+
+def test_freeze_populates_missing_manifest_dir_and_verifies_ok(tmp_path):
+    ws = tmp_path / "workspace"
+    database = WorkspaceDatabase(ws)
+    database.ensure()
+
+    apk_dir = ws / "downloads" / "com.example.app-1"
+    apk_dir.mkdir(parents=True)
+    apk_path = apk_dir / "base.apk"
+    apk_path.write_bytes(b"apk")
+    bundle_manifest = {"source": "google_play", "package_id": "com.example.app", "version_code": 1}
+    (apk_dir / "google-play-bundle.json").write_text(json.dumps(bundle_manifest), encoding="utf-8")
+    database.append_history({
+        "sha256": _BUNDLE_ID,
+        "package_id": "com.example.app",
+        "app_name": "Example",
+        "version_code": "1",
+        "version_name": "1.0",
+        "source": "google_play",
+        "download_url": "google-play://com.example.app/1/base.apk",
+        "local_path": str(apk_path),
+        "size": 3,
+        "run_id": "run-freeze",
+        "downloaded_at": "2026-11-23T00:00:00+00:00",
+        "index_sha256": "a" * 64,
+    })
+
+    bundle = ws / "results" / "com.example.app" / "1" / _BUNDLE_ID
+    (bundle / "apktool").mkdir(parents=True)
+    (bundle / "apktool" / "AndroidManifest.xml").write_text("<manifest/>", encoding="utf-8")
+    (bundle / "surface").mkdir()
+    (bundle / "surface" / "static-analysis.json").write_text("{}", encoding="utf-8")
+    (bundle / "surface" / "facts.jsonl").write_text("", encoding="utf-8")
+    (bundle / "surface" / "location_map.json").write_text("{}", encoding="utf-8")
+
+    try:
+        database.freeze_evidence(bundle)
+        copied = bundle / "manifest" / "google-play-bundle.json"
+        assert copied.is_file()
+        assert json.loads(copied.read_text(encoding="utf-8")) == bundle_manifest
+        result = database.verify_workspace(bundle)
+        assert result["status"] == "ok"
+        assert not os.stat(bundle / "manifest").st_mode & 0o222
+    finally:
+        _unfreeze(ws)
+
+
+def test_freeze_populates_manifest_status_when_bundle_manifest_absent(tmp_path):
+    ws = tmp_path / "workspace"
+    database = WorkspaceDatabase(ws)
+    bundle = ws / "results" / "com.example.app" / "1" / _BUNDLE_ID
+    (bundle / "apktool").mkdir(parents=True)
+    (bundle / "apktool" / "AndroidManifest.xml").write_text("<manifest/>", encoding="utf-8")
+    (bundle / "surface").mkdir()
+    (bundle / "surface" / "static-analysis.json").write_text("{}", encoding="utf-8")
+
+    try:
+        database.freeze_evidence(bundle)
+        status_file = bundle / "manifest" / "status.json"
+        assert status_file.is_file()
+        assert json.loads(status_file.read_text(encoding="utf-8"))["status"] == "not_present"
+        assert database.verify_workspace(bundle)["status"] == "ok"
+    finally:
+        _unfreeze(ws)

@@ -51,7 +51,7 @@ IMMUTABLE_EVIDENCE = [
     "apktool/ (decoded application tree)",
     "surface/static-analysis.json + surface/facts.jsonl (tool output)",
     "trufflehog/ (verified + unverified secret findings - both, never drop unverified)",
-    "manifest/ + google-play-bundle.json (acquisition provenance)",
+    "manifest/google-play-bundle.json (acquisition provenance)",
 ]
 
 WORKING_AREA = "ai_analysis/"
@@ -254,14 +254,17 @@ def build_workbook(
                 "surface/static-analysis.json — summary sections (this file)",
                 (
                     "surface/facts.jsonl — one JSON object per fact; line N is "
-                    "cited by location_map.json entries[].facts_jsonl_line"
+                    "cited by surface/location_map.json entries[].facts_jsonl_line"
                 ),
                 (
                     "surface/location_map.json — generated index of every fact, "
                     "finding and deduction with file:line evidence"
                 ),
+                "surface/files.jsonl — per-file coverage ledger",
+                "surface/links.jsonl + surface/entry_points.jsonl + surface/trace_chains.jsonl — link graph and trace chains",
+                "surface/resources.jsonl + surface/shards-index.json — streamed resource table and native overflow index (when present)",
                 "trufflehog/ — verified + unverified secret findings (both, never drop unverified)",
-                "google-play-bundle.json — acquisition provenance + hashes",
+                "manifest/google-play-bundle.json — acquisition provenance + hashes",
             ],
         },
         "playbook": {

@@ -268,10 +268,19 @@ def test_driver_emits_handoff_files_beside_static_analysis(tmp_path, monkeypatch
     )
 
     assert summary["completed"] == 1
-    facts_path = artifact_root / FACTS_FILENAME
-    map_path = artifact_root / LOCATION_MAP_FILENAME
+    surface_dir = artifact_root / "surface"
+    facts_path = surface_dir / FACTS_FILENAME
+    map_path = surface_dir / LOCATION_MAP_FILENAME
     assert facts_path.is_file()
     assert map_path.is_file()
+    assert (surface_dir / "files.jsonl").is_file()
+    assert (surface_dir / "links.jsonl").is_file()
+    assert (surface_dir / "entry_points.jsonl").is_file()
+    assert (surface_dir / "trace_chains.jsonl").is_file()
+    assert (artifact_root / "manifest" / "provenance.json").is_file()
+    # Root must not carry surface outputs in the Unit 1 layout.
+    for legacy_name in (FACTS_FILENAME, LOCATION_MAP_FILENAME, "files.jsonl", "links.jsonl", "entry_points.jsonl", "trace_chains.jsonl"):
+        assert not (artifact_root / legacy_name).exists()
 
     location_map = json.loads(map_path.read_text(encoding="utf-8"))
     assert location_map["counts"]["facts"] == len(
@@ -282,6 +291,64 @@ def test_driver_emits_handoff_files_beside_static_analysis(tmp_path, monkeypatch
         entry["locations"] and entry["locations"][0].startswith("apktool/")
         for entry in location_map["entries"]
     )
+
+
+def test_driver_populates_bundle_manifest_directory_when_bundle_json_exists(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws"
+    downloads = workspace / "downloads" / "com.example.app-1"
+    downloads.mkdir(parents=True)
+    apk_path = downloads / "base.apk"
+    with zipfile.ZipFile(apk_path, "w") as archive:
+        archive.writestr("AndroidManifest.xml", "stub")
+    digest = hashlib.sha256(apk_path.read_bytes()).hexdigest()
+    bundle_manifest = {"source": "google_play", "package_id": "com.example.app", "version_code": 1}
+    (downloads / "google-play-bundle.json").write_text(
+        json.dumps(bundle_manifest), encoding="utf-8"
+    )
+
+    artifact_root = workspace / "results" / "com.example.app" / "1" / digest
+    _write_tree(artifact_root / "apktool")
+
+    row = {
+        "run_id": "run-manifest",
+        "package_id": "com.example.app",
+        "version_code": "1",
+        "source": "google_play",
+        "local_path": str(apk_path),
+        "size": str(apk_path.stat().st_size),
+        "sha256": digest,
+    }
+
+    class StubDatabase:
+        def read_download_history(self):
+            return [row]
+
+        def read_processing_status(self):
+            return {digest: {"apktool_status": "success"}}
+
+        def read_manifest(self, run_id):
+            return [row]
+
+    monkeypatch.setattr(
+        apk_surface,
+        "analyze_apk_dex",
+        lambda *args, **kwargs: {
+            "status": "success",
+            "metrics": {},
+            "permission_api_usage": [],
+        },
+    )
+
+    summary = apk_surface.run_static_surface_analysis(
+        StubDatabase(), workspace, run_id="run-manifest"
+    )
+    assert summary["completed"] == 1
+    copied = artifact_root / "manifest" / "google-play-bundle.json"
+    assert copied.is_file()
+    assert json.loads(copied.read_text(encoding="utf-8")) == bundle_manifest
+    provenance = json.loads((artifact_root / "manifest" / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["bundle_manifest_present"] is True
+    assert provenance["sha256"] == digest
 
 
 def test_driver_does_not_mark_dex_not_applicable_as_partial(tmp_path, monkeypatch):

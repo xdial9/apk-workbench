@@ -24,7 +24,11 @@ from apkworkbench.analysis.surface.classify import (
     classify_decoded_tree,
     inventory_apk_zip,
 )
-from apkworkbench.analysis.surface.checkpoint import Checkpoint, FactWriter
+from apkworkbench.analysis.surface.checkpoint import (
+    Checkpoint,
+    FactWriter,
+    _atomic_write_bytes as _atomic_write_checkpoint_bytes,
+)
 from apkworkbench.analysis.surface.serialize import finalize_result
 from apkworkbench.analysis.surface.handoff import deliver_prompts, write_handoff
 from apkworkbench.analysis.surface.links import (
@@ -88,8 +92,9 @@ MAX_SINGLE_FILE_BYTES = 50 * 1024 * 1024
 # Sweep chunk size when streaming a large file: lines are accumulated into
 # chunks of this size and fed to sweep_text with a line offset.
 SWEEP_STREAM_CHUNK_LINES = 10_000
-# Checkpoint every N files processed (durability vs. fsync cost).
-CHECKPOINT_EVERY_FILES = 25
+# Checkpoint every N files processed or M seconds elapsed (durability vs. fsync cost).
+CHECKPOINT_EVERY_FILES = 2000
+CHECKPOINT_EVERY_SECONDS = 15.0
 # Shard part record count (mirrors surface/shards.py DEFAULT_PART_RECORDS).
 SHARD_PART_RECORDS = 5_000
 
@@ -204,17 +209,6 @@ def _merge_dex_analysis(
         primary["status"] = "partial"
     return primary
 
-
-SENSITIVE_PERMISSIONS = {
-    "android.permission.READ_SMS", "android.permission.RECEIVE_SMS",
-    "android.permission.SEND_SMS", "android.permission.READ_CALL_LOG",
-    "android.permission.WRITE_CALL_LOG", "android.permission.READ_CONTACTS",
-    "android.permission.WRITE_CONTACTS", "android.permission.RECORD_AUDIO",
-    "android.permission.CAMERA", "android.permission.ACCESS_FINE_LOCATION",
-    "android.permission.ACCESS_COARSE_LOCATION", "android.permission.READ_PHONE_STATE",
-    "android.permission.READ_EXTERNAL_STORAGE", "android.permission.WRITE_EXTERNAL_STORAGE",
-    "android.permission.MANAGE_EXTERNAL_STORAGE", "android.permission.BLUETOOTH_CONNECT",
-}
 
 DEPENDENCY_MARKERS = {
     "Firebase": ("com/google/firebase/", "com.google.firebase"),
@@ -555,6 +549,121 @@ def _parse_manifest(path: Path, relative: str, findings: list[dict[str, Any]]) -
     return parse_manifest_v2(path, relative, findings)
 
 
+def _save_sweep_checkpoint(
+    checkpoint: Checkpoint,
+    state_path: Path,
+    *,
+    stage: str,
+    processed_files: set[str],
+    sweep: SweepState,
+    native_method_index: NativeMethodIndex,
+    native_loads: list[dict[str, Any]],
+    scanned_relatives: set[str],
+    read_failures: dict[str, str],
+    scanned_text_bytes: int,
+    code_scanned: int,
+    coverage: dict[str, str],
+) -> None:
+    """Persist accumulated sweep state atomically before advancing the checkpoint."""
+    state_payload = {
+        "dependency_evidence": sweep.dependency_evidence,
+        "api_endpoints": sweep.api_endpoints,
+        "endpoint_hosts": sorted(sweep.endpoint_hosts),
+        "api_routes": sweep.api_routes,
+        "api_call_sites": sweep.api_call_sites,
+        "api_clients": sweep.api_clients,
+        "api_headers": sweep.api_headers,
+        "rate_limit_indicators": sweep.rate_limit_indicators,
+        "decoded_strings": sweep.decoded_strings,
+        "decoded_seen": sorted(sweep.decoded_seen),
+        "resource_id_literals": sweep.resource_id_literals,
+        "findings": sweep.findings,
+        "native_methods_by_class": native_method_index._by_class,
+        "native_loads": native_loads,
+        "scanned_relatives": sorted(scanned_relatives),
+        "read_failures": read_failures,
+        "scanned_text_bytes": scanned_text_bytes,
+        "code_scanned": code_scanned,
+        "endpoints_and_domains": coverage.get("endpoints_and_domains"),
+        "smali_security_indicators": coverage.get("smali_security_indicators"),
+    }
+    _atomic_write_checkpoint_bytes(
+        state_path,
+        json.dumps(state_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+    )
+    checkpoint.save(stage, processed_files=sorted(processed_files))
+
+
+def _load_sweep_checkpoint(
+    checkpoint: Checkpoint,
+    state_path: Path,
+    sweep: SweepState,
+    native_method_index: NativeMethodIndex,
+    native_loads: list[dict[str, Any]],
+    scanned_relatives: set[str],
+    read_failures: dict[str, str],
+    coverage: dict[str, str],
+) -> tuple[set[str], int, int]:
+    """Restore sweep state from checkpoint; returns (processed_files, scanned_bytes, code_scanned)."""
+    loaded = checkpoint.load()
+    if loaded is None:
+        return set(), 0, 0
+    raw_files = loaded.get("processed_files")
+    if not isinstance(raw_files, list) or not raw_files:
+        return set(), 0, 0
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set(), 0, 0
+    if not isinstance(state, dict):
+        return set(), 0, 0
+
+    if isinstance(state.get("dependency_evidence"), dict):
+        for key, paths in state["dependency_evidence"].items():
+            if key in sweep.dependency_evidence and isinstance(paths, list):
+                sweep.dependency_evidence[key] = list(paths)
+    if isinstance(state.get("api_endpoints"), dict):
+        sweep.api_endpoints = dict(state["api_endpoints"])
+    if isinstance(state.get("endpoint_hosts"), list):
+        sweep.endpoint_hosts = set(state["endpoint_hosts"])
+    if isinstance(state.get("api_routes"), dict):
+        sweep.api_routes = dict(state["api_routes"])
+    if isinstance(state.get("api_call_sites"), list):
+        sweep.api_call_sites = list(state["api_call_sites"])
+    if isinstance(state.get("api_clients"), dict):
+        for key, calls in state["api_clients"].items():
+            if key in sweep.api_clients and isinstance(calls, list):
+                sweep.api_clients[key] = list(calls)
+    if isinstance(state.get("api_headers"), dict):
+        sweep.api_headers = dict(state["api_headers"])
+    if isinstance(state.get("rate_limit_indicators"), list):
+        sweep.rate_limit_indicators = list(state["rate_limit_indicators"])
+    if isinstance(state.get("decoded_strings"), list):
+        sweep.decoded_strings = list(state["decoded_strings"])
+    if isinstance(state.get("decoded_seen"), list):
+        sweep.decoded_seen = set(state["decoded_seen"])
+    if isinstance(state.get("resource_id_literals"), list):
+        sweep.resource_id_literals = list(state["resource_id_literals"])
+    if isinstance(state.get("findings"), list):
+        sweep.findings = list(state["findings"])
+    if isinstance(state.get("native_methods_by_class"), dict):
+        native_method_index._by_class = dict(state["native_methods_by_class"])
+    if isinstance(state.get("native_loads"), list):
+        native_loads.extend(state["native_loads"])
+    if isinstance(state.get("scanned_relatives"), list):
+        scanned_relatives.update(state["scanned_relatives"])
+    if isinstance(state.get("read_failures"), dict):
+        read_failures.update(state["read_failures"])
+    if isinstance(state.get("endpoints_and_domains"), str):
+        coverage["endpoints_and_domains"] = state["endpoints_and_domains"]
+    if isinstance(state.get("smali_security_indicators"), str):
+        coverage["smali_security_indicators"] = state["smali_security_indicators"]
+
+    scanned_text_bytes = int(state.get("scanned_text_bytes") or 0)
+    code_scanned = int(state.get("code_scanned") or 0)
+    return set(raw_files), scanned_text_bytes, code_scanned
+
+
 def analyze_apk_surface(
     apktool_dir: str | Path,
     *,
@@ -563,11 +672,13 @@ def analyze_apk_surface(
     output_dir: str | Path | None = None,
     apk_path: str | Path | None = None,
     checkpoint_dir: str | Path | None = None,
+    finalize: bool = True,
 ) -> dict[str, Any]:
     """Inspect decoded XML/Smali/resources and produce inventory plus static leads.
 
-    ``output_dir`` (optional) is the artifact folder. It receives the
-    ``files.jsonl`` coverage ledger and, when a cap overflows, ``shards/`` +
+    ``output_dir`` (optional) is the surface output folder. It receives the
+    ``files.jsonl`` coverage ledger, ``resources.jsonl``, ``facts_stream.jsonl``
+    (when checkpointing), and, when a cap overflows, ``shards/`` +
     ``shards-index.json``. Both summaries always land in the result; the files
     are written only when a directory is supplied, so direct callers (tests) do
     not write into the evidence tree.
@@ -578,11 +689,10 @@ def analyze_apk_surface(
 
     ``checkpoint_dir`` (optional) enables P7 crash-resume. A Checkpoint state
     file is written there after every CHECKPOINT_EVERY_FILES files, recording
-    which text files have been swept. On restart, already-swept files are
-    skipped so the run resumes from the checkpoint instead of file zero.
-    Per-file results are streamed to ``surface/facts_stream.jsonl`` in
-    ``output_dir`` as they are produced (single-pass streaming writes, no
-    full-result accumulation before write).
+    which text files have been swept along with accumulated sweep state. On
+    restart, already-swept files are skipped so the run resumes from the
+    checkpoint instead of file zero. Per-file results are streamed to
+    ``facts_stream.jsonl`` in ``output_dir`` as they are produced.
     """
     root = Path(apktool_dir).expanduser().resolve(strict=True)
     root = Path(os.fspath(root))
@@ -814,138 +924,159 @@ def analyze_apk_surface(
         if parsed_ids:
             sweep.resource_package_ids = parsed_ids
     # ---- P7: checkpoint + streaming setup ---------------------------------
-    # Resumable sweep: a Checkpoint records which text files have been swept.
-    # On restart, already-swept files are skipped so the run resumes from
-    # the checkpoint instead of file zero. Per-file results are streamed to
-    # facts_stream.jsonl in output_dir as they are produced.
+    # Resumable sweep: a Checkpoint records which text files have been swept
+    # alongside a sweep_state.json snapshot. On restart, already-swept files
+    # are skipped without losing their accumulated endpoints/findings/native
+    # declarations. Per-file progress is streamed to facts_stream.jsonl in
+    # output_dir as files are processed.
     checkpoint: Checkpoint | None = None
+    checkpoint_state_path: Path | None = None
     processed_files: set[str] = set()
     fact_stream: FactWriter | None = None
     if checkpoint_dir is not None:
         checkpoint = Checkpoint(checkpoint_dir)
-        loaded = checkpoint.load()
-        if loaded is not None:
-            processed_files = set(loaded.get("processed_files", []))
+        checkpoint_state_path = checkpoint.path.with_name("sweep_state.json")
+        processed_files, scanned_text_bytes, code_scanned = _load_sweep_checkpoint(
+            checkpoint,
+            checkpoint_state_path,
+            sweep,
+            native_method_index,
+            native_loads,
+            scanned_relatives,
+            read_failures,
+            coverage,
+        )
+        files_seen = code_scanned
         if output_dir is not None:
-            fact_stream = FactWriter(
-                Path(output_dir) / "surface" / "facts_stream.jsonl"
-            )
-    sweep = SweepState(DEPENDENCY_MARKERS)
-    sweep.api_clients = {name: [] for name in API_CLIENT_MARKERS}
-    # Native mapping inputs, collected in the same pass (no second smali read):
-    # declared `native` methods join to Java_* exports; System.load calls join
-    # to .so files. Both are only parsed when the file actually contains them.
-    native_method_index = NativeMethodIndex()
-    native_loads: list[dict[str, Any]] = []
-    # DOMAIN filter needs the manifest package (com.example.smoke is not a domain).
-    # Manifest is parsed above, so package is known before sweeping.
-    if isinstance(manifest_facts, dict):
-        pkg = manifest_facts.get("package")
-        if isinstance(pkg, str) and pkg:
-            sweep.manifest_package = pkg
-    # Resource ids are only collected for packages the APK actually declares.
-    if resource_model.get("packages"):
-        parsed_ids = {
-            int(str(item.get("id")), 16) for item in resource_model["packages"]
-            if item.get("id")
-        }
-        if parsed_ids:
-            sweep.resource_package_ids = parsed_ids
+            fact_stream = FactWriter(Path(output_dir) / "facts_stream.jsonl")
+            fact_stream.__enter__()
     files_since_checkpoint = 0
-    for path in files:
-        relative = path.relative_to(root).as_posix()
-        if path.suffix.lower() not in TEXT_SUFFIXES:
-            continue
-        # P7 resume: skip files already swept in a previous (crashed) run.
-        if relative in processed_files:
-            continue
-        files_seen += 1
-        if time.monotonic() - last_heartbeat >= 2:
-            last_heartbeat = time.monotonic()
-            _emit_progress(
-                progress,
-                f"[Surface] scanning - {files_seen:,}/{scannable_total:,} files, "
-                f"{int(last_heartbeat - scan_started)}s elapsed, "
-                f"{len(sweep.api_endpoints):,} endpoints, {len(sweep.findings):,} findings",
-            )
-        # D15: size guard — stream large files instead of read_text()ing them
-        # whole into memory.  Smaller files use the original fast path.
-        file_size = path.stat().st_size
-        if file_size > MAX_SINGLE_FILE_BYTES:
-            _stream_sweep_file(
-                sweep, relative, path,
-                code_rules=COMPILED_CODE_RULES,
-                api_client_markers=API_CLIENT_MARKERS,
-                api_invoke_owner_re=API_INVOKE_OWNER_RE,
-                smali_invoke_re=SMALI_INVOKE_RE,
-                header_re=API_HEADER_RE,
-                rate_limit_re=RATE_LIMIT_RE,
-                dependency_markers=DEPENDENCY_MARKERS,
-                emit=lambda message: None,
-            )
-        else:
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError as exc:
-                read_failures[relative] = f"{type(exc).__name__}: {exc}"
-                diagnostics.append({"code": "text_read_failed", "message": f"{relative}: {exc}"})
+    last_checkpoint_at = scan_started
+    try:
+        for path in files:
+            relative = path.relative_to(root).as_posix()
+            if path.suffix.lower() not in TEXT_SUFFIXES:
                 continue
-            sweep.sweep_text(
-                relative=relative,
-                path=path,
-                text=text,
-                code_rules=COMPILED_CODE_RULES,
-                api_client_markers=API_CLIENT_MARKERS,
-                api_invoke_owner_re=API_INVOKE_OWNER_RE,
-                smali_invoke_re=SMALI_INVOKE_RE,
-                header_re=API_HEADER_RE,
-                rate_limit_re=RATE_LIMIT_RE,
-                dependency_markers=DEPENDENCY_MARKERS,
-                emit=lambda message: None,
-            )
-        scanned_relatives.add(relative)
-        scanned_text_bytes += file_size
-        code_scanned += 1
-        coverage["endpoints_and_domains"] = "success"
-        if path.suffix.lower() == ".smali":
-            coverage["smali_security_indicators"] = "success"
-            # Native mapping inputs, collected in the same pass (no second
-            # smali read). Use the (possibly streamed) text for both.
-            text_for_native = (
-                path.read_text(encoding="utf-8", errors="replace")
-                if file_size <= MAX_SINGLE_FILE_BYTES else None
-            )
-            if text_for_native is not None:
-                native_method_index.add_file(text_for_native, relative)
-                native_loads.extend(extract_library_loads(text_for_native, relative))
+            # P7 resume: skip files already swept in a previous (crashed) run.
+            if relative in processed_files:
+                continue
+            files_seen += 1
+            if time.monotonic() - last_heartbeat >= 2:
+                last_heartbeat = time.monotonic()
+                _emit_progress(
+                    progress,
+                    f"[Surface] scanning - {files_seen:,}/{scannable_total:,} files, "
+                    f"{int(last_heartbeat - scan_started)}s elapsed, "
+                    f"{len(sweep.api_endpoints):,} endpoints, {len(sweep.findings):,} findings",
+                )
+            # D15: size guard — stream large files instead of read_text()ing them
+            # whole into memory.  Smaller files use the original fast path.
+            file_size = path.stat().st_size
+            text: str | None = None
+            if file_size > MAX_SINGLE_FILE_BYTES:
+                _stream_sweep_file(
+                    sweep, relative, path,
+                    code_rules=COMPILED_CODE_RULES,
+                    api_client_markers=API_CLIENT_MARKERS,
+                    api_invoke_owner_re=API_INVOKE_OWNER_RE,
+                    smali_invoke_re=SMALI_INVOKE_RE,
+                    header_re=API_HEADER_RE,
+                    rate_limit_re=RATE_LIMIT_RE,
+                    dependency_markers=DEPENDENCY_MARKERS,
+                    emit=lambda message: None,
+                )
             else:
-                # For streamed files, re-read just for native indexing
-                # (bounded by MAX_SINGLE_FILE_BYTES so this won't happen for
-                # oversized files; native indexing is skipped for them).
-                pass
-        # P7: stream per-file results to disk and checkpoint periodically.
-        if fact_stream is not None:
-            fact_stream.write({
-                "kind": "sweep_file",
-                "file": relative,
-                "size": file_size,
-                "endpoints_count": len(sweep.api_endpoints),
-                "findings_count": len(sweep.findings),
-            })
-        processed_files.add(relative)
-        files_since_checkpoint += 1
-        if checkpoint is not None and files_since_checkpoint >= CHECKPOINT_EVERY_FILES:
-            checkpoint.save("sweep", processed_files=sorted(processed_files))
-            files_since_checkpoint = 0
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError as exc:
+                    read_failures[relative] = f"{type(exc).__name__}: {exc}"
+                    diagnostics.append({"code": "text_read_failed", "message": f"{relative}: {exc}"})
+                    continue
+                sweep.sweep_text(
+                    relative=relative,
+                    path=path,
+                    text=text,
+                    code_rules=COMPILED_CODE_RULES,
+                    api_client_markers=API_CLIENT_MARKERS,
+                    api_invoke_owner_re=API_INVOKE_OWNER_RE,
+                    smali_invoke_re=SMALI_INVOKE_RE,
+                    header_re=API_HEADER_RE,
+                    rate_limit_re=RATE_LIMIT_RE,
+                    dependency_markers=DEPENDENCY_MARKERS,
+                    emit=lambda message: None,
+                )
+            scanned_relatives.add(relative)
+            scanned_text_bytes += file_size
+            code_scanned += 1
+            coverage["endpoints_and_domains"] = "success"
+            if path.suffix.lower() == ".smali":
+                coverage["smali_security_indicators"] = "success"
+                # Native mapping inputs, collected in the same pass (no second
+                # smali read). Reuse `text` from the fast path above.
+                if text is not None:
+                    native_method_index.add_file(text, relative)
+                    native_loads.extend(extract_library_loads(text, relative))
+            # P7: stream per-file results to disk and checkpoint periodically.
             if fact_stream is not None:
-                fact_stream.sync()
-    # P7: final checkpoint — mark sweep complete. Keep the file so a later
-    # restart can resume from it (crash-resume contract). The pipeline driver
-    # may delete it once the artifact is fully processed.
-    if checkpoint is not None:
-        checkpoint.save("sweep_done", processed_files=sorted(processed_files))
-    if fact_stream is not None:
-        fact_stream.close()
+                fact_stream.write({
+                    "kind": "sweep_file",
+                    "file": relative,
+                    "size": file_size,
+                    "endpoints_count": len(sweep.api_endpoints),
+                    "findings_count": len(sweep.findings),
+                })
+            processed_files.add(relative)
+            files_since_checkpoint += 1
+            if (
+                checkpoint is not None
+                and checkpoint_state_path is not None
+                and (
+                    files_since_checkpoint >= CHECKPOINT_EVERY_FILES
+                    or (
+                        files_since_checkpoint > 0
+                        and time.monotonic() - last_checkpoint_at >= CHECKPOINT_EVERY_SECONDS
+                    )
+                )
+            ):
+                _save_sweep_checkpoint(
+                    checkpoint,
+                    checkpoint_state_path,
+                    stage="sweep",
+                    processed_files=processed_files,
+                    sweep=sweep,
+                    native_method_index=native_method_index,
+                    native_loads=native_loads,
+                    scanned_relatives=scanned_relatives,
+                    read_failures=read_failures,
+                    scanned_text_bytes=scanned_text_bytes,
+                    code_scanned=code_scanned,
+                    coverage=coverage,
+                )
+                files_since_checkpoint = 0
+                last_checkpoint_at = time.monotonic()
+                if fact_stream is not None:
+                    fact_stream.sync()
+        # P7: final checkpoint — mark sweep complete. Keep the file so a later
+        # restart can resume from it (crash-resume contract). The pipeline driver
+        # may delete it once the artifact is fully processed.
+        if checkpoint is not None and checkpoint_state_path is not None:
+            _save_sweep_checkpoint(
+                checkpoint,
+                checkpoint_state_path,
+                stage="sweep_done",
+                processed_files=processed_files,
+                sweep=sweep,
+                native_method_index=native_method_index,
+                native_loads=native_loads,
+                scanned_relatives=scanned_relatives,
+                read_failures=read_failures,
+                scanned_text_bytes=scanned_text_bytes,
+                code_scanned=code_scanned,
+                coverage=coverage,
+            )
+    finally:
+        if fact_stream is not None:
+            fact_stream.close()
     # ---- Native analysis (G4 + crown jewel 5) ----
     # ELF parse -> exports/imports, JNI join to declared native methods, load
     # sites, streamed strings (ASCII + UTF-16LE), evidence-only findings. The
@@ -1354,12 +1485,24 @@ def analyze_apk_surface(
     # ---- P0: per-file coverage ledger ------------------------------------
     # Every tree entry gets one record with a status and, when not checked, a
     # reason. Counts alone could not prove what was skipped; this can.
+    native_skipped = {
+        lib["path"]: (
+            "native_not_elf_archive"
+            if lib.get("reason") == "not_elf_archive"
+            else "native_not_elf"
+            if lib.get("state") == "not_elf"
+            else "native_elf_parse_failed"
+        )
+        for lib in native_analysis.libraries
+        if "!" not in lib["path"] and lib.get("state") in {"parse_failed", "not_elf"}
+    }
     file_ledger = build_file_ledger(
         tree, scanned=scanned_relatives, read_failures=read_failures,
         dex_analyzed={
             citation for _payload, citation in standalone_dex_payloads
         },
         dex_skipped=standalone_dex_skips,
+        native_skipped=native_skipped,
     )
     file_ledger_summary = summarize_file_ledger(file_ledger)
     if output_dir is not None:
@@ -1536,7 +1679,9 @@ def analyze_apk_surface(
             result["coverage"]["dex_semantic_analysis"] = "partial"
         result["status"] = "partial"
 
-    return finalize_result(result, tree_root=tree_root)
+    if finalize:
+        return finalize_result(result, tree_root=tree_root)
+    return result
 
 
 def _retarget_native_evidence(
@@ -2161,8 +2306,8 @@ def refresh_secret_links(
         entry_points = build_entry_points(
             result, result.get("dex_analysis"), tree_root=citation_root
         )
-        write_links(bundle_dir, edges, entry_points)
-        write_trace_chains_to_dir(bundle_dir, edges, entry_points)
+        write_links(surface_dir, edges, entry_points)
+        write_trace_chains_to_dir(surface_dir, edges, entry_points)
         coverage = result.setdefault("coverage", {})
         if not isinstance(coverage, dict):
             raise TypeError(f"Surface coverage must be a JSON object: {static_path}")
@@ -2215,6 +2360,48 @@ def refresh_secret_links(
     return summary
 
 
+def _populate_bundle_manifest(
+    output_root: Path,
+    source_apk: Path,
+    row: dict[str, Any],
+    *,
+    run_id: str | None,
+) -> None:
+    """Populate ``<bundle>/manifest/`` with acquisition provenance + bundle manifest."""
+    manifest_dir = output_root / "manifest"
+    if manifest_dir.is_symlink():
+        raise ValueError("Refusing symlinked bundle manifest directory.")
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    src_bundle = source_apk.parent / "google-play-bundle.json"
+    if src_bundle.is_symlink():
+        raise ValueError("Refusing symlinked source google-play-bundle.json.")
+    copied = False
+    if src_bundle.is_file():
+        dest_bundle = manifest_dir / "google-play-bundle.json"
+        if dest_bundle.is_symlink():
+            raise ValueError("Refusing symlinked bundle manifest file.")
+        _atomic_write_checkpoint_bytes(dest_bundle, src_bundle.read_bytes())
+        copied = True
+
+    provenance_path = manifest_dir / "provenance.json"
+    if provenance_path.is_symlink():
+        raise ValueError("Refusing symlinked bundle provenance file.")
+    _atomic_write_json(
+        provenance_path,
+        {
+            "schema_version": 1,
+            "package_id": row.get("package_id", ""),
+            "version_code": str(row.get("version_code", "")),
+            "sha256": str(row.get("sha256", "")).lower(),
+            "run_id": run_id or row.get("run_id"),
+            "source": row.get("source", ""),
+            "source_apk": str(source_apk),
+            "bundle_manifest_present": copied,
+        },
+    )
+
+
 def run_static_surface_analysis(
     database,
     workspace: str | Path,
@@ -2260,8 +2447,6 @@ def run_static_surface_analysis(
                 "finding_count": finding_count,
                 "artifacts": artifacts,
             })
-    marker_refresh("running", 0, 0, 0, 0, 0, 0, [])
-
     history = database.read_download_history()
     statuses = database.read_processing_status()
     if run_id is None:
@@ -2413,12 +2598,24 @@ def run_static_surface_analysis(
                 progress,
                 f"  Source APK integrity rechecked: SHA-256 matches ({actual_size:,} bytes)",
             )
+            surface_dir = target.parent
+            checkpoint_dir = surface_dir / ".checkpoint"
+            stream_path = surface_dir / "facts_stream.jsonl"
+            if any(path.is_symlink() for path in (surface_dir, checkpoint_dir, stream_path)):
+                raise ValueError("Refusing symlinked surface output or checkpoint path.")
+            _populate_bundle_manifest(output_root, source_apk, row, run_id=run_id)
+            if force:
+                Checkpoint(checkpoint_dir).clear()
+                (checkpoint_dir / "sweep_state.json").unlink(missing_ok=True)
+                stream_path.unlink(missing_ok=True)
             result = analyze_apk_surface(
                 decoded,
                 progress=progress,
                 tree_root=citation_root,
-                output_dir=output_root,
+                output_dir=surface_dir,
                 apk_path=source_apk,
+                checkpoint_dir=checkpoint_dir,
+                finalize=False,
             )
             embedded_dex_result = result.get("dex_analysis")
             _emit_progress(
@@ -2489,11 +2686,11 @@ def run_static_surface_analysis(
                 link_entry_points = build_entry_points(
                     result, dex_result, tree_root=citation_root
                 )
-                write_links(output_root, link_edges, link_entry_points)
+                write_links(surface_dir, link_edges, link_entry_points)
                 # Write trace chains: entry point → ... → secret paths
                 # for the AI to trace end-to-end.
                 try:
-                    write_trace_chains_to_dir(output_root, link_edges, link_entry_points)
+                    write_trace_chains_to_dir(surface_dir, link_edges, link_entry_points)
                 except OSError as exc:
                     result.setdefault("diagnostics", []).append({
                         "code": "trace_chain_write_failed",
@@ -2564,6 +2761,16 @@ def run_static_surface_analysis(
                     f"({len(result.get('facts') or [])} facts) + "
                     f"{handoff_paths['location_map'].name}",
                 )
+            # Surface artifact is now complete; remove transient resume scratch
+            # so freeze hashes only final evidence.
+            Checkpoint(checkpoint_dir).clear()
+            (checkpoint_dir / "sweep_state.json").unlink(missing_ok=True)
+            if checkpoint_dir.is_dir():
+                try:
+                    checkpoint_dir.rmdir()
+                except OSError:
+                    pass
+            stream_path.unlink(missing_ok=True)
             count = len(result.get("findings", []))
             summary["completed"] += 1
             if result.get("status") != "success":
