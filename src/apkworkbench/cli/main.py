@@ -89,10 +89,7 @@ def _workspace_locked(command):
     return wrapped
 
 
-BANNER = """APK WORKBENCH
-DISCOVER | DOWNLOAD | DECOMPILE | ANALYZE | CATALOGUE
-CO-DEVELOPED BY dial9 + ChatGPT
-SLOW. SIMPLE. SEQUENTIAL. VERIFIED."""
+BANNER = """[ APKWORKBENCH ]  developed by dial9"""
 
 
 def _catalog_path(config: Config) -> Path:
