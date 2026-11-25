@@ -21,7 +21,12 @@ from apkworkbench.analysis.apk_surface import (
     refresh_secret_links,
     run_static_surface_analysis,
 )
+from apkworkbench.analysis.surface.handoff import PROMPT_FILES, prompts_source_dir
 from apkworkbench.core.config import Config
+from apkworkbench.core.layout import (
+    migrate_legacy_workspace,
+    run_local_apk_self_contained,
+)
 from apkworkbench.core.logging import setup_logging
 from apkworkbench.database.workspace import DatabaseError, WorkspaceDatabase, utc_now
 from apkworkbench.decompilation.runner import DecompilationRunner
@@ -60,11 +65,23 @@ def _doctor_auth_report(config: Config) -> dict:
     return describe_auth_mode(_source_auth_mode(config))
 
 
+def _load_config(workspace: str | Path | None = None) -> Config:
+    """Instantiate Config, applying a CLI --workspace override only when supplied."""
+    override = workspace
+    if override is None:
+        ctx = click.get_current_context(silent=True)
+        if ctx is not None:
+            override = ctx.meta.get("apkworkbench_workspace")
+    if override is not None:
+        return Config(workspace=override)
+    return Config()
+
+
 def _workspace_locked(command):
     """Hold the workspace process lock for each command and the full pipeline."""
     @wraps(command)
     def wrapped(*args, **kwargs):
-        workspace = kwargs.get("workspace") or Config().get("workspace")
+        workspace = kwargs.get("workspace") or _load_config().get("workspace")
         database = WorkspaceDatabase(workspace)
         with database._write_lock():
             return command(*args, **kwargs)
@@ -670,14 +687,24 @@ def _count_usable_apktool_outputs(workspace: str | Path, run_id: str) -> int:
 
 @click.group()
 @click.version_option(__version__, prog_name="apkworkbench")
-def main() -> None:
+@click.option(
+    "--workspace",
+    "workspace_override",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Override the APK-Workbench home folder (default: ~/APK-Workbench or APKWORKBENCH_WORKSPACE).",
+)
+@click.pass_context
+def main(ctx: click.Context, workspace_override: Path | None) -> None:
     """Discover, acquire, decompile, analyze, and catalogue APK files."""
+    if workspace_override is not None:
+        ctx.meta["apkworkbench_workspace"] = str(workspace_override.expanduser())
 
 
 @main.command()
 def doctor() -> None:
-    """Check required and optional external dependencies."""
-    config = Config()
+    """Check required external tools, workspace home, bundled prompts, and Play auth."""
+    config = _load_config()
     logger = setup_logging(config)
     logger.info("Starting environment check")
     click.echo(BANNER)
@@ -689,6 +716,39 @@ def doctor() -> None:
             all_required_ok = False
             if dependency.error:
                 click.echo(f"  {dependency.error}")
+            if getattr(dependency, "install_hint", None):
+                click.echo(f"  Install: {dependency.install_hint}")
+
+    workspace_path = Path(config.get("workspace")).expanduser()
+    workspace_ok = workspace_path.is_dir() and os.access(workspace_path, os.W_OK)
+    click.echo(
+        f"[{'OK' if workspace_ok else 'MISSING'}] workspace ({workspace_path})"
+    )
+    if not workspace_ok:
+        all_required_ok = False
+        click.echo(f"  Workspace directory is missing or not writable: {workspace_path}")
+    legacy_cfg = getattr(config, "legacy_config_path", None)
+    if legacy_cfg is not None:
+        click.echo(
+            f"  Note: reading legacy config from {legacy_cfg}; "
+            f"move or copy it to {workspace_path / 'config.yaml'} to consolidate."
+        )
+
+    prompts_dir = prompts_source_dir()
+    prompts_ok = prompts_dir is not None and all(
+        (prompts_dir / name).is_file() for name in PROMPT_FILES
+    )
+    click.echo(
+        f"[{'OK' if prompts_ok else 'MISSING'}] prompts "
+        f"({prompts_dir if prompts_ok else 'not found'})"
+    )
+    if not prompts_ok:
+        all_required_ok = False
+        click.echo(
+            "  Shipped AI handoff prompts (0.txt..6.txt) were not found. "
+            "Reinstall apkworkbench or set APKWORKBENCH_PROMPTS_DIR."
+        )
+
     auth_report = _doctor_auth_report(config)
     resolved = auth_report.get("resolved_mode")
     if resolved == "account":
@@ -733,7 +793,7 @@ def discover(
     packages_file: Path | None,
 ) -> None:
     """Discover app package IDs from Google Play categories, charts, and searches."""
-    config = Config()
+    config = _load_config()
     logger = setup_logging(config)
     source = GooglePlaySource(
         retry_backoff_seconds=float(config.get("sources.google_play.retry_backoff_seconds", 1)),
@@ -857,7 +917,7 @@ def download(apk_count: int | None, package_id: str | None) -> None:
     if package_id and apk_count not in (None, 1):
         raise click.BadParameter("--package selects one app; use --apk-count only for a multi-app batch.")
     requested_count = 1 if package_id else (apk_count or 10)
-    config = Config()
+    config = _load_config()
     logger = setup_logging(config)
     context = click.get_current_context()
     context.meta["apkworkbench_run_id"] = ""
@@ -1099,7 +1159,7 @@ def download(apk_count: int | None, package_id: str | None) -> None:
 @_workspace_locked
 def verify_downloads(run_id: str) -> None:
     """Independently verify downloaded component files and their Play hashes."""
-    config = Config()
+    config = _load_config()
     click.echo(BANNER)
     click.echo(f"Verifying Google Play acquisition run {run_id}...")
     try:
@@ -1135,7 +1195,7 @@ def verify_workspace(folder: Path) -> None:
     every file listed.  Exits non-zero on any mismatch, missing file, or
     extra file.  NEVER writes into the folder being verified.
     """
-    config = Config()
+    config = _load_config()
     workspace = config.get("workspace")
     click.echo(BANNER)
     click.echo(f"Verifying workspace: {folder}")
@@ -1191,7 +1251,7 @@ def verify_workspace(folder: Path) -> None:
 @_workspace_locked
 def decompile(limit: int, force: bool, run_id: str | None) -> None:
     """Run Apktool against verified acquired APKs."""
-    config = Config()
+    config = _load_config()
     logger = setup_logging(config)
     database = WorkspaceDatabase(config.get("workspace"))
     runner = DecompilationRunner(
@@ -1244,7 +1304,7 @@ def decompile(limit: int, force: bool, run_id: str | None) -> None:
 @_workspace_locked
 def surface(force: bool, run_id: str | None, workspace: Path | None) -> None:
     """Run static APK surface analysis against Apktool-decoded output."""
-    config = Config()
+    config = _load_config()
     logger = setup_logging(config)
     target_workspace = str(workspace) if workspace is not None else config.get("workspace")
     database = WorkspaceDatabase(target_workspace)
@@ -1300,7 +1360,7 @@ def surface(force: bool, run_id: str | None, workspace: Path | None) -> None:
 @_workspace_locked
 def analyze(limit: int, force: bool, run_id: str | None) -> None:
     """Scan Apktool-decoded output with TruffleHog and retain all findings."""
-    config = Config()
+    config = _load_config()
     logger = setup_logging(config)
     database = WorkspaceDatabase(config.get("workspace"))
     scanner = TruffleHogScanner(
@@ -1384,7 +1444,7 @@ def analyze(limit: int, force: bool, run_id: str | None) -> None:
 def report(run_id: str | None) -> None:
     """Generate per-APK reports and, when scoped, one complete run evidence package."""
 
-    config = Config()
+    config = _load_config()
     logger = setup_logging(config)
     generator = ReportGenerator(
         WorkspaceDatabase(config.get("workspace")),
@@ -1426,7 +1486,7 @@ def report(run_id: str | None) -> None:
 @_workspace_locked
 def status() -> None:
     """Summarize acquisition, decompilation, and scan state."""
-    config = Config()
+    config = _load_config()
     database = WorkspaceDatabase(config.get("workspace"))
     try:
         history = database.read_download_history()
@@ -1468,18 +1528,73 @@ def status() -> None:
     default=None,
     help="Restrict the acquisition to this exact Android package ID.",
 )
+@click.option(
+    "--local-apk",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Run the self-contained pipeline on a local APK file or bundle directory.",
+)
 @click.option("--force-decompile", is_flag=True, help="Re-run completed decompilations.")
 @click.option("--force-surface", is_flag=True, help="Re-run completed static surface analysis.")
 @click.option("--force-analyze", is_flag=True, help="Re-run successful TruffleHog scans.")
-@_workspace_locked
 def run(
+    apk_count: int,
+    package_id: str | None,
+    local_apk: Path | None,
+    force_decompile: bool,
+    force_surface: bool,
+    force_analyze: bool,
+) -> None:
+    """Acquire from the saved discovery catalog (or one exact package), then process the batch."""
+    if local_apk is not None:
+        config = _load_config()
+        logger = setup_logging(config)
+        click.echo(BANNER)
+        click.echo(f"SELF-CONTAINED LOCAL APK PIPELINE: {local_apk}")
+        try:
+            result = run_local_apk_self_contained(
+                local_apk,
+                config.get("workspace"),
+                config=config,
+                package_id=package_id,
+                progress=click.echo,
+                logger=logger,
+            )
+        except (DatabaseError, OSError, ValueError, RuntimeError) as exc:
+            logger.error("Self-contained local APK run failed: %s", exc)
+            click.echo(f"Local APK run failed: {exc}", err=True)
+            raise click.exceptions.Exit(1) from exc
+        click.echo("\nSELF-CONTAINED RUN COMPLETE")
+        click.echo(f"  Run ID: {result['run_id']}")
+        click.echo(f"  Package: {result['package_id']} v{result['version_code']}")
+        click.echo(f"  Run folder: {result['run_dir']}")
+        click.echo(f"  README: {result['readme_path']}")
+        click.echo(f"  Index: {result['index_path']}")
+        click.echo(f"  Status: {result['status']}")
+        if result.get("status") not in {"complete", "complete_with_warnings"}:
+            raise click.exceptions.Exit(1)
+        return
+
+    workspace = _load_config().get("workspace")
+    database = WorkspaceDatabase(workspace)
+    with database._write_lock():
+        _run_play_pipeline(
+            apk_count=apk_count,
+            package_id=package_id,
+            force_decompile=force_decompile,
+            force_surface=force_surface,
+            force_analyze=force_analyze,
+        )
+
+
+def _run_play_pipeline(
+    *,
     apk_count: int,
     package_id: str | None,
     force_decompile: bool,
     force_surface: bool,
     force_analyze: bool,
 ) -> None:
-    """Acquire from the saved discovery catalog (or one exact package), then process the batch."""
     context = click.get_current_context()
     context.meta["apkworkbench_run_id"] = ""
     stages_with_issues: list[str] = []
@@ -1507,7 +1622,7 @@ def run(
                 break
             kwargs["run_id"] = run_id
         if stage_name == "analyze":
-            usable_outputs = _count_usable_apktool_outputs(Config().get("workspace"), run_id)
+            usable_outputs = _count_usable_apktool_outputs(_load_config().get("workspace"), run_id)
             if usable_outputs == 0:
                 click.echo(
                     "No usable Apktool output was saved for this run. TruffleHog will be skipped; "
@@ -1524,11 +1639,11 @@ def run(
             click.echo("Cataloguing manifest, components, permissions, API endpoints/routes, network, code, dependencies and native libraries.")
             try:
                 surface_summary = run_static_surface_analysis(
-                    WorkspaceDatabase(Config().get("workspace")),
-                    Config().get("workspace"),
+                    WorkspaceDatabase(_load_config().get("workspace")),
+                    _load_config().get("workspace"),
                     run_id=run_id,
                     force=force_surface,
-                    dex_timeout_seconds=int(Config().get("analysis.androguard_timeout_seconds", 1800)),
+                    dex_timeout_seconds=int(_load_config().get("analysis.androguard_timeout_seconds", 1800)),
                     progress=click.echo,
                 )
             except (DatabaseError, OSError, ValueError, RuntimeError) as exc:
@@ -1555,7 +1670,7 @@ def run(
                 click.echo(f"Stage {stage_name} ended with exit code {exc.exit_code}.")
                 if stage_name == "decompile":
                     usable_outputs = _count_usable_apktool_outputs(
-                        Config().get("workspace"), context.meta.get("apkworkbench_run_id", "")
+                        _load_config().get("workspace"), context.meta.get("apkworkbench_run_id", "")
                     )
                     if usable_outputs:
                         click.echo(
@@ -1588,7 +1703,7 @@ def run(
                 break
             click.echo("\n=== DOWNLOAD VERIFICATION ===")
             try:
-                verification = verify_google_play_run(Config().get("workspace"), run_id, progress=click.echo)
+                verification = verify_google_play_run(_load_config().get("workspace"), run_id, progress=click.echo)
             except (AcquisitionVerificationError, DatabaseError, OSError, ValueError) as exc:
                 click.echo(f"Download verification failed: {exc}", err=True)
                 stages_with_issues.append("download_verification")
@@ -1611,7 +1726,7 @@ def run(
     run_id = context.meta.get("apkworkbench_run_id")
     if run_id:
         try:
-            reconciliation = WorkspaceDatabase(Config().get("workspace")).reconcile_run(run_id)
+            reconciliation = WorkspaceDatabase(_load_config().get("workspace")).reconcile_run(run_id)
         except DatabaseError as exc:
             reconciliation_error = str(exc)
             click.echo(f"RUN RECONCILIATION FAILED: {exc}", err=True)
@@ -1634,8 +1749,8 @@ def run(
     if run_id:
         try:
             stage_status_counts = _write_bundle_stage_statuses(
-                WorkspaceDatabase(Config().get("workspace")),
-                Config().get("workspace"),
+                WorkspaceDatabase(_load_config().get("workspace")),
+                _load_config().get("workspace"),
                 run_id,
                 pipeline_issues=stages_with_issues,
             )
@@ -1656,7 +1771,7 @@ def run(
     # hashes.sha256 + read-only evidence so verify-workspace can prove it.
     if run_id:
         click.echo("\n=== FREEZE EVIDENCE ===")
-        workspace = Path(Config().get("workspace")).expanduser()
+        workspace = Path(_load_config().get("workspace")).expanduser()
         results_root = workspace / "results"
         database = WorkspaceDatabase(workspace)
         try:
@@ -1719,7 +1834,7 @@ def run(
 @_workspace_locked
 def reconcile(run_id: str) -> None:
     """Report the terminal outcome of every item in a frozen acquisition manifest."""
-    database = WorkspaceDatabase(Config().get("workspace"))
+    database = WorkspaceDatabase(_load_config().get("workspace"))
     try:
         result = database.reconcile_run(run_id)
     except DatabaseError as exc:
@@ -1746,6 +1861,50 @@ def reconcile(run_id: str) -> None:
         raise click.exceptions.Exit(1)
 
     click.echo("All manifest items have a complete terminal outcome.")
+
+
+@main.command()
+@click.option(
+    "--source",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    help="Path to the legacy 0.2.0 workspace directory.",
+)
+@click.option(
+    "--target",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Target single-folder home directory (default: configured workspace).",
+)
+@click.option(
+    "--apply",
+    "apply_changes",
+    is_flag=True,
+    default=False,
+    help="Copy bundles into the target layout (default is dry-run).",
+)
+def migrate(source: Path, target: Path | None, apply_changes: bool) -> None:
+    """Copy legacy workspace bundles into self-contained run folders (non-destructive)."""
+    config = _load_config()
+    target_home = target if target is not None else Path(config.get("workspace")).expanduser()
+    legacy_cfg = Path.home() / ".config" / "apkworkbench" / "config.yaml"
+    report = migrate_legacy_workspace(
+        source,
+        target_home,
+        dry_run=not apply_changes,
+        legacy_config_path=legacy_cfg if legacy_cfg.is_file() else None,
+    )
+    mode_label = "APPLY" if apply_changes else "DRY-RUN"
+    click.echo(BANNER)
+    click.echo(f"WORKSPACE MIGRATION ({mode_label})")
+    click.echo(f"  Source: {report['source']}")
+    click.echo(f"  Target: {report['target']}")
+    click.echo(f"  Bundles discovered: {report['bundles_discovered']}")
+    click.echo(f"  Bundles migrated: {report['bundles_migrated']}")
+    click.echo(f"  Dossiers found / verified: {report['dossiers_found']} / {report['dossiers_verified']}")
+    click.echo(f"  Lead ledgers found / verified: {report['lead_ledgers_found']} / {report['lead_ledgers_verified']}")
+    if not apply_changes:
+        click.echo("  Dry-run only: no files were copied. Re-run with --apply to migrate.")
 
 
 @main.command()

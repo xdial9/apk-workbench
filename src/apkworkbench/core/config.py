@@ -19,25 +19,37 @@ class Config:
         self,
         config_file: str | Path | None = None,
         *,
+        workspace: str | Path | None = None,
         environ: dict[str, str] | None = None,
     ):
         env = os.environ if environ is None else environ
         home = Path(env.get("HOME", str(Path.home()))).expanduser()
+        if workspace is not None:
+            resolved_workspace = Path(workspace).expanduser()
+            self._workspace_override: Path | None = resolved_workspace
+        else:
+            resolved_workspace = Path(
+                env.get("APKWORKBENCH_WORKSPACE", home / "APK-Workbench")
+            ).expanduser()
+            self._workspace_override = None
+
+        self._explicit_config_dir = "APKWORKBENCH_CONFIG_DIR" in env
+        self._explicit_state_dir = "APKWORKBENCH_STATE_DIR" in env
         config_dir = Path(
-            env.get("APKWORKBENCH_CONFIG_DIR", home / ".config/apkworkbench")
+            env.get("APKWORKBENCH_CONFIG_DIR", resolved_workspace)
         ).expanduser()
         state_dir = Path(
-            env.get("APKWORKBENCH_STATE_DIR", home / ".local/state/apkworkbench")
-        ).expanduser()
-        workspace = Path(
-            env.get("APKWORKBENCH_WORKSPACE", home / "APK-Workbench" / "workspace")
+            env.get("APKWORKBENCH_STATE_DIR", resolved_workspace / "state")
         ).expanduser()
 
+        self._explicit_config_file = config_file is not None
+        self._legacy_config_candidate = home / ".config" / "apkworkbench" / "config.yaml"
+        self.legacy_config_path: Path | None = None
         self.config_file = (
             Path(config_file).expanduser() if config_file else config_dir / "config.yaml"
         )
         self._defaults: dict[str, Any] = {
-            "workspace": str(workspace),
+            "workspace": str(resolved_workspace),
             "config_dir": str(config_dir),
             "state_dir": str(state_dir),
             "sources": {
@@ -74,14 +86,24 @@ class Config:
 
     def load(self) -> dict[str, Any]:
         overrides: dict[str, Any] = {}
+        active_config: Path | None = None
+        self.legacy_config_path = None
         if self.config_file.exists():
+            active_config = self.config_file
+        elif not getattr(self, "_explicit_config_file", True):
+            legacy = getattr(self, "_legacy_config_candidate", None)
+            if isinstance(legacy, Path) and legacy.is_file():
+                active_config = legacy
+                self.legacy_config_path = legacy
+
+        if active_config is not None:
             try:
-                loaded = yaml.safe_load(self.config_file.read_text(encoding="utf-8")) or {}
+                loaded = yaml.safe_load(active_config.read_text(encoding="utf-8")) or {}
             except (OSError, yaml.YAMLError) as exc:
-                raise ConfigError(f"Cannot load {self.config_file}: {exc}") from exc
+                raise ConfigError(f"Cannot load {active_config}: {exc}") from exc
             if not isinstance(loaded, dict):
                 raise ConfigError(
-                    f"Configuration root in {self.config_file} must be a mapping."
+                    f"Configuration root in {active_config} must be a mapping."
                 )
             overrides = loaded
         source_overrides = overrides.get("sources")
@@ -114,6 +136,9 @@ class Config:
                 if key in self._defaults["tools"]
             }
         self._data = self._merge(self._defaults, overrides)
+        workspace_override = getattr(self, "_workspace_override", None)
+        if workspace_override is not None:
+            self._data["workspace"] = str(workspace_override)
         return self._data
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -125,15 +150,21 @@ class Config:
         return value
 
     def ensure_workspace(self) -> None:
-        """Create application-owned workspace directories, not external credential stores."""
+        """Create application-owned workspace directories under the single home folder."""
         root = Path(self.get("workspace")).expanduser()
-        for name in (
-            "database/run_manifests",
-            "downloads",
-            "results",
-            "reports",
-            "logs",
-        ):
+        root.mkdir(parents=True, exist_ok=True)
+        for name in ("runs", "logs"):
             (root / name).mkdir(parents=True, exist_ok=True)
-        Path(self.get("config_dir")).expanduser().mkdir(parents=True, exist_ok=True)
-        Path(self.get("state_dir")).expanduser().mkdir(parents=True, exist_ok=True)
+        root_resolved = root.resolve()
+        for key, explicit_attr in (
+            ("config_dir", "_explicit_config_dir"),
+            ("state_dir", "_explicit_state_dir"),
+        ):
+            raw = self.get(key)
+            if not raw:
+                continue
+            target = Path(raw).expanduser()
+            resolved = target.resolve()
+            inside_root = resolved == root_resolved or root_resolved in resolved.parents
+            if inside_root or getattr(self, explicit_attr, False):
+                target.mkdir(parents=True, exist_ok=True)

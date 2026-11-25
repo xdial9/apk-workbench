@@ -25,7 +25,60 @@ def test_unsupported_source_and_tool_overrides_are_discarded(tmp_path):
 def test_default_workspace_is_within_checkout(tmp_path):
     config = Config(environ={"HOME": str(tmp_path)})
 
-    assert config.get("workspace") == str(tmp_path / "APK-Workbench" / "workspace")
+    assert config.get("workspace") == str(tmp_path / "APK-Workbench")
+    assert config.get("config_dir") == str(tmp_path / "APK-Workbench")
+    assert config.get("state_dir") == str(tmp_path / "APK-Workbench" / "state")
+    assert config.config_file == tmp_path / "APK-Workbench" / "config.yaml"
+    assert config.legacy_config_path is None
+
+
+def test_workspace_argument_overrides_env_and_default(tmp_path):
+    custom = tmp_path / "custom-home"
+    config = Config(
+        workspace=custom,
+        environ={
+            "HOME": str(tmp_path),
+            "APKWORKBENCH_WORKSPACE": str(tmp_path / "env-home"),
+        },
+    )
+
+    assert config.get("workspace") == str(custom)
+    assert config.get("config_dir") == str(custom)
+    assert config.get("state_dir") == str(custom / "state")
+    assert config.config_file == custom / "config.yaml"
+
+
+def test_ensure_workspace_creates_single_folder_layout_without_dotconfig(tmp_path):
+    config = Config(environ={"HOME": str(tmp_path)})
+    config.ensure_workspace()
+
+    home = tmp_path / "APK-Workbench"
+    assert home.is_dir()
+    assert (home / "runs").is_dir()
+    assert (home / "logs").is_dir()
+    assert (home / "state").is_dir()
+    assert not (tmp_path / ".config" / "apkworkbench").exists()
+    assert not (tmp_path / ".local" / "state" / "apkworkbench").exists()
+
+
+def test_legacy_config_fallback_reads_without_deleting_and_prefers_home_config(tmp_path):
+    legacy = tmp_path / ".config" / "apkworkbench" / "config.yaml"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("tools:\n  apktool: /opt/legacy-apktool\n", encoding="utf-8")
+
+    fallback_cfg = Config(environ={"HOME": str(tmp_path)})
+    assert fallback_cfg.get("tools.apktool") == "/opt/legacy-apktool"
+    assert fallback_cfg.legacy_config_path == legacy
+    assert legacy.is_file()
+
+    new_cfg_file = tmp_path / "APK-Workbench" / "config.yaml"
+    new_cfg_file.parent.mkdir(parents=True)
+    new_cfg_file.write_text("tools:\n  apktool: /opt/new-apktool\n", encoding="utf-8")
+
+    preferred_cfg = Config(environ={"HOME": str(tmp_path)})
+    assert preferred_cfg.get("tools.apktool") == "/opt/new-apktool"
+    assert preferred_cfg.legacy_config_path is None
+    assert legacy.is_file()
 
 
 def test_invalid_auth_mode_is_rejected(tmp_path):

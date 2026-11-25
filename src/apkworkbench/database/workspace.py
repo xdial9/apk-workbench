@@ -733,8 +733,9 @@ class WorkspaceDatabase:
                 if candidate.is_file():
                     file_hashes[rel] = _sha256_file(candidate)
 
-        repo_root = Path(__file__).resolve().parents[3]
-        prompts_dir = repo_root / "prompts"
+        from ..analysis.surface.handoff import prompts_source_dir
+
+        prompts_dir = prompts_source_dir() or (Path(__file__).resolve().parents[3] / "prompts")
         prompts: dict[str, dict[str, str]] = {}
         for index in range(7):
             prompt_file = prompts_dir / f"{index}.txt"
@@ -941,13 +942,18 @@ class WorkspaceDatabase:
 
         # 3. chmod evidence read-only (dirs need r+x to be traversed; files
         #    become read-only too).
-        evidence_dirs = [
-            bundle_dir / "apktool",
-            bundle_dir / "surface",
-            bundle_dir / "trufflehog",
-            bundle_dir / "manifest",
-            bundle_dir / "stages",
-        ]
+        evidence_dir_names = (
+            "apk",
+            "apktool",
+            "surface",
+            "trufflehog",
+            "manifest",
+            "reports",
+            "stages",
+            "logs",
+            "prompts",
+        )
+        evidence_dirs = [bundle_dir / name for name in evidence_dir_names]
         frozen_directories: set[Path] = set()
         for ev_dir in evidence_dirs:
             if ev_dir.is_symlink() or not ev_dir.is_dir():
@@ -1068,7 +1074,17 @@ class WorkspaceDatabase:
             if parts and parts[0] in {"ai_analysis", "database"}:
                 dirs[:] = []
                 continue
-            if parts and parts[0] in {"apktool", "surface", "trufflehog", "manifest", "stages"}:
+            if parts and parts[0] in {
+                "apk",
+                "apktool",
+                "surface",
+                "trufflehog",
+                "manifest",
+                "reports",
+                "stages",
+                "logs",
+                "prompts",
+            }:
                 current = Path(root)
                 if current.is_dir() and current.stat().st_mode & 0o222:
                     writable.append({
