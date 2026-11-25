@@ -1,0 +1,11 @@
+include LICENSE
+include README.md
+include CHANGELOG.md
+include prompts/0.txt
+include prompts/1.txt
+include prompts/2.txt
+include prompts/3.txt
+include prompts/4.txt
+include prompts/5.txt
+include prompts/6.txt
+recursive-include src/apkworkbench/data *

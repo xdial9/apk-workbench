@@ -3,12 +3,13 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "apk-workbench"
-version = "0.2.0"
+name = "apkworkbench"
+version = "0.3.0"
 description = "Sequential Android APK discovery, acquisition, decompilation, and static analysis for Linux."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "dial9 + ChatGPT" }]
 dependencies = [
   "click>=8.1,<9",
@@ -24,8 +25,14 @@ dev = ["pytest>=8,<9", "ruff>=0.5"]
 [project.scripts]
 apkworkbench = "apkworkbench.cli.main:main"
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"apkworkbench.data" = ["prompts/*.txt", "config.example.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

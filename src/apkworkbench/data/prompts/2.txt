@@ -1,0 +1,115 @@
+2.txt — STAGE 2: INTEGRATE THE PROGRAM'S OUTPUT (after your raw map is done)
+================================================================================
+GOAL
+Read the deterministic pipeline's established facts and separate: (a) claims
+you can confirm from your own raw read, (b) claims you DISAGREE with or find
+incomplete, (c) things the tool marked as unknown. Group (b) and (c) are the
+reasons you exist — record them prominently.
+
+INPUTS
+  surface/static-analysis.json   status, artifact, manifest, identity,
+                                 coverage, metrics, sdk_histogram, inventory,
+                                 facts, findings, deductions, diagnostics,
+                                 limitations, dex_analysis, apk_inventory,
+                                 workbook, secret_linkage, secret_usage
+                                 (NOTE: can exceed 100 MB; NEVER dump whole
+                                 file into context — inspect bounded sections)
+  surface/facts.jsonl            one line per extracted fact with full
+                                 evidence (path/line/offset/cited occurrences)
+  surface/location_map.json      generated index of every fact, finding, and
+                                 deduction (exact file:line or @0xOFFSET)
+  surface/files.jsonl            per-file coverage ledger (scanned vs skipped)
+  surface/resources.jsonl        streamed decoded ARSC resource table (can be
+                                 multi-MB; query/grep by hex id, type, or name)
+  surface/links.jsonl            typed link edges (component/class/method/
+                                 endpoint/permission/native/secret; can exceed
+                                 100 MB — stream/filter, never load whole)
+  surface/entry_points.jsonl     component entry points + reachability
+  surface/trace_chains.jsonl     shortest cited entry-point -> secret chains
+                                 (may be 0 bytes when none exist)
+  surface/shards-index.json      (when present): read BEFORE any surface/shards/
+  trufflehog/                    findings.json (all), findings-verified.json,
+                                 findings-unverified.json, findings-all.txt,
+                                 scan.json; check stages/trufflehog/status.json
+                                 (or trufflehog/status.json if present)
+  manifest/google-play-bundle.json (if present): delivery bundle components
+  manifest/provenance.json       (or manifest/status.json if absent)
+  handoff.json                   schema/tool/prompt versions + file hashes
+  your stage-1 products:
+    ai_analysis/attempt-01/memory/raw_map.md
+    ai_analysis/attempt-01/memory/my_leads.txt
+    ai_analysis/attempt-01/memory/NOTES.md
+
+METHOD
+1. SKIM surface/static-analysis.json section headers first using targeted/
+   bounded inspection (top-level keys: status, artifact, identity, manifest,
+   coverage, metrics, sdk_histogram, inventory.dependencies, deductions,
+   workbook.playbook.open_leads, diagnostics, limitations, secret_linkage,
+   secret_usage; avoid loading huge lists/maps like facts, findings,
+   apk_inventory.members, inventory.resource_and_asset_paths,
+   dex_analysis.class_model, dex_analysis.method_model,
+   dex_analysis.string_class_index, dex_analysis.external_method_references,
+   dex_analysis.internal_call_graph, and dex_analysis.dex_api_strings
+   wholesale — note inventory.file_ledger is a summary pointing to
+   surface/files.jsonl). Use surface/facts.jsonl, surface/location_map.json,
+   and surface/files.jsonl selectively for kinds relevant to your leads, and
+   follow cited locations into apktool/ files when detail matters. If
+   surface/shards-index.json exists, read the index first and open only the
+   shards you need. If smali*/ was absent in Stage 1 (or sdk_histogram is
+   empty), compute the package root histogram from dex_analysis.class_model
+   and inspect inventory.dependencies. If AndroidManifest.xml had numeric
+   @<decimal_id> references, convert to hex (0x...) and query
+   surface/resources.jsonl by "id" to resolve them.
+2. CONFIRMATION PASS: for each tool claim you sampled in Stage 1 territory
+   (permissions, components, endpoints, SDK inventory, native libs), verify
+   against your raw map. Record agreement/disagreement into
+   ai_analysis/attempt-01/memory/cross_check.md:
+     confirmed   — tool said X, my raw read agrees (cite both)
+     disputed    — tool said X, raw read disagrees or contradicts (cite
+                   both; this is a finding — create a lead
+                   "reconcile: <topic>")
+     missed      — tool has no record of something notable from Stage 1
+                   (also a finding/lead)
+     expected_unknown — tool flagged unknown/not_applicable/partial; judge if
+                        you can close it.
+3. INVENTORY THE LEADS LEDGER: the tool's generated leads live in
+   surface/static-analysis.json under workbook.playbook.open_leads (derived
+   from deductions, coverage gaps, and flagged facts), backed by deductions,
+   coverage, and surface/location_map.json entries. Also inspect
+   surface/entry_points.jsonl and surface/trace_chains.jsonl (and targeted
+   queries of surface/links.jsonl if needed). Merge them with your Stage 1
+   ai_analysis/attempt-01/memory/my_leads.txt into
+   ai_analysis/attempt-01/memory/all_leads.md (dedup by topic; keep citations).
+   You will work through this merged list in Stage 3.
+4. TOOL-VERIFIED & UNVERIFIED SECRETS: read BOTH
+   trufflehog/findings-verified.json AND trufflehog/findings-unverified.json
+   (or trufflehog/findings.json, plus trufflehog/scan.json; check
+   stages/trufflehog/status.json, or trufflehog/status.json if present, to
+   distinguish "ran with 0 findings" from "not run / skipped"). Never ignore
+   unverified findings. Cross-reference each finding with your raw
+   understanding (context of the file, what system uses it) and any edges in
+   surface/trace_chains.jsonl or surface/links.jsonl; note the usage context
+   — verified secret + usage inference is one of the highest-value dossier
+   items, and unverified hits must be triaged honestly.
+5. PROVENANCE + VERSION/DELIVERY NOTES: read manifest/google-play-bundle.json
+   (if present: provenance.discovered_via, provenance.discovered_at, run_id,
+   signer_sha256, files[]) and manifest/provenance.json (or
+   manifest/status.json if absent) plus handoff.json into
+   ai_analysis/attempt-01/memory/NOTES.md — selection context the dossier
+   identity section should carry. Note signer identity and whether this bundle
+   had splits/asset packs not present in this folder (coverage implication:
+   some code/resources/native libs live in sibling split bundles).
+
+DEFINITION-OF-DONE
+ [ ] ai_analysis/attempt-01/memory/cross_check.md written with confirmed +
+     disputed + missed + expected_unknown sections, every line cited
+ [ ] ai_analysis/attempt-01/memory/all_leads.md merged and deduplicated (mine +
+     tool's), each lead has a priority guess (high/med/low) and a one-line
+     reason
+ [ ] trufflehog findings (verified + unverified) read and usage-context annotated
+ [ ] ai_analysis/attempt-01/memory/NOTES.md updated (Stage 2 complete,
+     provenance recorded, notable agreements/disputes)
+
+NOW READ prompts/3.txt.
+================================================================================
+EOF_MARKER

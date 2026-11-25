@@ -21,6 +21,7 @@ class DependencyInfo:
     healthy: bool = False
     version: str | None = None
     error: str | None = None
+    install_hint: str | None = None
 
     def __str__(self) -> str:
         if not self.installed:
@@ -39,6 +40,19 @@ class DependencyDetector:
         "apktool": (True, ["--version"]),
         "trufflehog": (True, ["--version"]),
         "androguard": (True, ["--help"]),
+    }
+
+    INSTALL_HINTS: ClassVar[dict[str, str]] = {
+        "apktool": "Install Apktool on Linux: sudo apt install apktool (or see https://apktool.org/docs/install)",
+        "java": "Install Java 11+ on Linux: sudo apt install default-jre-headless",
+        "trufflehog": (
+            "Install TruffleHog on Linux: "
+            "curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh "
+            "| sh -s -- -b /usr/local/bin "
+            "(see https://github.com/trufflesecurity/trufflehog#installation)"
+        ),
+        "playstore-cli": "Installed with 'pip install apkworkbench' (check active virtualenv).",
+        "androguard": "Installed with 'pip install apkworkbench' (check active virtualenv).",
     }
 
     def __init__(self, config: Config | None = None):
@@ -64,7 +78,12 @@ class DependencyDetector:
     def _check_tool(self, name: str, required: bool, version_args: list[str]) -> DependencyInfo:
         config_name = "playstore_cli" if name == "playstore-cli" else name
         executable = str(self.config.get(f"tools.{config_name}", name))
-        info = DependencyInfo(name=name, required=required, executable=executable)
+        info = DependencyInfo(
+            name=name,
+            required=required,
+            executable=executable,
+            install_hint=self.INSTALL_HINTS.get(name),
+        )
         resolved = self._resolve_executable(executable)
         if not resolved:
             info.error = (
@@ -90,3 +109,13 @@ class DependencyDetector:
             self._check_tool(name, required, args)
             for name, (required, args) in self.CHECKS.items()
         ]
+
+
+def missing_tool_message(tool_name: str, executable: str | None = None) -> str:
+    """Return a clear error message naming a missing tool and how to install it."""
+    target = executable or tool_name
+    hint = DependencyDetector.INSTALL_HINTS.get(tool_name)
+    base = f"Required executable was not found: {target}"
+    if hint:
+        return f"{base}. {hint}"
+    return base

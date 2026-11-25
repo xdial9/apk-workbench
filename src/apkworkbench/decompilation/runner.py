@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..database.workspace import WorkspaceDatabase, utc_now
+from ..dependencies.detector import missing_tool_message
 
 
 class DecompilationError(RuntimeError):
@@ -273,7 +274,7 @@ class DecompilationRunner:
                 )
         except FileNotFoundError as exc:
             raise DecompilationError(
-                f"Required executable was not found: {command[0]}"
+                missing_tool_message("apktool", command[0])
             ) from exc
         except OSError as exc:
             raise DecompilationError(f"Could not execute {label}: {exc}") from exc

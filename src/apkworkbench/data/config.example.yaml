@@ -1,0 +1,49 @@
+# APK-Workbench configuration example
+#
+# Single-folder layout (default):
+#   ~/APK-Workbench/
+#     config.yaml          # this file (override with APKWORKBENCH_CONFIG_DIR or --config)
+#     state/               # runtime state
+#     workspace/
+#       database/          # acquisition history, processing status, run manifests
+#       downloads/         # original verified APKs (never moved)
+#       results/           # per-artifact frozen analysis bundles
+#       reports/           # aggregate reports and findings.csv
+#       logs/              # apkworkbench.log
+#
+# Copy this file to ~/APK-Workbench/config.yaml and uncomment any overrides you need.
+
+# Root workspace directory (default: ~/APK-Workbench/workspace)
+# workspace: ~/APK-Workbench/workspace
+
+sources:
+  google_play:
+    # Authentication mode for Google Play acquisition:
+    #   auto      - use stored account credentials if available, else anonymous
+    #   account   - require authenticated Google Play account
+    #   anonymous - anonymous Play Store session only
+    auth_mode: auto
+    retry_backoff_seconds: 1.0
+
+decompilation:
+  # Maximum seconds allowed for a single Apktool decode invocation.
+  timeout_seconds: 3600
+
+analysis:
+  # Maximum seconds allowed for TruffleHog filesystem scanning.
+  timeout_seconds: 7200
+  # Maximum seconds allowed for Androguard DEX semantic analysis.
+  androguard_timeout_seconds: 1800
+  # Maximum JSON stdout bytes accepted from TruffleHog (default: 512 MiB).
+  max_output_bytes: 536870912
+
+tools:
+  # Override executable names or absolute paths if not on PATH.
+  playstore_cli: playstore-cli
+  java: java
+  apktool: apktool
+  trufflehog: trufflehog
+
+logging:
+  level: INFO
+  file: logs/apkworkbench.log

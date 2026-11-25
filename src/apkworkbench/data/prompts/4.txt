@@ -1,0 +1,62 @@
+4.txt — STAGE 4: DEDUCTIONS & CORRELATIONS (behavior of the whole app)
+================================================================================
+GOAL
+Turn per-lead facts into app-level intelligence: how this app behaves,
+what its ecosystem is, where its risks concentrate, and what to tell the
+operator next.
+
+INPUTS
+  ai_analysis/attempt-01/memory/ (all Stage 1..3 notes, raw map, leads, decoded)
+  surface/static-analysis.json   bounded subsections only (inventory,
+                                 deductions, dex_analysis metrics/
+                                 permission_api_usage/dex_api_strings, metrics,
+                                 coverage — do NOT load whole >100 MB file)
+  surface/links.jsonl + surface/entry_points.jsonl + surface/trace_chains.jsonl
+                                 (stream/filter links.jsonl — can exceed 100 MB)
+  trufflehog/                    findings-verified.json + findings-unverified.json
+                                 (or findings.json; scan.json +
+                                 stages/trufflehog/status.json when empty; usage
+                                 context from Stage 2)
+
+METHOD
+1. BUILD THE BEHAVIOR MODEL (write ai_analysis/attempt-01/memory/behavior.md):
+   - Identity & provenance: package lineage, signer, obfuscation level
+     (state the evidence pattern — short names ratio from smali*/ paths when
+     present or dex_analysis.class_model / method_model when smali*/ is
+     absent; never a guess).
+   - Architecture: components that matter, background machinery, IPC
+     surfaces, storage, custom Application class behavior, native libraries /
+     JNI entry points (when present).
+   - Network life: endpoint groups (host-level), which component talks to
+     which, schemes, cleartext posture, pinning, rate-limit posture.
+   - Data flows: what user/device data is collected, where it goes, and
+     where that knowledge is vulnerable.
+2. CROSS-CORRELATE (facts the tool cannot hold together):
+   - endpoints <-> components <-> permissions (which surface uses what)
+   - native libraries / JNI entries <-> Java callers / load sites (when present)
+   - verified & unverified secrets <-> usage sites (what key protects what)
+   - disputed items from cross_check.md — resolve or carry as open
+     questions; recorded disputes ARE part of the final report.
+   - SDK stack reconstruction: dependency roots -> what each SDK implies
+     (data collection, backends, identifiers you already have).
+3. DEDUCTION LEDGER: write ai_analysis/attempt-01/memory/deductions.md:
+   each deduction = template id (if used), conjunctive facts (cited),
+   your chain of reasoning, confidence (Law L4), and the narrative in
+   operator-meaningful language ("this app likely collects ... because
+   ...", NEVER "this app does X" without a complete cited chain — unclear
+   pieces stay hints). Recorded uncertainty is a feature, not a weakness:
+   label it explicitly.
+4. RISK SYNTHESIS: global severity narrative: the 3-10 things that define
+   this app's risk posture for an operator; grounded in the above.
+
+DEFINITION-OF-DONE
+ [ ] ai_analysis/attempt-01/memory/behavior.md complete
+     (identity/architecture/network/data flows)
+ [ ] ai_analysis/attempt-01/memory/deductions.md complete; every deduction
+     traceable to cited conjunctive facts
+ [ ] risk synthesis written; every cross_check dispute resolved or open
+ [ ] ai_analysis/attempt-01/memory/NOTES.md updated
+
+NOW READ prompts/5.txt (deliverables).
+================================================================================
+EOF_MARKER

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from ..database.workspace import WorkspaceDatabase, utc_now
+from ..dependencies.detector import missing_tool_message
 
 
 class AnalysisError(RuntimeError):
@@ -100,6 +101,11 @@ No dropping. Unverified is signal for AI, not noise.
                 timeout=20,
                 check=False,
             )
+        except FileNotFoundError as exc:
+            raise AnalysisError(
+                f"Unable to inspect TruffleHog CLI capabilities: "
+                f"{missing_tool_message('trufflehog', self.executable)}"
+            ) from exc
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise AnalysisError(f"Unable to inspect TruffleHog CLI capabilities: {exc}") from exc
         help_text = (result.stdout or "") + "\n" + (result.stderr or "")
@@ -384,6 +390,11 @@ No dropping. Unverified is signal for AI, not noise.
                     bufsize=0,
                     start_new_session=True,
                 )
+            except FileNotFoundError as exc:
+                raise AnalysisError(
+                    f"Could not start TruffleHog: "
+                    f"{missing_tool_message('trufflehog', self.executable)}"
+                ) from exc
             except (OSError, subprocess.SubprocessError) as exc:
                 raise AnalysisError(f"Could not start TruffleHog: {exc}") from exc
 

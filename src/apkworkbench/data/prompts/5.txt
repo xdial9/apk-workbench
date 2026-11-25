@@ -1,0 +1,97 @@
+5.txt — STAGE 5: WRITE THE DELIVERABLES (the dossier + machine findings)
+================================================================================
+GOAL
+Produce the final outputs from your memory bank. These are the artifacts the
+operator reads — polished, cited, complete.
+
+INPUTS
+  ai_analysis/attempt-01/memory/*  everything from Stages 1-4
+  trufflehog/                      findings-verified.json +
+                                   findings-unverified.json (included in the
+                                   dossier with their confidence label; check
+                                   scan.json + stages/trufflehog/status.json
+                                   when empty)
+
+DELIVERABLE 1: ai_analysis/attempt-01/dossier.md (human-facing; use this structure)
+  # App Dossier: <package> v<version>
+  1. Executive summary (5-15 lines; the answer first; severity posture)
+  2. Identity & provenance (signer, lineage, obfuscation level, delivery)
+  3. Attack surface (components, deep links, providers, activities, native)
+  4. Network life (host groups, protocols, cleartext, API surface, rate
+     limit posture, DNS/endpoint behavior)
+  5. Secrets (verified: quote file + context; unverified/hints: quote + why
+     labeled)
+  6. Behaviors & deductions (each: narrative + confidence label +
+     the facts it rests on)
+  7. What was verified vs what remains unknown (from cross_check +
+     lead_ledger + coverage)
+  8. Operator next steps (what a user of this dossier should do)
+  TONE: dense, factual, no padding. Every factual claim cites a path/line,
+  @0xOFFSET, or an entry from the machine output. Where you infer, state the
+  chain.
+
+DELIVERABLE 2: ai_analysis/attempt-01/ai_analysis.json (machine-facing; strict
+valid JSON — no comments or trailing commas)
+  {
+    "schema_version": 1,
+    "package": "<pkg>",
+    "version_code": "<n (matching artifact.version_code)>",
+    "confidence_labels": ["tool_verified", "deduced", "hint", "open_question"],
+    "findings": [
+      {
+        "id": "A1",
+        "type": "secret|behavior|endpoint|anomaly|dispute",
+        "title": "...",
+        "confidence": "tool_verified|deduced|hint|open_question",
+        "verification_state": "ai_deduced|tool_verified",
+        "evidence": [
+          "apktool/.../file.smali:123",
+          "apktool/lib/arm64-v8a/libfoo.so@0x1a40",
+          "trufflehog/findings.json[0]",
+          "surface/static-analysis.json coverage.network_security_config"
+        ],
+        "narrative": "...",
+        "related_findings": ["A2"],
+        "fingerprint_basis": ["surface fact fingerprint / value"]
+      }
+    ],
+    "deductions": [
+      {
+        "id": "D1",
+        "narrative": "...",
+        "confidence": "deduced|hint|open_question",
+        "facts": ["A1", "FACT-<sha256>"],
+        "cites": ["..."]
+      }
+    ],
+    "lead_ledger": ["...entries compiled from Stage 3..."],
+    "cross_check": {
+      "disputed": ["...summary entries..."],
+      "missed": ["...summary entries..."]
+    }
+  }
+  RULES: every AI finding id referenced in related_findings or
+  deductions[].facts must exist in findings[] (use FACT-<sha256> or
+  surface/facts.jsonl line N for surface facts); every evidence path must be
+  inside this bundle folder (apktool/<component>/... for split APKs); unknowns
+  remain entries with label open_question rather than being dropped.
+
+DELIVERABLE 3:
+  - Compile ai_analysis/attempt-01/memory/lead_ledger.jsonl into strict valid
+    JSON array ai_analysis/attempt-01/lead_ledger.json (must match the
+    lead_ledger array in ai_analysis.json).
+  - Write ai_analysis/attempt-01/decision_log.md (major judgment calls +
+    reasons).
+
+DEFINITION-OF-DONE
+ [ ] ai_analysis/attempt-01/dossier.md complete per structure, every claim cited
+ [ ] ai_analysis/attempt-01/ai_analysis.json valid JSON against the schema above
+     (ids consistent)
+ [ ] ai_analysis/attempt-01/lead_ledger.json valid JSON array and complete;
+     ai_analysis/attempt-01/decision_log.md written
+ [ ] top-level ai_analysis/attempt-01/ contains ONLY deliverables (all scratch
+     including NOTES.md is inside ai_analysis/attempt-01/memory/)
+
+NOW READ prompts/6.txt (closure).
+================================================================================
+EOF_MARKER

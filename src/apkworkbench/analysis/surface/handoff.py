@@ -272,8 +272,9 @@ Only ai_analysis/ is writable. Everything else is frozen evidence: do not edit.
 def prompts_source_dir() -> Path | None:
     """Locate the shipped prompt chain, or ``None`` when not installed.
 
-    A checkout keeps it at ``<repo>/prompts``. An installed wheel may carry it
-    beside the package; an operator can always point at it explicitly.
+    A checkout keeps it at ``<repo>/prompts``. An installed wheel carries it
+    inside ``apkworkbench/data/prompts``; an operator can always point at it
+    explicitly via ``APKWORKBENCH_PROMPTS_DIR``.
     """
     candidates: list[Path] = []
     env = os.environ.get("APKWORKBENCH_PROMPTS_DIR")
@@ -281,6 +282,7 @@ def prompts_source_dir() -> Path | None:
         candidates.append(Path(env).expanduser())
     here = Path(__file__).resolve()
     candidates.extend(parent / PROMPTS_DIRNAME for parent in here.parents)
+    candidates.append(here.parents[2] / "data" / PROMPTS_DIRNAME)
     for candidate in candidates:
         try:
             if candidate.is_dir() and (candidate / "0.txt").is_file():
