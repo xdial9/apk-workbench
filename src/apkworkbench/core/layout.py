@@ -271,7 +271,7 @@ def _extract_apk_metadata(apk_path: Path) -> dict[str, Any]:
             "version_name": str(ver_name).strip(),
             "app_name": str(app_name).strip(),
         }
-    except (ImportError, OSError, ValueError, TypeError, RuntimeError):
+    except (ImportError, OSError, ValueError, TypeError, RuntimeError, KeyError, AttributeError):
         return {}
 
 
@@ -797,6 +797,16 @@ def run_local_apk_self_contained(
 
     run_dir = run_dirs[0]
     verification = WorkspaceDatabase(home_path).verify_workspace(run_dir)
+    recon_items = reconciliation.get("items", [])
+    item_status = (
+        str(recon_items[0].get("status") or "complete")
+        if recon_items and isinstance(recon_items[0], dict)
+        else (
+            "complete"
+            if reconciliation.get("complete") == reconciliation.get("total")
+            else "incomplete"
+        )
+    )
     return {
         "run_id": resolved_run_id,
         "package_id": resolved_pkg,
@@ -804,6 +814,9 @@ def run_local_apk_self_contained(
         "version_name": resolved_ver_name,
         "bundle_id": primary_sha256,
         "run_dir": str(run_dir),
+        "readme_path": str(run_dir / "README.md"),
+        "index_path": str(home_path / RUNS_INDEX_FILENAME),
+        "status": item_status,
         "reconciliation": reconciliation,
         "verification": verification,
         "final_report": {

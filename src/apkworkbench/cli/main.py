@@ -1897,9 +1897,9 @@ def migrate(source: Path, target: Path | None, apply_changes: bool) -> None:
     mode_label = "APPLY" if apply_changes else "DRY-RUN"
     click.echo(BANNER)
     click.echo(f"WORKSPACE MIGRATION ({mode_label})")
-    click.echo(f"  Source: {report['source']}")
-    click.echo(f"  Target: {report['target']}")
-    click.echo(f"  Bundles discovered: {report['bundles_discovered']}")
+    click.echo(f"  Source: {report['source_workspace']}")
+    click.echo(f"  Target: {report['target_home']}")
+    click.echo(f"  Bundles discovered: {report['bundles_found']}")
     click.echo(f"  Bundles migrated: {report['bundles_migrated']}")
     click.echo(f"  Dossiers found / verified: {report['dossiers_found']} / {report['dossiers_verified']}")
     click.echo(f"  Lead ledgers found / verified: {report['lead_ledgers_found']} / {report['lead_ledgers_verified']}")

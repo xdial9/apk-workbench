@@ -93,7 +93,7 @@ class DependencyDetector:
         info.installed = True
         try:
             result = subprocess.run(
-                [resolved, *version_args], capture_output=True, text=True, timeout=8, check=False
+                [resolved, *version_args], capture_output=True, text=True, timeout=25, check=False
             )
             output = (result.stdout or result.stderr).strip()
             info.version = output.splitlines()[0] if output else None
